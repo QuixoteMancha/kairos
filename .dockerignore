@@ -1,0 +1,59 @@
+# Virtualenv local: la imagen instala todo dentro del container
+env/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Datos sensibles / persistentes — montados como volumen, no embebidos
+src/database/*.db
+src/database/*.db.bak*
+src/database/*.db-journal
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backups/
+logs/
+*.log
+
+# Credenciales
+.env
+.env.local
+*.cookies
+**/cookies.json
+**/*_cookies.json
+.secrets.baseline
+
+# Git / IDE
+.git/
+.github/
+.gitignore
+.vscode/
+.idea/
+
+# Docs y artefactos de tests
+docs/
+tests/
+*.md
+!README.md
+
+# Backup files
+*.bak
+*.bak_*
+*.orig
+*~
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Wheels y caches del Docker builder
+/wheels/

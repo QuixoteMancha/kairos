@@ -1,0 +1,45 @@
+# Variables de entorno (credenciales reales — NUNCA al repo)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+env/
+.venv/
+*.egg-info/
+
+# Base de datos
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+
+# Backups manuales (cualquier archivo .bak / .bak_*)
+*.bak
+*.bak_*
+*.orig
+*~
+
+# Builds / binarios
+obscura
+
+*.so
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+src/web/static/dist/
+
+# Logs
+*.log
+kairos.log
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Datos sensibles
+data/
+!data/.gitkeep
+!data/*.example.*

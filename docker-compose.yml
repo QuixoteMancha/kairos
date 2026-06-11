@@ -1,0 +1,73 @@
+# Kairos · Stack Docker Compose
+# ─────────────────────────────────────────────────────────────────────────────
+# Levanta:
+#   - kairos  : Motor autónomo (Engine) + Web (visualización) en un solo proceso.
+#
+# Filosofía:
+#   - El **core/motor** (KairosEngine) funciona **automáticamente** con todo:
+#     scans, auto-bets (con rotación/jitter/feedback), live hedge, settlement,
+#     rebalance, etc. No necesita que nadie abra el navegador.
+#   - La **web** es **visualización** (balances, arbs detectados, historial,
+#     partidos, etc.) + algo de control manual. No es el cerebro.
+#
+# En el contenedor se inicia todo junto con `kairos run` (o `dashboard`).
+# El motor corre solo; la web sirve los datos.
+#
+# Uso:
+#   docker compose up -d
+#   docker compose logs -f kairos
+#
+# Puertos:
+#   8765 → Web + API
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  kairos:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kairos:latest
+    container_name: kairos
+    restart: unless-stopped
+    env_file:
+      - .env                              # creá .env desde .env.example
+    environment:
+      DB_PATH: /data/kairos.db
+      TZ: ${TZ:-Europe/Madrid}
+      KAIROS_TRACEMALLOC: ${KAIROS_TRACEMALLOC:-0}
+      # Monitoring interno
+      KAIROS_MON_INTERVAL: ${KAIROS_MON_INTERVAL:-30}   # segundos entre snapshots
+      KAIROS_MON_BUFFER:   ${KAIROS_MON_BUFFER:-480}    # ~4h de historial
+    volumes:
+      - kairos_data:/data                 # DB persistente
+      - ./logs:/app/logs                  # logs accesibles desde el host
+    ports:
+      - "${KAIROS_PORT:-8765}:8765"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    networks:
+      - kairos_net
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8765/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Recursos opcionales — descomentá si querés limitarlos
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 2G
+    #       cpus: '2.0'
+
+
+volumes:
+  kairos_data:
+    driver: local
+
+networks:
+  kairos_net:
+    driver: bridge
+
