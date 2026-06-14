@@ -43,3 +43,19 @@ kairos.log
 data/
 !data/.gitkeep
 !data/*.example.*
+
+# Bases de datos locales de SQLite
+*.db
+*.db-journal
+*.db-wal
+
+# Archivos de respaldo y comprimidos pesados
+*.tar.gz
+*.bak
+*.bak_*
+kairos_vol_backup.tar.gz
+
+# Archivos de configuración de entorno con credenciales secretas
+.env
+__pycache__/
+*.pyc
