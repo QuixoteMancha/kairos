@@ -164,7 +164,7 @@ if [ "$FRONTEND_ONLY" = true ]; then
     cd frontend && npm install && npm run build
     cd "$SCRIPT_DIR"
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
-    echo "Src build: $COPY_SRC"
+    echo "Src build: '$COPY_SRC'"
     if [ ! -d "$COPY_SRC" ]; then
         echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
         exit 1
