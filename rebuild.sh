@@ -42,10 +42,10 @@ docker image prune -f
 docker builder prune -f --filter "until=24h"
 echo "  ✓ Limpieza de caché completada."
 
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-CONTAINER=$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)
 
 show_help() {
     cat << 'EOF'
@@ -425,8 +425,10 @@ fi
 # ── 2. Build frontend Vue ─────────────────
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
+
+    CONTAINER=$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)
     
-    cd frontend && npm install && npm run build
+    cd frontend && npm install && npm run build|
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
 
     echo "Src build: $COPY_SRC"
