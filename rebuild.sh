@@ -426,6 +426,8 @@ if [ "$SKIP_FRONTEND" = false ]; then
     
     cd frontend && npm install && npm run build
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist
+
+    echo "Src build: $COPY_SRC"
 "
     if [ ! -d "$COPY_SRC" ]; then
         echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
