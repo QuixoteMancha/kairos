@@ -163,7 +163,7 @@ if [ "$FRONTEND_ONLY" = true ]; then
     echo "▶ [1/2] Building Vue frontend (npm run build)…"
     cd frontend && npm install && npm run build
     cd "$SCRIPT_DIR"
-    COPY_SRC="$SCRIPT_DIR/frontend/dist"
+    COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
     if [ ! -d "$COPY_SRC" ]; then
         echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
         exit 1
@@ -424,7 +424,8 @@ if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
     
     cd frontend && npm install && npm run build
-    COPY_SRC="$SCRIPT_DIR/frontend/dist"
+    COPY_SRC="$SCRIPT_DIR/src/web/static/dist
+"
     if [ ! -d "$COPY_SRC" ]; then
         echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
         exit 1
