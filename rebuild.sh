@@ -426,9 +426,9 @@ fi
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
 
-    CONTAINER=$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)
+    CONTAINER="$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)"
     
-    cd frontend && npm install && npm run build|
+    cd frontend && npm install && npm run build
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
 
     echo "Src build: $COPY_SRC"
