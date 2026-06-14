@@ -400,7 +400,7 @@ if [ "$SKIP_TESTS" = false ]; then
     step "Corriendo tests (pytest dentro de Docker)…"
     
     # Levantamos un contenedor temporal solo para correr los tests y luego destruirlo (--rm)
-    docker compose run --rm kairos python3 -m pytest tests/ -q --tb=short
+    docker compose run --rm kairos bash -c "pip install pytest -q && python3 -m pytest tests/ -q --tb=short"
     
     echo "  ✓ Tests OK"
 else
