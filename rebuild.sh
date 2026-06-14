@@ -426,7 +426,12 @@ fi
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
 
-    CONTAINER="$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)"
+    CONTAINER=$(docker ps -a --filter "name=^/kairos$" --format "{{.Names}}")
+
+    if [ -z "$CONTAINER" ]; then
+    echo "Error: No se encontró ningún contenedor con el nombre 'kairos'"
+    exit 1
+    fi
     
     cd frontend && npm install && npm run build
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
