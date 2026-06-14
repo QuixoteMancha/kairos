@@ -34,6 +34,14 @@
 
 set -euo pipefail
 
+# ── Mantenimiento preventivo: liberar espacio ──
+echo "▶ Mantenimiento: Liberando espacio de caché antigua..."
+# Borra imágenes "dangling" (huérfanas)
+docker image prune -f 
+# Borra cachés de construcción viejas (más de 24h para no afectar builds rápidos)
+docker builder prune -f --filter "until=24h"
+echo "  ✓ Limpieza de caché completada."
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
