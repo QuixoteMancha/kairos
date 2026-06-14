@@ -413,14 +413,12 @@ else
     step "Tests — OMITIDOS (--skip-tests)"
 fi
 
-# ── 2. Build frontend Vue (DENTRO del contenedor) ─────────────────
+# ── 2. Build frontend Vue (DENTRO del contenedor, como usuario kairos) ─────────
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend (dentro del contenedor)…"
     
-    # Usamos docker compose run para ejecutar npm en un entorno efímero.
-    # Nota: Asegúrate de que el contenedor tenga acceso a las fuentes (como ya haces con el COPY . /app).
-    # 'npm install' asegura que las dependencias estén al día antes de construir.
-    docker compose run --rm kairos bash -c "cd frontend && npm install && npm run build"
+    # Añadimos --user kairos para evitar el conflicto con /root/.npm
+    docker compose run --rm --user kairos kairos bash -c "cd frontend && npm install && npm run build"
     
     echo "  ✓ Frontend compilado dentro del contenedor"
 else
