@@ -425,7 +425,7 @@ if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
     
     cd frontend && npm install && npm run build
-    COPY_SRC="$SCRIPT_DIR/src/web/static/dist
+    COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
 
     echo "Src build: $COPY_SRC"
 "
