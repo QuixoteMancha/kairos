@@ -45,6 +45,8 @@ echo "  ✓ Limpieza de caché completada."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+CONTAINER=$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)
+
 show_help() {
     cat << 'EOF'
 Uso: ./rebuild.sh [opciones]
