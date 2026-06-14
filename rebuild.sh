@@ -422,30 +422,26 @@ else
     step "Tests — OMITIDOS (--skip-tests)"
 fi
 
-# ── 2. Build frontend Vue ─────────────────
+# ── 2. Build frontend Vue ─────────────────────────────────────────
+# NOTA: solo compilamos el dist aquí. El docker cp al contenedor ocurre en el
+# paso 4, después del `docker compose up`, cuando el contenedor ya existe.
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
 
-    CONTAINER=$(docker ps -a --filter "name=^/kairos$" --format "{{.Names}}")
-
-    if [ -z "$CONTAINER" ]; then
-    echo "Error: No se encontró ningún contenedor con el nombre 'kairos'"
-    exit 1
-    fi
-    
     cd frontend && npm install && npm run build
-    COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
+    cd "$SCRIPT_DIR"
 
-    echo "Src build: $COPY_SRC"
+    COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
+    echo "  Src build: $COPY_SRC"
 
     if [ ! -d "$COPY_SRC" ]; then
         echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
         exit 1
     fi
-    docker cp "$COPY_SRC" "$CONTAINER":/app/src/web/static/dist
-    echo "  ✓ Frontend compilado"
+    echo "  ✓ Frontend compilado → dist listo"
 else
     step "Frontend — OMITIDO (--skip-frontend)"
+    COPY_SRC=""
 fi
 
 # ── 3. Build imagen Docker ────────────────────────────────────────
@@ -473,6 +469,22 @@ else
         step "Restarting only kairos container…"
     fi
     docker compose up -d --no-deps kairos
+fi
+
+# ── Copiar frontend al contenedor ya levantado ────────────────────
+# El docker cp se hace AQUÍ (post-up) porque en el paso 2 el contenedor
+# todavía no existe: fue eliminado en el pre-clean y aún no se ha recreado.
+if [ "$SKIP_FRONTEND" = false ] && [ -n "${COPY_SRC:-}" ] && [ -d "$COPY_SRC" ]; then
+    echo ""
+    echo "  Copiando frontend al contenedor…"
+    CONTAINER=$(docker ps --filter "name=kairos" --format "{{.Names}}" | head -1)
+    if [ -n "$CONTAINER" ]; then
+        docker exec "$CONTAINER" rm -rf /app/src/web/static/dist
+        docker cp "$COPY_SRC" "$CONTAINER":/app/src/web/static/dist
+        echo "  ✓ dist copiado al contenedor '$CONTAINER'"
+    else
+        echo "  ⚠ No se encontró contenedor kairos corriendo — dist no copiado"
+    fi
 fi
 
 # ── Healthcheck ───────────────────────────────────────────────────
