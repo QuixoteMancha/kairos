@@ -397,12 +397,11 @@ fi
 
 # ── 1. Tests ──────────────────────────────────────────────────────
 if [ "$SKIP_TESTS" = false ]; then
-    step "Corriendo tests (pytest)…"
-    # Detecta el entorno virtual del repo si existe
-    if [ -f "$SCRIPT_DIR/env/bin/activate" ]; then
-        source "$SCRIPT_DIR/env/bin/activate"
-    fi
-    python -m pytest tests/ -q --tb=short
+    step "Corriendo tests (pytest dentro de Docker)…"
+    
+    # Levantamos un contenedor temporal solo para correr los tests y luego destruirlo (--rm)
+    docker compose run --rm kairos python3 -m pytest tests/ -q --tb=short
+    
     echo "  ✓ Tests OK"
 else
     step "Tests — OMITIDOS (--skip-tests)"
