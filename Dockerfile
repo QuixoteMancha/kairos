@@ -42,8 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tini \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Usuario non-root para seguridad.
