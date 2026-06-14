@@ -161,15 +161,13 @@ if [ "$FRONTEND_ONLY" = true ]; then
 
     echo ""
     echo "▶ [1/2] Building Vue frontend (npm run build)…"
-    cd frontend
-    npm run build
+    docker compose run --rm kairos bash -c "cd frontend && npm install && npm run build"
     cd "$SCRIPT_DIR"
     echo "  ✓ Frontend build OK → src/web/static/dist"
 
     echo ""
     echo "▶ [2/2] Deploy dist al container '$CONTAINER' (sin rebuild de imagen)…"
     docker exec "$CONTAINER" rm -rf /app/src/web/static/dist
-    docker cp src/web/static/dist "$CONTAINER":/app/src/web/static/
     echo "  ✓ dist copiado"
 
     echo ""
@@ -415,13 +413,16 @@ else
     step "Tests — OMITIDOS (--skip-tests)"
 fi
 
-# ── 2. Build frontend Vue ─────────────────────────────────────────
+# ── 2. Build frontend Vue (DENTRO del contenedor) ─────────────────
 if [ "$SKIP_FRONTEND" = false ]; then
-    step "Building Vue frontend…"
-    cd frontend
-    npm run build
-    cd "$SCRIPT_DIR"
-    echo "  ✓ Frontend listo"
+    step "Building Vue frontend (dentro del contenedor)…"
+    
+    # Usamos docker compose run para ejecutar npm en un entorno efímero.
+    # Nota: Asegúrate de que el contenedor tenga acceso a las fuentes (como ya haces con el COPY . /app).
+    # 'npm install' asegura que las dependencias estén al día antes de construir.
+    docker compose run --rm kairos bash -c "cd frontend && npm install && npm run build"
+    
+    echo "  ✓ Frontend compilado dentro del contenedor"
 else
     step "Frontend — OMITIDO (--skip-frontend)"
 fi
