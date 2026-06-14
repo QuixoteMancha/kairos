@@ -161,13 +161,19 @@ if [ "$FRONTEND_ONLY" = true ]; then
 
     echo ""
     echo "▶ [1/2] Building Vue frontend (npm run build)…"
-    docker compose run --rm kairos bash -c "cd frontend && npm install && npm run build"
+    cd frontend && npm install && npm run build
     cd "$SCRIPT_DIR"
+    COPY_SRC="$SCRIPT_DIR/frontend/dist"
+    if [ ! -d "$COPY_SRC" ]; then
+        echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
+        exit 1
+    fi
     echo "  ✓ Frontend build OK → src/web/static/dist"
 
     echo ""
     echo "▶ [2/2] Deploy dist al container '$CONTAINER' (sin rebuild de imagen)…"
     docker exec "$CONTAINER" rm -rf /app/src/web/static/dist
+    docker cp "$COPY_SRC" "$CONTAINER":/app/src/web/static/dist
     echo "  ✓ dist copiado"
 
     echo ""
@@ -413,15 +419,18 @@ else
     step "Tests — OMITIDOS (--skip-tests)"
 fi
 
-# ── 2. Build frontend Vue (DENTRO del contenedor) ─────────────────
+# ── 2. Build frontend Vue ─────────────────
 if [ "$SKIP_FRONTEND" = false ]; then
-    step "Building Vue frontend (dentro del contenedor)…"
+    step "Building Vue frontend…"
     
-    # Ejecutamos como root (el default de docker compose) pero redirigimos la caché a /tmp
-    # Esto evita el error de permisos en /root/.npm
-    docker compose run --rm kairos bash -c "cd frontend && npm config set cache /tmp/.npm-cache && npm install && npm run build"
-    
-    echo "  ✓ Frontend compilado dentro del contenedor"
+    cd frontend && npm install && npm run build
+    COPY_SRC="$SCRIPT_DIR/frontend/dist"
+    if [ ! -d "$COPY_SRC" ]; then
+        echo "  ✗ Error: no se encontró el directorio de build '$COPY_SRC'"
+        exit 1
+    fi
+    docker cp "$COPY_SRC" "$CONTAINER":/app/src/web/static/dist
+    echo "  ✓ Frontend compilado"
 else
     step "Frontend — OMITIDO (--skip-frontend)"
 fi
