@@ -413,12 +413,13 @@ else
     step "Tests — OMITIDOS (--skip-tests)"
 fi
 
-# ── 2. Build frontend Vue (DENTRO del contenedor, como usuario kairos) ─────────
+# ── 2. Build frontend Vue (DENTRO del contenedor) ─────────────────
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend (dentro del contenedor)…"
     
-    # Añadimos --user kairos para evitar el conflicto con /root/.npm
-    docker compose run --rm --user kairos kairos bash -c "cd frontend && npm install && npm run build"
+    # Ejecutamos como root (el default de docker compose) pero redirigimos la caché a /tmp
+    # Esto evita el error de permisos en /root/.npm
+    docker compose run --rm kairos bash -c "cd frontend && npm config set cache /tmp/.npm-cache && npm install && npm run build"
     
     echo "  ✓ Frontend compilado dentro del contenedor"
 else
