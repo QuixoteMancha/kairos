@@ -112,3 +112,26 @@ class TestPlaceBetAmount:
         # no debe verse como tupla serializada
         assert not bet.bet_type.startswith("(")
 
+
+
+
+class TestWinRate:
+    """win_rate = won / (won + lost); void/expired NO deben contar (son
+    devoluciones, no derrotas) — consistente con /api/wallet/stats."""
+
+    def test_win_rate_excludes_void_from_denominator(self):
+        w = VirtualWallet(initial_balance=100.0, platform="stake")
+        for i, status in enumerate(["won", "won", "lost", "void"]):
+            bet = _make_bet(stake=10.0, guaranteed=11.0)
+            bet.bet_id = f"bet{i}"
+            bet.status = status
+            w.bets.append(bet)
+        # 2 won, 1 lost, 1 void → 2/(2+1) = 0.666..., NO 2/4 = 0.5
+        assert w.win_rate == pytest.approx(2 / 3)
+
+    def test_win_rate_zero_when_no_resolved_bets(self):
+        w = VirtualWallet(initial_balance=100.0, platform="stake")
+        bet = _make_bet(stake=10.0, guaranteed=11.0)
+        bet.status = "pending"
+        w.bets.append(bet)
+        assert w.win_rate == 0.0

@@ -158,6 +158,40 @@ def test_still_live_does_not_settle():
     assert bet.status == "pending"
 
 
+def test_stat_total_leg_with_inconsistent_side_is_not_settled_by_live_who():
+    """
+    Bug: el guard usaba AND entre (leg_tipo no-winner) y (side no-winner). Si los
+    dos campos quedan inconsistentes (leg_tipo='total' pero side='p1' por algún
+    bug de datos previo), el AND fallaba y el bet se liquidaba con el ganador del
+    partido (`who`) en vez de dejarlo para el settlement por marcador. Con OR,
+    cualquiera de las dos señales de "no es winner" debe bastar para NO liquidar.
+    """
+    from src.core.math.simulation import SimBet, BetLeg
+    from src.core.orchestration.wallet import get_wallet
+    w = get_wallet("pinnacle")
+    bet = SimBet(
+        bet_id="cb_stattotal01_pin_p1", timestamp="2026-06-10T12:00:00",
+        fixture_name="Home Stat FC vs Away Stat United",
+        arb_tipo="stat", arb_descripcion="t", total_staked=5.0, guaranteed_return=9.5,
+        roi=0.03, combo_key="cb_stattotal01",
+        legs=[BetLeg(market_label="total@1.9", side="p1", odd=1.9, stake=5.0, expected_return=9.5, tipo="total")],
+        platform="pinnacle",
+    )
+    w.bets.append(bet)
+    w.balance = round(w.balance - 5.0, 2)
+
+    live = {cbs._fixture_key("Home Stat FC", "Away Stat United"): {
+        "who": "HOME", "home": "2", "away": "0", "sport": "FOOTBALL", "name": "Home Stat FC - Away Stat United"}}
+    with patch.object(cbs, "_fetch_kambi_live", return_value=live):
+        cbs.settle_cross_book_bets()
+    with patch.object(cbs, "_fetch_kambi_live", return_value={}):
+        s = cbs.settle_cross_book_bets()
+
+    assert [x for x in s if x.startswith("cb_stattotal01")] == []
+    bet = next(b for b in get_wallet("pinnacle").bets if b.bet_id == "cb_stattotal01_pin_p1")
+    assert bet.status == "pending"
+
+
 def test_unknown_who_never_settles():
     from src.core.orchestration.wallet import get_wallet
     _make_arb_legs(

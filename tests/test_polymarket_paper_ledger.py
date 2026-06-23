@@ -64,6 +64,25 @@ def test_pnl_negative_hedge_exit():
     assert out["pnl_usd"] < 0
 
 
+def test_pnl_single_fill_uses_filled_leg_notional_not_max():
+    # Legs asimétricos (offsets no simétricos es el caso normal): YES=3.0, NO=5.0.
+    plan = {
+        "pre_event_oco": {"legs": [
+            {"outcome": "YES", "price": 0.45, "size_usd": 3.0},
+            {"outcome": "NO", "price": 0.50, "size_usd": 5.0},
+        ]},
+    }
+    # Se llenó la pata YES (la MENOR) → debe usar 3.0, no max(3.0, 5.0)=5.0.
+    out = realized_triplet_pnl(plan, "arb_exit_market", net_bps=50.0, filled_outcome="YES")
+    assert out["cost_usd"] == 3.0
+    assert out["pnl_usd"] == round(0.005 * 3.0, 6)
+
+    # Se llenó la pata NO (la MAYOR) → debe usar 5.0.
+    out2 = realized_triplet_pnl(plan, "arb_exit_market", net_bps=50.0, filled_outcome="NO")
+    assert out2["cost_usd"] == 5.0
+    assert out2["pnl_usd"] == round(0.005 * 5.0, 6)
+
+
 def test_pnl_cancelled_is_zero():
     out = realized_triplet_pnl(_plan(), "cancelled")
     assert out["pnl_usd"] == 0.0
