@@ -124,3 +124,68 @@ class TestLiveStatDanger:
         )
         # set objetivo ya alcanzado (sets_played=1 >= target 1) → danger
         assert is_d is True
+
+
+
+# ── compute_q4_hedge: pata de apuesta YA colocada debe usar SU odd original ───
+
+class TestComputeQ4HedgeExistingBet:
+    """
+    Bug fijado: al cubrir una apuesta existente, la pata que representa esa
+    apuesta ya colocada mostraba la odd LIVE actual (no la odd a la que
+    realmente se apostó) y `guaranteed_return` se calculaba con esa odd live
+    en vez de con `eb_odd` — el retorno bruto real es el mismo gane quien
+    gane (por construcción del hedge), pero solo si se usa la odd ORIGINAL.
+    """
+
+    def _fake_probs(self):
+        from unittest.mock import MagicMock
+        return MagicMock(p_home_win=0.6, p_away_win=0.4, sigma_total=20.0, expected_total=200.0)
+
+    def test_existing_bet_p1_uses_original_odd(self):
+        from unittest.mock import patch
+        from src.core.sports import basketball as bb
+
+        existing_bet = {"selection": "p1", "stake": 10.0, "odd": 1.5}
+        live_odds = {
+            "bookA": {"moneyline_home": 2.0, "moneyline_away": 1.0},
+            "bookB": {"moneyline_home": 1.0, "moneyline_away": 2.5},
+        }
+        with patch.object(bb, "compute_match_probs", return_value=self._fake_probs()), \
+             patch("scipy.stats.norm.sf", return_value=0.55):
+            out = bb.compute_q4_hedge(
+                current_score=(80, 60), quarter=4,
+                home_elo=1600.0, away_elo=1500.0,
+                available_live_odds=live_odds,
+                existing_bet=existing_bet, base_stake=10.0,
+            )
+
+        assert out is not None
+        eb_return = 10.0 * 1.5  # 15.0 — el retorno real de la apuesta ya colocada
+        leg_p1 = next(leg for leg in out["legs"] if leg["side"] == "p1")
+        assert leg_p1["odd"] == pytest.approx(1.5)   # odd ORIGINAL, no la live (2.0)
+        assert out["guaranteed_return"] == pytest.approx(eb_return)  # no 20.0 (bug)
+
+    def test_existing_bet_p2_uses_original_odd(self):
+        from unittest.mock import patch
+        from src.core.sports import basketball as bb
+
+        existing_bet = {"selection": "p2", "stake": 10.0, "odd": 1.5}
+        live_odds = {
+            "bookA": {"moneyline_home": 2.0, "moneyline_away": 1.0},
+            "bookB": {"moneyline_home": 1.0, "moneyline_away": 2.5},
+        }
+        with patch.object(bb, "compute_match_probs", return_value=self._fake_probs()), \
+             patch("scipy.stats.norm.sf", return_value=0.55):
+            out = bb.compute_q4_hedge(
+                current_score=(60, 80), quarter=4,
+                home_elo=1500.0, away_elo=1600.0,
+                available_live_odds=live_odds,
+                existing_bet=existing_bet, base_stake=10.0,
+            )
+
+        assert out is not None
+        eb_return = 10.0 * 1.5
+        leg_p2 = next(leg for leg in out["legs"] if leg["side"] == "p2")
+        assert leg_p2["odd"] == pytest.approx(1.5)   # odd ORIGINAL, no la live (2.5)
+        assert out["guaranteed_return"] == pytest.approx(eb_return)

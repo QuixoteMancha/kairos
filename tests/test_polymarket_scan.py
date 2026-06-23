@@ -70,6 +70,23 @@ def test_scan_prefers_crypto_5m_when_available(monkeypatch):
     assert out['markets'][0]['market_type'] == 'crypto_5m_binary'
 
 
+def test_scan_with_none_max_hours_uses_config_default(monkeypatch):
+    """
+    Bug: max_hours_to_resolution=None (p.ej. Flask devuelve None si el query
+    param no parsea como float, en vez del default) caía a `or 0.0` → el
+    filtro `hours > 0.0` descartaba CUALQUIER mercado real y forzaba modo
+    fallback degradado. Debe caer al default de config (0.20h), no a 0.0.
+    """
+    pages = [[
+        _m('Will Bitcoin be above 120k in 5 min?', hours=0.2),
+    ]]
+    monkeypatch.setattr(scan, 'PolymarketClient', lambda: _DummyClient(pages))
+    out = scan.scan_polymarket_crypto_5m(limit=10, min_liquidity=0, max_spread=1.0, max_hours_to_resolution=None)
+
+    assert out['count'] == 1
+    assert out['fallback_mode'] == 'none'
+
+
 def test_scan_discards_stale_5m_markets(monkeypatch):
     pages = [[
         _m('Will Bitcoin be above 120k in 5 min?', hours=-10.0),

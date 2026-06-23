@@ -116,6 +116,24 @@ def test_summary_aggregates_pnl_and_winrate():
     assert s["equity_usd"] == round(pl.PAPER_SEED_USD + 0.5, 4)
 
 
+def test_summary_winrate_excludes_flats_from_denominator():
+    """win_rate_pct = wins/(wins+losses); un trade con pnl exactamente 0.0
+    (flat) no debe diluir el win rate como si fuera una derrota."""
+    pl.record_resolved_triplet(condition_id="c1", symbol="BTC", result="dual_fill_locked_arb",
+                               pnl_usd=1.0, cost_usd=4.0, ts=1000)
+    pl.record_resolved_triplet(condition_id="c2", symbol="BTC", result="hedge_exit_market",
+                               pnl_usd=-0.5, cost_usd=4.0, ts=2000)
+    pl.record_resolved_triplet(condition_id="c3", symbol="BTC", result="hedge_exit_market",
+                               pnl_usd=0.0, cost_usd=4.0, ts=3000)
+    s = pl.get_summary()
+    assert s["trades"] == 3
+    assert s["wins"] == 1
+    assert s["losses"] == 1
+    assert s["flats"] == 1
+    # 1 win / (1 win + 1 loss) = 50.0, NO 1/3 = 33.3 (lo que daría con flats en el denominador)
+    assert s["win_rate_pct"] == 50.0
+
+
 def test_equity_curve_accumulates_from_seed():
     pl.record_resolved_triplet(condition_id="c1", symbol="BTC", result="x",
                                pnl_usd=2.0, cost_usd=4.0, ts=1000)
