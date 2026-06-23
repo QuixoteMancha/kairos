@@ -56,10 +56,46 @@ docker compose exec kairos python scripts/migrate.py
 ## Rebuild rápido
 
 ```bash
+./kairos.sh autopilot      # flujo automático recomendado (prechecks + build + up + healthcheck)
 ./rebuild.sh                 # tests + frontend + imagen + restart
 ./rebuild.sh --skip-tests    # salta pytest
 ./rebuild.sh --skip-frontend # salta npm build
 ./rebuild.sh --no-cache      # fuerza reinstalar dependencias
+```
+
+## Sync GMKtec sin GitHub
+
+Cuando necesites mover tambien secretos/estado local (por ejemplo `.env`, `data/`, `dist/` o SQLite), usa sync por SSH con rsync.
+
+```bash
+# Primera carga completa a GMKtec (incluye .env/data/dist/DB) + deploy remoto
+./scripts/gmktec_sync.sh --full --deploy
+
+# Updates incrementales de codigo (omite secretos/estado local) + deploy remoto
+./scripts/gmktec_sync.sh --code --deploy
+
+# Seleccionar estrategia de deploy remoto
+./scripts/gmktec_sync.sh --code --deploy --deploy-mode rebuild   # default: recompila frontend + rebuild docker
+./scripts/gmktec_sync.sh --code --deploy --deploy-mode autopilot # usa kairos.sh autopilot
+./scripts/gmktec_sync.sh --code --deploy --deploy-mode restart   # solo restart, sin rebuild
+
+# Watcher continuo (auto-sync + auto-deploy en cada cambio)
+./scripts/gmktec_watch.sh --code --interval 4
+```
+
+Defaults del destino remoto:
+- Host: `PROD_HOST`
+- User: `sandman`
+- Ruta: `/home/sandman/programas/kairos`
+
+Puedes overridear host/user/ruta/llave con:
+
+```bash
+./scripts/gmktec_sync.sh --code --deploy \
+    --host PROD_HOST \
+    --user sandman \
+    --remote-dir /home/sandman/programas/kairos \
+    --key ~/.ssh/id_ed25519
 ```
 
 ## Healthcheck

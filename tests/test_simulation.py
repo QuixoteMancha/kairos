@@ -89,3 +89,26 @@ class TestResolveBet:
         assert self.bet.status == "pending"
         # esperado: stake descontado pero partial revertido → 90
         assert self.w.balance == 90.0
+
+
+class TestPlaceBetAmount:
+    """Regresión del bug: trailing comma hacía bet_type una TUPLA (str,) →
+    se persistía como '(...,)' y los filtros `bet_type == 'cross-arb'` fallaban."""
+
+    def test_bet_type_is_str_not_tuple(self):
+        from src.core.math.arbitrage.opportunity import MarketLine
+        from src.core.math.arbitrage.detectors.inside import scan_inside_arb
+
+        w = VirtualWallet(initial_balance=100.0, platform="stake")
+        ml = MarketLine(tipo="ganador", odd_p1=2.1, odd_p2=2.1)
+        opps = scan_inside_arb([ml], 0.001, lambda x: "match")
+        assert opps, "el inside-arb debería detectarse"
+
+        bet = w.place_bet_amount(opps[0], "A vs B", 10.0)
+        assert bet is not None
+        assert isinstance(bet.bet_type, str), (
+            f"bet_type debe ser str, no {type(bet.bet_type).__name__}"
+        )
+        # no debe verse como tupla serializada
+        assert not bet.bet_type.startswith("(")
+

@@ -53,6 +53,28 @@ def test_who_to_side():
     assert cbs._winner_side_from_who("UNKNOWN") is None
 
 
+def test_kambi_esports_event_detection_true():
+    ev = {
+        "group": "CLA World Cup (2x5 min)",
+        "path": [
+            {"englishName": "Football", "termKey": "football"},
+            {"englishName": "|Esports Football|", "termKey": "esports_football"},
+        ],
+    }
+    assert cbs._is_kambi_esports_event(ev) is True
+
+
+def test_kambi_esports_event_detection_false_for_real_football():
+    ev = {
+        "group": "LaLiga",
+        "path": [
+            {"englishName": "Football", "termKey": "football"},
+            {"englishName": "Spain", "termKey": "spain"},
+        ],
+    }
+    assert cbs._is_kambi_esports_event(ev) is False
+
+
 # ── flujo end-to-end con feed Kambi mockeado ─────────────────────────────────
 
 def _make_arb_legs(combo_key, fixture, legs_spec):

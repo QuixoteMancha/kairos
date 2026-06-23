@@ -6,6 +6,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Arquitectura técnica + **diagramas de flujo Mermaid** (Engine workers, Scan+Allocator multi-sport, Live Monitor + delegación por deporte) |
 | [betting_settlement_rules.md](betting_settlement_rules.md) | Reglas de settlement por book + **diagrama de estados** de apuestas (won/lost/void/pending) |
 | [AUTH_FLOW.md](AUTH_FLOW.md) | Flujos de autenticación y proxies para books + Sofascore/Flashscore |
+| [POLYMARKET_REAL_TRADING_PLAN.md](POLYMARKET_REAL_TRADING_PLAN.md) | Hoja de ruta ejecutable para integrar Polymarket crypto 5m en modo real (scanner, ejecución, conciliación, settlement, riesgo) |
 
 ---
 

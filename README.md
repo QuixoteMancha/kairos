@@ -49,6 +49,9 @@ python kairos.py start
 python kairos.py stop
 
 # Dashboard en: http://localhost:8765
+
+# Docker autopilot (prechecks + build + up + healthcheck)
+./kairos.sh autopilot
 ```
 
 ---
@@ -81,7 +84,7 @@ kairos/
 │   │
 │   ├── scrapers/           ← Extracción de datos (multi-sport)
 │   │   ├── stake_scraper.py      ← GraphQL Stake (odds + scores en vivo)
-│   │   ├── sofascore_scraper.py  ← Scores y stats (Sofascore)
+│   │   ├── sofascore_scraper.py  ← Shim de compat. → sofascore/ (client/parsing/proxy). Bloqueado por challenge anti-bot, ver docs/betting_settlement_rules.md
 │   │   ├── flashscore_scraper.py ← Resultados ITF/low-level (Flashscore)
 │   │   ├── atp_wta_scraper.py    ← Calendario ATP/WTA fallback
 │   │   ├── player_stats/         ← Player stats y ELO (Sofascore + models, multi-sport)

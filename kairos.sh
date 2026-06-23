@@ -9,6 +9,7 @@
 #   ./kairos.sh status     # Estado de los containers
 #   ./kairos.sh logs       # Muestra logs en vivo de kairos
 #   ./kairos.sh ip         # Actualiza whitelist Brightdata con IP actual
+#   ./kairos.sh autopilot  # Prechecks + frontend build (si falta) + docker build/up + healthcheck
 
 set -euo pipefail
 
@@ -28,6 +29,97 @@ _header() {
 _status() {
     echo ""
     docker compose ps
+}
+
+_ensure_env_file() {
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        return 0
+    fi
+
+    if [ -f "$SCRIPT_DIR/.env.example" ]; then
+        cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+        echo "  ⚠ .env no existía. Se creó desde .env.example"
+        echo "  ⚠ Revisa credenciales en .env antes de operar en real."
+        return 0
+    fi
+
+    echo "  ✗ Falta .env y .env.example"
+    return 1
+}
+
+_frontend_build_if_needed() {
+    local dist_index="$SCRIPT_DIR/src/web/static/dist/index.html"
+
+    if [ -f "$dist_index" ]; then
+        echo "  ✓ Frontend dist ya existe"
+        return 0
+    fi
+
+    echo "  - Frontend dist no existe. Construyendo frontend..."
+    if [ ! -f "$SCRIPT_DIR/frontend/package.json" ]; then
+        echo "  ✗ No se encontró frontend/package.json"
+        return 1
+    fi
+
+    (
+        cd "$SCRIPT_DIR/frontend"
+        npm install
+        npm run build
+    )
+
+    if [ ! -f "$dist_index" ]; then
+        echo "  ✗ Falló build frontend: no se generó src/web/static/dist/index.html"
+        return 1
+    fi
+
+    echo "  ✓ Frontend build OK"
+}
+
+_wait_health() {
+    local health_url="http://localhost:8765/healthz"
+    local max_tries=30
+    local i
+
+    echo ""
+    echo "▶ Esperando healthcheck en ${health_url}..."
+    for i in $(seq 1 "$max_tries"); do
+        if curl --silent --fail "$health_url" >/dev/null 2>&1; then
+            echo "  ✓ Healthcheck OK"
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "  ✗ Healthcheck no respondió a tiempo"
+    return 1
+}
+
+_autopilot() {
+    _header "Autopilot"
+    echo ""
+    echo "▶ Prechecks de entorno..."
+    mkdir -p "$SCRIPT_DIR/data/backups" "$SCRIPT_DIR/logs"
+    _ensure_env_file
+
+    echo ""
+    echo "▶ Actualizando whitelist Brightdata (best-effort)..."
+    _update_ip || true
+
+    echo ""
+    echo "▶ Validando frontend compilado..."
+    _frontend_build_if_needed
+
+    echo ""
+    echo "▶ Build y arranque del stack Docker..."
+    docker compose build
+    docker compose up -d
+
+    _wait_health
+
+    _status
+    echo ""
+    echo "  ✓ Autopilot completado"
+    echo "  UI: http://localhost:8765"
 }
 
 _update_ip() {
@@ -98,8 +190,12 @@ case "$CMD" in
         _update_ip
         ;;
 
+    autopilot)
+        _autopilot
+        ;;
+
     *)
-        echo "Uso: $0 {start|stop|restart|status|logs|ip} [--full]"
+        echo "Uso: $0 {start|stop|restart|status|logs|ip|autopilot} [--full]"
         exit 1
         ;;
 esac

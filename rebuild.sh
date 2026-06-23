@@ -32,6 +32,35 @@ echo "  ✓ Limpieza de caché completada."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+ensure_node_npm() {
+    # En shells SSH no interactivos, npm puede no estar en PATH cuando se usa nvm.
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+        # shellcheck disable=SC1090
+        . "$HOME/.nvm/nvm.sh"
+        nvm use --silent default >/dev/null 2>&1 || nvm use --silent --lts >/dev/null 2>&1 || true
+    fi
+
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        echo "  ✗ Node/npm no disponibles en PATH"
+        echo "  Sugerencia: instala Node LTS o configura nvm para shells no interactivos"
+        exit 1
+    fi
+}
+
+frontend_install_and_build() {
+    ensure_node_npm
+    if [ -f package-lock.json ]; then
+        npm ci --no-audit --no-fund
+    else
+        npm install --no-audit --no-fund
+    fi
+    npm run build
+}
+
 show_help() {
     cat << 'HELPEOF'
 Uso: ./rebuild.sh [opciones]
@@ -79,6 +108,7 @@ FRONTEND_ONLY=false
 CLEAN_BETS=false
 CLEAN_ALL=false
 RESET_BALANCES=false
+PREBUILT_IMAGE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -123,7 +153,7 @@ if [ "$FRONTEND_ONLY" = true ]; then
 
     echo ""
     echo "▶ [1/2] Building Vue frontend (npm run build)…"
-    cd frontend && npm install && npm run build
+    cd frontend && frontend_install_and_build
     cd "$SCRIPT_DIR"
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
     if [ ! -d "$COPY_SRC" ]; then
@@ -148,7 +178,6 @@ fi
 
 if [ "$FAST" = true ]; then
     SKIP_TESTS=true
-    NO_CACHE=false
 fi
 
 STEPS=4
@@ -193,7 +222,19 @@ echo "  ✓ Pre-clean completado"
 # ── 1. Tests ──────────────────────────────────────────────────────
 if [ "$SKIP_TESTS" = false ]; then
     step "Corriendo tests (pytest dentro de Docker)…"
-    docker compose run --rm kairos bash -c "ls -F && python3 -m pytest tests/ -q --tb=short"
+    # Build previo para que los tests usen SIEMPRE el código recién sincronizado
+    # y las dependencias actuales de requirements.txt.
+    if [ "$NO_CACHE" = true ]; then
+        docker compose build --no-cache kairos
+    else
+        docker compose build kairos
+    fi
+    PREBUILT_IMAGE=true
+    # Aislar tests del volumen persistente /data para evitar estado residual
+    # entre corridas (bets/tracker previos) que vuelve flaky algunos tests.
+    docker compose run --rm \
+        -e DB_PATH=/tmp/kairos_test.db \
+        kairos bash -c "ls -F && python3 -m pytest tests/ -q --tb=short"
     echo "  ✓ Tests OK"
 
     # Eliminar contenedores residuales de los tests antes de tocar la DB.
@@ -224,6 +265,13 @@ if [ "$CLEAN_BETS" = true ]; then
     DB_VOLUME="kairos_kairos_data"
     DB_MOUNT="/data"
 
+    # La limpieza usa un contenedor con Python para operar sobre el volumen.
+    # Si no existe la imagen local, la construimos para garantizar ejecución.
+    if ! docker image inspect kairos:latest >/dev/null 2>&1; then
+        echo "  - Imagen kairos:latest no existe. Construyendo para limpieza..."
+        docker compose build kairos
+    fi
+
     # Backup
     BACKUP_NAME="kairos_bets_clean_$(date +%Y%m%d_%H%M%S).db"
     echo "  - Haciendo backup..."
@@ -239,7 +287,7 @@ dst = "/backup/'"${BACKUP_NAME}"'"
 os.makedirs("/backup", exist_ok=True)
 shutil.copy2(src, dst)
 print("Backup creado:", dst)
-' || echo "  ⚠ Backup falló (continuando)"
+'
 
     echo "  - Ejecutando limpieza..."
 
@@ -343,6 +391,12 @@ for tbl in all_tables:
 
 c.execute("VACUUM;")
 print("\n✓ VACUUM ejecutado")
+
+# Checkpoint final: fusiona TODOS los DELETE al kairos.db del volumen antes de
+# cerrar. Sin esto los borrados podrían quedar sólo en kairos.db-wal dentro del
+# volumen Docker y reaparecer si un backup/restore copia sólo el .db.
+c.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+print("✓ WAL checkpoint(TRUNCATE) ejecutado")
 conn.close()
 print("✓ Limpieza completada.")
 PYEOF
@@ -353,7 +407,7 @@ PYEOF
         -e CLEAN_ALL="${CLEAN_ALL}" \
         -e RESET_BALANCES="${RESET_BALANCES}" \
         kairos:latest \
-        python3 /tmp/clean_bets.py || echo "  ⚠ Error durante la limpieza (revisa permisos del volumen)"
+        python3 /tmp/clean_bets.py
 
     rm -f "${CLEAN_PY}"
 
@@ -370,7 +424,7 @@ fi
 # Solo compila el dist. El docker cp ocurre en el paso 4 (post-up).
 if [ "$SKIP_FRONTEND" = false ]; then
     step "Building Vue frontend…"
-    cd frontend && npm install && npm run build
+    cd frontend && frontend_install_and_build
     cd "$SCRIPT_DIR"
     COPY_SRC="$SCRIPT_DIR/src/web/static/dist"
     echo "  Src build: $COPY_SRC"
@@ -385,9 +439,15 @@ else
 fi
 
 # ── 3. Build imagen Docker ────────────────────────────────────────
-if [ "$FAST" = true ]; then
+if [ "$PREBUILT_IMAGE" = true ] && [ "$NO_CACHE" = false ]; then
+    step "Build Docker image — OMITIDO (ya construido para tests)"
+elif [ "$FAST" = true ]; then
     step "Building Docker image kairos:latest (modo rápido con cache)…"
-    docker compose build kairos
+    if [ "$NO_CACHE" = true ]; then
+        docker compose build --no-cache kairos
+    else
+        docker compose build kairos
+    fi
 else
     step "Building Docker image kairos:latest…"
     if [ "$NO_CACHE" = true ]; then
@@ -398,7 +458,7 @@ else
 fi
 
 # ── 4. Restart / up ──────────────────────────────────────────────
-if [ "$FULL" = true ] && [ "$FAST" = false ]; then
+if [ "$FULL" = true ]; then
     step "Restarting full stack (--full)…"
     docker compose down
     docker compose up -d

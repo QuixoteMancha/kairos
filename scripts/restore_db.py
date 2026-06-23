@@ -70,6 +70,18 @@ def main() -> int:
 
     with gzip.open(src, "rb") as fin, dst.open("wb") as fout:
         shutil.copyfileobj(fin, fout, length=1 << 20)
+
+    # CRÍTICO (WAL + volumen Docker): eliminar los sidecars -wal/-shm que hayan
+    # quedado de la DB anterior. Si no, SQLite reaplica el WAL viejo encima del
+    # .db recién restaurado al abrirlo → resucita datos borrados / corrompe.
+    # El backup (sqlite3.Backup API) ya es un snapshot consistente de una sola
+    # pieza, así que el .db restaurado NO necesita ningún WAL acompañante.
+    for _sidecar in (f"{dst}-wal", f"{dst}-shm"):
+        p = Path(_sidecar)
+        if p.exists():
+            p.unlink()
+            print(f"[restore] sidecar WAL eliminado → {p.name}")
+
     print(f"[restore] OK → {dst}")
     return 0
 
