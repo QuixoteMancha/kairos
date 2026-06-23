@@ -1,6 +1,6 @@
 from importlib import import_module
 
-msp = import_module('src.web.blueprints.multisport_bp')
+msp = import_module('src.core.orchestration.polymarket_triplet_live')
 
 
 def test_triplet_market_symbol_detects_btc_eth():
