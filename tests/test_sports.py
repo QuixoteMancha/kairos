@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.sports import baseball, basketball, ice_hockey, american_football
+from src.core.sports import baseball, basketball, ice_hockey, american_football, football
 
 
 # ── settle_bet: deportes con liquidación determinista ─────────────────────────
@@ -52,6 +52,45 @@ class TestSettleSpreadLines:
     def test_basketball_spread_push(self):
         # P1 -5 con margen exacto de 5 → push
         assert basketball.settle_bet("spread", "p1", -5.0, 105, 100) == "push"
+
+
+class TestSettleFootball:
+    """football.settle_bet -- el unico de los 5 deportes de equipo con empate
+    real en 1X2 (los demas son two_outcome_only). Mismas convenciones que
+    baseball/basketball/ice_hockey/american_football para asian_handicap
+    (diff+linea>0) y total_goals (total>linea)."""
+
+    def test_1x2_draw(self):
+        assert football.settle_bet("1x2", "draw", None, 1, 1) == "won"
+        assert football.settle_bet("1x2", "p1", None, 1, 1) == "lost"
+
+    def test_1x2_home_win(self):
+        assert football.settle_bet("1x2", "p1", None, 2, 1) == "won"
+        assert football.settle_bet("1x2", "p2", None, 2, 1) == "lost"
+
+    def test_dnb_draw_pushes(self):
+        assert football.settle_bet("dnb", "p1", None, 1, 1) == "push"
+
+    def test_asian_handicap_cover(self):
+        # home -1.5, gana 3-1 (diff=2) -> adj=2-1.5=0.5>0 -> won
+        assert football.settle_bet("asian_handicap", "p1", -1.5, 3, 1) == "won"
+
+    def test_asian_handicap_not_cover(self):
+        # home -1.5, gana 2-1 (diff=1) -> adj=1-1.5=-0.5<0 -> lost
+        assert football.settle_bet("asian_handicap", "p1", -1.5, 2, 1) == "lost"
+
+    def test_asian_handicap_push(self):
+        assert football.settle_bet("asian_handicap", "p1", -1.0, 2, 1) == "push"
+
+    def test_total_goals_over_under_push(self):
+        assert football.settle_bet("total_goals", "over", 2.5, 2, 1) == "won"
+        assert football.settle_bet("total_goals", "under", 2.5, 1, 1) == "won"
+        assert football.settle_bet("total_goals", "over", 3.0, 2, 1) == "push"
+
+    def test_btts(self):
+        assert football.settle_bet("btts", "yes", None, 1, 1) == "won"
+        assert football.settle_bet("btts", "yes", None, 1, 0) == "lost"
+        assert football.settle_bet("btts", "no", None, 1, 0) == "won"
 
 
 class TestSettleTotals:

@@ -402,12 +402,16 @@ def test_settle_stat_by_score_winner_lost():
     assert bet.status == "lost"
 
 
-def test_settle_stat_skips_tennis_and_total():
-    """El settler por equipo NO toca tenis ni stat de total."""
+def test_settle_stat_total_leg_retries_when_score_not_yet_available():
+    """Bug corregido: las patas \'total\' (over/under) llegaban a quedarse
+    pending para siempre (la funcion las saltaba por completo, sin tocar
+    Flashscore). Ahora SI se intentan via find_team_match_result -- si la
+    fuente todavia no tiene el resultado (None), se deja pending para
+    reintentar en el siguiente ciclo (no se inventa un resultado)."""
     from src.core.orchestration import settlement as _s
     from src.core.orchestration import wallet as _wmod
     tennis_bet = _make_stat_bet("Alcaraz vs Sinner", sport="tennis")
-    total_leg = MagicMock(side="over", tipo="total")
+    total_leg = MagicMock(side="over", tipo="total", linea=2.5)
     total_bet = MagicMock(bet_id="tb_1", arb_tipo="stat", bet_type="stat",
                           fixture_name="A vs B", sport="football",
                           timestamp=tennis_bet.timestamp, placed_at=tennis_bet.placed_at,
@@ -429,6 +433,98 @@ def test_settle_stat_skips_tennis_and_total():
          patch.object(_wmod, "save_wallet"):
         settled = _s._settle_stat_bets_by_score(min_hours_past=1.0)
     assert settled == []
-    assert called["n"] == 0   # ni tenis ni total llegan a Flashscore
+    assert called["n"] == 1   # la pata total SI llega a Flashscore (la de tenis usa find_match_result, no contado aqui)
+
+
+def test_settle_stat_total_leg_resolves_won_via_team_score():
+    """Pata \'over\' total_points=210.5 -- Flashscore da home=110/away=105
+    (total=215>210.5) -> WON."""
+    from src.core.orchestration import settlement as _s
+    from src.core.orchestration import wallet as _wmod
+    total_leg = MagicMock(side="over", tipo="total", linea=210.5)
+    bet = MagicMock(bet_id="tb_won", arb_tipo="stat", bet_type="stat",
+                     fixture_name="Lakers vs Celtics", sport="basketball",
+                     timestamp=(__import__("datetime").datetime.now() - __import__("datetime").timedelta(hours=5)).isoformat(),
+                     placed_at=None, legs=[total_leg], total_staked=2.0,
+                     guaranteed_return=4.0, status="pending")
+    resolved_flag = {"won": None}
+
+    def _resolve(bet_id, won, actual_return=None, record_feedback=False):
+        resolved_flag["won"] = won
+        bet.status = "won" if won else "lost"
+        return bet
+
+    fake = MagicMock(balance=40.0, pending_bets=[bet], resolve_bet=_resolve)
+
+    def _gw(slug):
+        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[], resolve_bet=lambda *a, **k: None)
+
+    fs_result = {"resultado": "110-105", "home_score": 110, "away_score": 105}
+    with patch("src.scrapers.flashscore_scraper.find_team_match_result", return_value=fs_result), \
+         patch.object(_wmod, "get_wallet", side_effect=_gw), \
+         patch.object(_wmod, "save_wallet"):
+        settled = _s._settle_stat_bets_by_score(min_hours_past=1.0)
+    assert settled == [bet.bet_id]
+    assert resolved_flag["won"] is True
+
+
+def test_settle_stat_total_leg_resolves_lost_via_team_score():
+    """Pata \'over\' total_points=210.5 -- Flashscore da total=205<210.5 -> LOST."""
+    from src.core.orchestration import settlement as _s
+    from src.core.orchestration import wallet as _wmod
+    total_leg = MagicMock(side="over", tipo="total", linea=210.5)
+    bet = MagicMock(bet_id="tb_lost", arb_tipo="stat", bet_type="stat",
+                     fixture_name="Lakers vs Celtics", sport="basketball",
+                     timestamp=(__import__("datetime").datetime.now() - __import__("datetime").timedelta(hours=5)).isoformat(),
+                     placed_at=None, legs=[total_leg], total_staked=2.0,
+                     guaranteed_return=4.0, status="pending")
+    resolved_flag = {"won": None}
+
+    def _resolve(bet_id, won, actual_return=None, record_feedback=False):
+        resolved_flag["won"] = won
+        bet.status = "won" if won else "lost"
+        return bet
+
+    fake = MagicMock(balance=40.0, pending_bets=[bet], resolve_bet=_resolve)
+
+    def _gw(slug):
+        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[], resolve_bet=lambda *a, **k: None)
+
+    fs_result = {"resultado": "100-105", "home_score": 100, "away_score": 105}
+    with patch("src.scrapers.flashscore_scraper.find_team_match_result", return_value=fs_result), \
+         patch.object(_wmod, "get_wallet", side_effect=_gw), \
+         patch.object(_wmod, "save_wallet"):
+        settled = _s._settle_stat_bets_by_score(min_hours_past=1.0)
+    assert settled == [bet.bet_id]
+    assert resolved_flag["won"] is False
+
+
+def test_settle_stat_total_leg_pushes_to_void_on_exact_line():
+    """Pata \'over\' total_points=210 exacto -- Flashscore da total=210 ->
+    PUSH (void, stake devuelto, PNL=0), no won ni lost."""
+    from src.core.orchestration import settlement as _s
+    from src.core.orchestration import wallet as _wmod
+    total_leg = MagicMock(side="over", tipo="total", linea=210.0)
+    bet = MagicMock(bet_id="tb_push", arb_tipo="stat", bet_type="stat",
+                     fixture_name="Lakers vs Celtics", sport="basketball",
+                     timestamp=(__import__("datetime").datetime.now() - __import__("datetime").timedelta(hours=5)).isoformat(),
+                     placed_at=None, legs=[total_leg], total_staked=2.0,
+                     guaranteed_return=4.0, status="pending")
+    fake = MagicMock(balance=40.0, pending_bets=[bet], resolve_bet=lambda *a, **k: None)
+
+    def _gw(slug):
+        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[], resolve_bet=lambda *a, **k: None)
+
+    fs_result = {"resultado": "110-100", "home_score": 110, "away_score": 100}
+    with patch("src.scrapers.flashscore_scraper.find_team_match_result", return_value=fs_result), \
+         patch.object(_wmod, "get_wallet", side_effect=_gw), \
+         patch.object(_wmod, "save_wallet"), \
+         patch.object(_wmod, "write_ledger") as mock_ledger:
+        settled = _s._settle_stat_bets_by_score(min_hours_past=1.0)
+    assert settled == [bet.bet_id]
+    assert bet.status == "void"
+    assert bet.pnl == 0.0
+    assert fake.balance == 42.0   # 40 + stake (2.0) devuelto
+    assert mock_ledger.called
 
 

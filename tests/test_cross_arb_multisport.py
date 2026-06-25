@@ -86,10 +86,22 @@ def test_tennis_default_sport_unaffected_by_generalization():
     assert opps[0].roi == pytest.approx(0.25, abs=1e-6)
 
 
-def test_football_total_goals_produces_nothing_until_settle_bet_exists():
-    """Football no tiene settle_bet() real todavia (cross_total_tipos=[]
-    a proposito) -- debe ignorar total_goals por completo, sin crashear."""
+def test_football_total_goals_detects_real_arb_now_that_settle_bet_exists():
+    """Football ahora tiene settle_bet() (total_goals: total>linea, misma
+    convencion que los demas deportes) -- cross_total_tipos ya no esta vacio,
+    debe detectar el gap igual que basketball/baseball."""
     m_over = MarketLine(tipo='total_goals', odd_p1=4.0, odd_p2=1.01, linea=2.5)
     m_under = MarketLine(tipo='total_goals', odd_p1=1.01, odd_p2=4.0, linea=3.5)
     opps = scan_cross_over_under([m_over, m_under], min_roi=0.01, legs_scope_fn=None, sport='football')
-    assert opps == []
+    assert len(opps) == 1
+    assert opps[0].roi == pytest.approx(1.0, abs=1e-6)
+
+
+def test_football_asian_handicap_detects_real_arb_with_correct_direction():
+    """asian_handicap +2.5 (P1) + asian_handicap -1.5 (P2). Verificado a mano
+    contra football.settle_bet: P1 gana si diff>-2.5, P2 gana si diff<1.5."""
+    m_p1 = MarketLine(tipo='asian_handicap', odd_p1=4.0, odd_p2=1.01, linea=2.5)
+    m_p2 = MarketLine(tipo='asian_handicap', odd_p1=1.01, odd_p2=4.0, linea=-1.5)
+    opps = scan_cross_handicap_lines([m_p1, m_p2], min_roi=0.01, legs_scope_fn=None, sport='football')
+    assert len(opps) == 1
+    assert opps[0].roi == pytest.approx(1.0, abs=1e-6)
