@@ -22,6 +22,8 @@ from src.core.math.arbitrage.opportunity import MarketLine
 from src.database.database import BetMarket
 from src.core.math.arbitrage.detectors.cross import (
     scan_cross_winner_sets,
+    scan_cross_over_under,
+    scan_cross_handicap_lines,
     _solve_coverage_stakes,
 )
 
@@ -128,4 +130,56 @@ def test_winner_sets_respects_min_roi_threshold():
 
     # El arb real es ~33.3% -> pedir min_roi=0.50 debe descartarlo.
     opps = scan_cross_winner_sets([mw, ms1, ms2], min_roi=0.50, outcomes=None, p_set=0.5, legs_scope_fn=None)
+    assert opps == []
+
+
+
+# ── scan_cross_over_under: gap-arb sobre total_juegos/total_sets ──────────────
+
+def test_over_under_detects_real_gap_arb():
+    """Over 20.5 @2.5 + Under 22.5 @2.5 -> overround=0.8 -> ROI=25% exacto.
+    Verificado analiticamente contra _outcome_wins antes de escribir el codigo:
+    para CUALQUIER total real, val>20.5 (over gana) o val<22.5 (under gana, ya
+    que 22.5>20.5) -> cobertura total garantizada."""
+    m_over = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=2.5, odd_p2=1.01, linea=20.5)
+    m_under = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=1.01, odd_p2=2.5, linea=22.5)
+    opps = scan_cross_over_under([m_over, m_under], min_roi=0.01, legs_scope_fn=None)
+    assert len(opps) == 1
+    assert opps[0].roi == pytest.approx(0.25, abs=1e-6)
+
+
+def test_over_under_reversed_lines_no_coverage():
+    """Si la linea 'over' es MAYOR que la linea 'under', hay una zona donde
+    AMBAS pierden -> no debe reportarse como arb garantizado."""
+    m_over = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=2.5, odd_p2=1.01, linea=22.5)
+    m_under = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=1.01, odd_p2=2.5, linea=20.5)
+    opps = scan_cross_over_under([m_over, m_under], min_roi=0.01, legs_scope_fn=None)
+    assert opps == []
+
+
+def test_over_under_does_not_cross_different_player_scope():
+    """No debe cruzar el total individual de un jugador contra el total del match."""
+    m_over = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=2.5, odd_p2=1.01, linea=10.5, player_side='p1')
+    m_under = MarketLine(tipo=BetMarket.TIPO_TOTAL_JUEGOS, odd_p1=1.01, odd_p2=2.5, linea=22.5, player_side=None)
+    opps = scan_cross_over_under([m_over, m_under], min_roi=0.01, legs_scope_fn=None)
+    assert opps == []
+
+
+# ── scan_cross_handicap_lines: gap-arb sobre handicap_juego/handicap_set ──────
+
+def test_handicap_lines_detects_real_gap_arb():
+    """P1 Hcp+2.5 @2.5 + P2 (en mercado de linea+0.5) @2.5 -> overround=0.8 ->
+    ROI=25%. Direccion de cobertura VERIFICADA contra _outcome_wins (es la
+    inversa de over/under: requiere linea_p1 > linea_p2, no al reves)."""
+    m_a = MarketLine(tipo=BetMarket.TIPO_HANDICAP_JUEGO, odd_p1=2.5, odd_p2=1.01, linea=2.5)
+    m_b = MarketLine(tipo=BetMarket.TIPO_HANDICAP_JUEGO, odd_p1=1.01, odd_p2=2.5, linea=0.5)
+    opps = scan_cross_handicap_lines([m_a, m_b], min_roi=0.01, legs_scope_fn=None)
+    assert len(opps) == 1
+    assert opps[0].roi == pytest.approx(0.25, abs=1e-6)
+
+
+def test_handicap_lines_reversed_no_coverage():
+    m_a = MarketLine(tipo=BetMarket.TIPO_HANDICAP_JUEGO, odd_p1=2.5, odd_p2=1.01, linea=0.5)
+    m_b = MarketLine(tipo=BetMarket.TIPO_HANDICAP_JUEGO, odd_p1=1.01, odd_p2=2.5, linea=2.5)
+    opps = scan_cross_handicap_lines([m_a, m_b], min_roi=0.01, legs_scope_fn=None)
     assert opps == []
