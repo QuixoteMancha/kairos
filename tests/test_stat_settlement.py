@@ -108,23 +108,9 @@ def _compute(bet, sp1, sp2, total_games=None, games_p1=None, games_p2=None,
     función canónica _outcome_wins (ahora en core).
     Retorna el retorno real si la pata gana, 0 si pierde, None si no determinístico.
     """
-    # El _outcome_wins hace lookup de las constantes en el BetMarket importado
-    # desde database. Aseguramos que existan (el modelo actual sólo tiene el campo 'tipo').
-    from src.database.database import BetMarket as _RealBetMarket
-    for name, val in [
-        ('TIPO_GANADOR', 'ganador'),
-        ('TIPO_SET_GANADOR', 'set_ganador'),
-        ('TIPO_HANDICAP_SET', 'handicap_set'),
-        ('TIPO_HANDICAP_JUEGO', 'handicap_juego'),
-        ('TIPO_TOTAL_JUEGOS', 'total_juegos'),
-        ('TIPO_TOTAL_SETS', 'total_sets'),
-        ('TIPO_SET_TOTAL_JUEGOS', 'set_total_juegos'),
-        ('TIPO_ACES', 'aces'),
-        ('TIPO_DOBLES_FALTAS', 'dobles_faltas'),
-    ]:
-        if not hasattr(_RealBetMarket, name):
-            setattr(_RealBetMarket, name, val)
-
+    # Nota: BetMarket.TIPO_* (usadas por _outcome_wins) son ahora atributos
+    # reales del modelo (ver domain.py) -- el workaround de monkeypatch que
+    # vivía aquí ya no hace falta.
     total_return = 0.0
     for leg in (bet.legs or []):
         m = _FakeMarket(leg)
