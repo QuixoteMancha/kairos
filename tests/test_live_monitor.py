@@ -224,3 +224,36 @@ def test_baseball_run_line_danger():
     info = _compute_live_hedge(bet, fx, score_p1=2, score_p2=5, ticks_waiting=2, is_live=True)
     assert info is not None
     assert info["market_tipo"] == "run_line"
+
+
+
+def test_stat_over_side_hedges_with_under_odd_not_own_odd():
+    """
+    Bug fijado: rival_side se computaba con un ternario que solo distinguia
+    'p1' de "cualquier otra cosa" -> side='over' caia al else y resolvia
+    rival_side='p1', es decir buscaba SU PROPIA odd (odd_p1, el slot de
+    'over') en vez de la odd contraria (odd_p2, 'under'). odd_p1=over /
+    odd_p2=under es la convencion real (ver hedge_routes.py "Over = outcome
+    P1 en Stake"). El hedge debe usar odd_p2 (under) como rival de un 'over'.
+    """
+    bet = _BetStub(legs=[_LegStub(side="over", odd=1.90, tipo="total", linea=22.5)], sport="tennis")
+    fx = _FixtureStub(markets=[
+        _MarketStub(tipo="total", odd_p1=1.90, odd_p2=2.05, linea=22.5),
+    ])
+    info = _compute_live_hedge(bet, fx, score_p1=0, score_p2=0, is_live=True)
+    assert info is not None
+    # El rival de "over" debe ser la odd "under" (odd_p2), no la propia (odd_p1).
+    assert info["hedge_odd"] == 2.05
+    assert info["hedge_side"] == "p2"
+
+
+def test_stat_under_side_hedges_with_over_odd():
+    """Caso simetrico: 'under' debe usar odd_p1 (over) como rival."""
+    bet = _BetStub(legs=[_LegStub(side="under", odd=2.05, tipo="total", linea=22.5)], sport="tennis")
+    fx = _FixtureStub(markets=[
+        _MarketStub(tipo="total", odd_p1=1.90, odd_p2=2.05, linea=22.5),
+    ])
+    info = _compute_live_hedge(bet, fx, score_p1=0, score_p2=0, is_live=True)
+    assert info is not None
+    assert info["hedge_odd"] == 1.90
+    assert info["hedge_side"] == "p1"
