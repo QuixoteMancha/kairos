@@ -7,6 +7,8 @@
 | [betting_settlement_rules.md](betting_settlement_rules.md) | Reglas de settlement por book + **diagrama de estados** de apuestas (won/lost/void/pending) |
 | [AUTH_FLOW.md](AUTH_FLOW.md) | Flujos de autenticación y proxies para books + Sofascore/Flashscore |
 | [POLYMARKET_REAL_TRADING_PLAN.md](POLYMARKET_REAL_TRADING_PLAN.md) | Hoja de ruta ejecutable para integrar Polymarket crypto 5m en modo real (scanner, ejecución, conciliación, settlement, riesgo) |
+| [ANALYTICS.md](ANALYTICS.md) | Consultas analíticas DuckDB/SQLite, endpoints `/api/analytics/*`, vistas `v_match_pnl` |
+| [strategies_models.md](strategies_models.md) | Modelos estadísticos por deporte (ELO, Dixon-Coles, NBA, etc.) y madurez de cada estrategia |
 
 ---
 
@@ -26,14 +28,14 @@
 ## Comandos clave
 
 ```bash
-# Iniciar servidor
-python kairos.py start
+# Iniciar servidor (motor autónomo + web)
+python kairos.py run           # "dashboard" también funciona por compatibilidad
 
 # Reconstruir frontend
 cd frontend && npm run build
 
 # Recalcular Elo desde cero
-python rebuild_elo.py
+python scripts/rebuild_elo.py
 
 # Tests
 python -m pytest tests/ -v
