@@ -1,5 +1,7 @@
 # Polymarket Real Trading Plan (Crypto 5m)
 
+> **Estado**: Sprint 1 completado. El motor de tripletas (`polymarket_triplet_live.py`) implementa Sprint 2–4 en modo paper. Pendiente: integración con CLOB API real para ejecución de órdenes.
+
 ## Objetivo
 Integrar trading real en Polymarket para mercados crypto de 5 minutos con capital inicial de prueba (USD 200), bajo controles estrictos de riesgo operativo y contable.
 
@@ -137,14 +139,18 @@ KPIs mínimos:
 
 ## Backlog por Sprints (S1-S4)
 
-### Sprint 1 (read-only robusto)
-- Endpoint: GET /api/scan/polymarket/crypto-5m
-- Endpoint cache: GET /api/scan/polymarket/crypto-5m/cached
-- Config env para scan y throttling
-- Métricas de latencia y errores por ciclo
+### Sprint 1 (read-only robusto) ✅ COMPLETADO
+- [x] Endpoint: GET /api/scan/polymarket/crypto-5m (`polymarket_scan.py`)
+- [x] Endpoint cache: GET /api/scan/polymarket/crypto-5m/cached
+- [x] Config env para scan y throttling (`config.py` — POLYMARKET_* vars)
+- [x] Métricas de latencia y errores por ciclo
+- [x] Colector de intervalos 5m (`polymarket_5m_collector.py` + `Crypto5mInterval` DB)
+- [x] Paper ledger (`polymarket_paper_ledger.py`)
+- [x] Modelo de tripletas (`polymarket_triplet_model.py`)
+- [x] Motor de tripletas live en paper (`polymarket_triplet_live.py`)
 
 Deliverable:
-- Scanner 5m en producción interna (sin ejecución real).
+- Scanner 5m en producción interna (sin ejecución real). ✅
 
 ### Sprint 2 (execution MVP)
 - Cliente de trading autenticado
@@ -272,10 +278,10 @@ Response:
 
 ## Checklist de aceptación por etapa
 
-### Read-only
-- [ ] scan 1s estable
-- [ ] cache efectivo
-- [ ] sin errores críticos en logs
+### Read-only ✅
+- [x] scan 1s estable
+- [x] cache efectivo
+- [x] sin errores críticos en logs
 
 ### Execution MVP
 - [ ] place/cancel/status confiables
