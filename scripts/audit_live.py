@@ -94,9 +94,13 @@ def run_audit(base: str) -> int:
     # OJO: el detalle de /total omite wallets sin movimiento (idle); por eso la suma
     # del detalle puede ser menor al headline. La diferencia debe ser capital ocioso
     # (balance) de wallets sin bets, nunca negativa.
-    a.check("total_equity >= Σ equity detalle (resto = wallets idle)",
-            total.get("total_equity", 0) + TOL >= sum_eq,
-            f"head={total.get('total_equity')} Σdetalle={sum_eq}")
+    # Upper bound: headline can exceed detail by at most total_balance (idle wallets
+    # hold their balance but have no equity entry in the detail list).
+    _head_eq = total.get("total_equity", 0)
+    _idle_cap = max(0.0, float(total.get("total_balance", 0)))
+    a.check("total_equity dentro de rango [Σdetalle, Σdetalle+idle_cap]",
+            sum_eq - TOL <= _head_eq <= sum_eq + _idle_cap + TOL,
+            f"head={_head_eq} Σdetalle={sum_eq} idle_cap={_idle_cap}")
     a.check("capital en vuelo == equity - balance",
             _eq(total.get("total_pending_staked"),
                 total.get("total_equity", 0) - total.get("total_balance", 0)),
