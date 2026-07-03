@@ -171,3 +171,42 @@ class TestManifoldClientGetFiniteEvents:
         events = client.get_finite_events(page_limit=500, max_pages=5)
         assert calls["n"] == 1
         assert len(events) == 1
+
+    def test_missing_id_field_does_not_loop_forever_or_duplicate(self, monkeypatch):
+        """If a market is missing its `id` field, the cursor can't advance —
+        the client must bail out instead of re-requesting the same page and
+        duplicating events up to max_pages times."""
+        client = ManifoldClient()
+        calls = {"n": 0}
+        page_full = [_market(id="", closeTime=_ms(10)) for _ in range(3)]
+        for m in page_full:
+            m.pop("id", None)  # simulate a market with no id at all
+
+        def fake_get(url, params=None, **kw):
+            calls["n"] += 1
+            return FakeResponse(page_full)  # same page every time, page_limit not hit
+
+        monkeypatch.setattr(client, "_get", fake_get)
+
+        events = client.get_finite_events(page_limit=500, max_pages=5)
+        assert calls["n"] == 1  # stopped after first page, no repeated fetch
+        assert len(events) == 0  # normalize_to_event needs an id -> all skipped or deduped
+
+    def test_duplicate_external_id_across_pages_is_deduped(self, monkeypatch):
+        client = ManifoldClient()
+        calls = {"n": 0}
+
+        def fake_get(url, params=None, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return FakeResponse([_market(id="dup", closeTime=_ms(10))])
+            if calls["n"] == 2:
+                # Same id reappears (e.g. cursor didn't actually advance the
+                # underlying result set) — must not be counted twice.
+                return FakeResponse([_market(id="dup", closeTime=_ms(10))])
+            return FakeResponse([])
+
+        monkeypatch.setattr(client, "_get", fake_get)
+
+        events = client.get_finite_events(page_limit=1, max_pages=5)
+        assert len([e for e in events if e["external_id"] == "manifold:dup"]) == 1

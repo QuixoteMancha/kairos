@@ -92,3 +92,39 @@ def test_match_events_groups_same_strike_worded_differently():
     cross = [g for g in groups if g.is_cross_platform]
     assert len(cross) == 1
     assert cross[0].platforms == {"kalshi", "polymarket"}
+
+
+def test_match_events_handles_naive_and_aware_datetimes_without_crashing():
+    """A naive resolution_date (no tzinfo) mixed with an aware one must not
+    raise TypeError — it should be treated as UTC rather than crashing the
+    whole matching pass over one malformed timestamp."""
+    from datetime import timezone as _tz
+
+    aware = datetime(2026, 7, 3, 18, 0, tzinfo=_tz.utc)
+    naive = datetime(2026, 7, 3, 19, 0)  # no tzinfo — e.g. a client that failed to parse an offset
+    events = [
+        _Ev("politics", "Will candidate X win the special election?", aware, "kalshi"),
+        _Ev("politics", "Will candidate X win the special election", naive, "polymarket"),
+    ]
+    groups = match_events(events)  # must not raise
+    cross = [g for g in groups if g.is_cross_platform]
+    assert len(cross) == 1
+
+
+def test_match_events_does_not_transitively_chain_unrelated_events():
+    """A~B similar, B~C similar, but A~C should NOT be — a naive anchor-only
+    clustering would incorrectly put all three in one group. A and C mention
+    clearly different strikes, so even though both are worded like B, they
+    must not end up grouped together."""
+    base = datetime(2026, 7, 3, 18, 0)
+    a = _Ev("finance", "Will ETH be above $5k by Friday?", base, "kalshi")
+    b = _Ev("finance", "Will ETH price move by Friday?", base, "manifold")  # vague, no numbers -> matches both
+    c = _Ev("finance", "Will ETH be above $8k by Friday?", base, "polymarket")
+    groups = match_events([a, b, c], title_threshold=0.5)
+
+    # a and c must never land in the same group (different strikes, and
+    # a~c text similarity/number-conflict would fail a direct comparison).
+    for g in groups:
+        platforms_in_group = {getattr(e, "platform") for e in g.events}
+        if {"kalshi", "polymarket"} <= platforms_in_group:
+            assert False, "a (kalshi/$5k) and c (polymarket/$8k) must not be grouped together"
