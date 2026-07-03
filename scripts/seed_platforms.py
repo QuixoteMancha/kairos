@@ -9,21 +9,13 @@ sys.path.insert(0, "/app")
 # Bootstrap DB
 from src.database.database import db, Platform as PlatformRow, Wallet as WalletRow
 
+# Sports bookies (pinnacle/unibet/comeon/stake/betsson/nordicbet/coolbet/
+# marathonbet/1xbet/winamax/betano/smarkets/xbet) were removed from this seed
+# during the prediction-markets pivot (2026-07-03) — their simulated capital
+# was purged from platform/wallet and related tables in production. Kairos
+# now seeds only prediction-market platforms.
 PLATFORMS = [
     # slug               display_name         ptype         url
-    ("pinnacle",        "Pinnacle",          "bookmaker",  "https://pinnacle.com"),
-    ("unibet",          "Unibet",            "bookmaker",  "https://unibet.es"),
-    ("comeon",          "ComeOn",            "bookmaker",  "https://comeon.com"),
-    ("stake",           "Stake",             "bookmaker",  "https://stake.com"),
-    ("betsson",         "Betsson",           "bookmaker",  "https://betsson.com"),
-    ("nordicbet",       "NordicBet",         "bookmaker",  "https://nordicbet.com"),
-    ("coolbet",         "Coolbet",           "bookmaker",  "https://coolbet.com"),
-    ("marathonbet",     "Marathonbet",       "bookmaker",  "https://marathonbet.com"),
-    ("1xbet",           "1xBet",             "bookmaker",  "https://1xbet.com"),
-    ("winamax",         "Winamax",           "bookmaker",  "https://winamax.es"),
-    ("betano",          "Betano",            "bookmaker",  "https://betano.com"),
-    ("smarkets",        "Smarkets",          "exchange",   "https://smarkets.com"),
-    ("xbet",            "Xbet",              "bookmaker",  "https://x.bet"),
     ("polymarket",      "Polymarket",        "prediction_market", "https://polymarket.com"),
     ("kalshi",          "Kalshi",            "prediction_market", "https://kalshi.com"),
     ("manifold",        "Manifold",          "prediction_market", "https://manifold.markets"),

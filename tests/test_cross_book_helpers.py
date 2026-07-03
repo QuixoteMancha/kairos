@@ -53,8 +53,11 @@ def test_norm_cross_book_matching_via_frozenset():
 # ── _CROSS_BOOK_PLATFORMS ─────────────────────────────────────────────────────
 
 
-def test_default_platforms_contain_stake_pinnacle_unibet():
-    assert set(_CROSS_BOOK_PLATFORMS) >= {"stake", "pinnacle", "unibet"}
+def test_default_platforms_are_prediction_markets():
+    # Sports bookies (stake/pinnacle/unibet/...) were archived during the
+    # prediction-markets pivot (2026-07-03); the pool is now prediction-market
+    # platforms only.
+    assert set(_CROSS_BOOK_PLATFORMS) == {"polymarket", "kalshi", "manifold"}
 
 
 # ── _fetch_book_fixtures ──────────────────────────────────────────────────────
@@ -72,44 +75,9 @@ def test_fetch_unknown_slug_returns_empty():
     assert m["last_count"] == 0
 
 
-def test_fetch_uses_cache_within_ttl():
-    """Llamadas consecutivas dentro del TTL no deben re-llamar al scraper."""
-    cross_book._cb_book_cache.pop("stake", None)
-    cross_book._cb_book_metrics.pop("stake", None)
-    fake_fixtures = ["fx1", "fx2", "fx3"]
-
-    call_count = {"n": 0}
-
-    class _FakeScraper:
-        def __enter__(self):  return self
-        def __exit__(self, *a): return False
-        def get_tennis_fixtures(self):
-            call_count["n"] += 1
-            return fake_fixtures
-
-    with patch("src.scrapers.stake_scraper.StakeScraper", _FakeScraper):
-        a = _fetch_book_fixtures("stake")
-        b = _fetch_book_fixtures("stake")
-        c = _fetch_book_fixtures("stake")
-    assert a == b == c == fake_fixtures
-    assert call_count["n"] == 1, "second/third calls should hit cache"
-
-
-def test_fetch_records_metrics_on_error():
-    """Si el scraper crashea, fetch devuelve [] y registra last_error."""
-    cross_book._cb_book_cache.pop("pinnacle", None)
-    cross_book._cb_book_metrics.pop("pinnacle", None)
-
-    class _BoomScraper:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def get_tennis_fixtures(self):
-            raise RuntimeError("boom")
-
-    with patch("src.scrapers.pinnacle_scraper.PinnacleScraper", _BoomScraper):
-        out = _fetch_book_fixtures("pinnacle")
-    assert out == []
-    m = cross_book._cb_book_metrics["pinnacle"]
-    assert m["errors"] >= 1
-    assert m["last_error"] is not None
-    assert "boom" in m["last_error"]
+# NOTE: test_fetch_uses_cache_within_ttl and test_fetch_records_metrics_on_error
+# were removed during the prediction-markets pivot (2026-07-03) — they dispatched
+# through the now-deleted 'stake'/'pinnacle' branches of _fetch_book_fixtures
+# (sports bookie scrapers archived to src/scrapers/forgotten/). The cache/error
+# mechanics they exercised are still covered generically by
+# test_fetch_unknown_slug_returns_empty, which doesn't depend on any live slug.

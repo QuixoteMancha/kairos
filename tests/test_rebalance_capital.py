@@ -33,11 +33,11 @@ def rebalance_env():
         test_db.create_tables(_MODELS)
 
         # Dos casas cross-book activas, una rica y una deficitaria.
-        Platform.create(slug="stake", name="Stake", is_active=True)
-        Platform.create(slug="pinnacle", name="Pinnacle", is_active=True)
-        Wallet.create(platform="stake", initial_balance=100.0, balance=100.0,
+        Platform.create(slug="polymarket", name="Polymarket", is_active=True)
+        Platform.create(slug="kalshi", name="Kalshi", is_active=True)
+        Wallet.create(platform="polymarket", initial_balance=100.0, balance=100.0,
                       equity=100.0, deposits=0.0, withdrawals=0.0)
-        Wallet.create(platform="pinnacle", initial_balance=2.0, balance=2.0,
+        Wallet.create(platform="kalshi", initial_balance=2.0, balance=2.0,
                       equity=2.0, deposits=0.0, withdrawals=0.0)
 
         # Estado: limpiar caches + habilitar métricas (last_count>0 = casa elegible).
@@ -45,8 +45,8 @@ def rebalance_env():
         state.rebalance_paused = False
         state._last_rebalance_ts = 0.0
         _prev_metrics = dict(cb._cb_book_metrics)
-        cb._cb_book_metrics["stake"] = {"last_count": 5}
-        cb._cb_book_metrics["pinnacle"] = {"last_count": 5}
+        cb._cb_book_metrics["polymarket"] = {"last_count": 5}
+        cb._cb_book_metrics["kalshi"] = {"last_count": 5}
 
         try:
             yield
@@ -64,7 +64,7 @@ def _sum_wallets_in_memory() -> float:
 def _sum_wallets_from_db_reload() -> float:
     """Recarga las wallets desde DB (reconciliación vía ledger) y suma balances."""
     total = 0.0
-    for slug in ("stake", "pinnacle"):
+    for slug in ("polymarket", "kalshi"):
         wmod.forget_wallet(slug)
         total += wmod.get_wallet(slug).balance
     return round(total, 2)
@@ -75,7 +75,7 @@ def test_rebalance_runs_and_moves_capital(rebalance_env):
     did = reb.run_rebalance()
     assert did is True, "debería ejecutar al menos una transferencia (pinnacle deficitario)"
     # pinnacle recibió capital → ya no está en ~2
-    assert state.wallets["pinnacle"].balance > 2.0
+    assert state.wallets["kalshi"].balance > 2.0
 
 
 def test_capital_conserved_in_memory(rebalance_env):
