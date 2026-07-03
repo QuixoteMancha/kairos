@@ -144,3 +144,28 @@ def test_arb_still_profitable_net_of_fees_is_kept():
     assert arb["roi"] > 0
     assert arb["roi"] <= arb["roi_gross"]
     assert arb["fee_cost_pct"] >= 0
+
+
+def test_manifold_vs_real_money_arb_is_rejected():
+    """Manifold uses mana (virtual, non-withdrawable) — even a wide price
+    divergence between Manifold and a real-money platform is not a genuine
+    capital-hedged arb, since a Manifold "win" can't offset a real loss on
+    Polymarket/Kalshi. Only manifold+polymarket available here (no kalshi),
+    so the best legs are forced onto the manifold/polymarket pair."""
+    now = datetime.now(timezone.utc)
+    resolution = now + timedelta(hours=6)
+    events = [
+        {
+            "category": "crypto", "external_id": "manifold:btc-100k", "platform": "manifold",
+            "title": "Will BTC exceed 100k by Friday",
+            "resolution_date": _iso(resolution), "yes_price": 0.20, "no_price": 0.75,
+        },
+        {
+            "category": "crypto", "external_id": "polymarket:btc-100k", "platform": "polymarket",
+            "title": "Will BTC exceed 100k by Friday?",
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.70, "no_price": 0.25,
+        },
+    ]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+    assert arbs == []
