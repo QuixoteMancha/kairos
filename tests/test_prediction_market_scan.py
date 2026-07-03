@@ -93,3 +93,54 @@ def test_fetch_skips_platform_on_error_but_keeps_others():
 
     assert len(events) == 1
     assert events[0]["platform"] == "manifold"
+
+
+def test_arb_profitable_gross_but_unprofitable_net_of_fees_is_discarded():
+    """A small implied-prob gap can look like an arb before fees, but Kalshi's
+    ~50/50-price taker fee (worst case ~1.75c on a $1 contract) can erase a
+    thin edge. imp=0.985 -> gross roi=1.5% (just above PREDICTION_MARKET_MIN_ROI_PCT),
+    but with both legs priced near 0.50 on kalshi+polymarket the fee eats most
+    of it, dropping below PREDICTION_MARKET_MIN_NET_ROI_PCT."""
+    now = datetime.now(timezone.utc)
+    resolution = now + timedelta(hours=6)
+    events = [
+        {
+            "category": "economics", "external_id": "kalshi:thin-edge", "platform": "kalshi",
+            "title": "Will the Fed cut rates this meeting",
+            "resolution_date": _iso(resolution), "yes_price": 0.495, "no_price": 0.505,
+        },
+        {
+            "category": "economics", "external_id": "polymarket:thin-edge", "platform": "polymarket",
+            "title": "Will the Fed cut rates this meeting?",
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.505, "no_price": 0.49,
+        },
+    ]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+    assert arbs == []
+
+
+def test_arb_still_profitable_net_of_fees_is_kept():
+    """A wide enough divergence survives fees and is reported with roi (net)
+    and roi_gross both present, net <= gross."""
+    now = datetime.now(timezone.utc)
+    resolution = now + timedelta(hours=6)
+    events = [
+        {
+            "category": "economics", "external_id": "kalshi:wide-edge", "platform": "kalshi",
+            "title": "Will unemployment exceed 5 percent this report",
+            "resolution_date": _iso(resolution), "yes_price": 0.30, "no_price": 0.55,
+        },
+        {
+            "category": "economics", "external_id": "polymarket:wide-edge", "platform": "polymarket",
+            "title": "Will unemployment exceed 5 percent this report?",
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.60, "no_price": 0.25,
+        },
+    ]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+    assert len(arbs) == 1
+    arb = arbs[0]
+    assert arb["roi"] > 0
+    assert arb["roi"] <= arb["roi_gross"]
+    assert arb["fee_cost_pct"] >= 0
