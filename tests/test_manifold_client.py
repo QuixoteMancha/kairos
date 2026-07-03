@@ -69,6 +69,18 @@ class TestNormalizeToEvent:
         ev = normalize_to_event(_market(groupSlugs=["nba"]))
         assert ev["category"] == "prediction_market"
 
+    def test_out_of_range_close_time_excluded(self):
+        # closeTime corrupto/absurdo (año > 9999) no debe crashear, solo excluirse.
+        assert normalize_to_event(_market(closeTime=99999999999999999)) is None
+
+
+class TestHoursToResolutionOutOfRange:
+    def test_out_of_range_close_time_returns_none(self):
+        assert _hours_to_resolution(99999999999999999) is None
+
+    def test_none_close_time_returns_none(self):
+        assert _hours_to_resolution(None) is None
+
 
 class TestHoursToResolution:
     def test_none_close_time(self):
