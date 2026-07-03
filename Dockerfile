@@ -32,7 +32,7 @@ ENV PYTHONUNBUFFERED=1 \
     DB_PATH=/data/kairos.db \
     KAIROS_HOME=/app
 
-# Libs runtime mínimas (curl_cffi necesita libcurl, sqlite necesita libsqlite).
+# Libs runtime: curl_cffi, sqlite.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     libssl3 \

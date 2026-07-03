@@ -37,9 +37,6 @@ nodriver==0.48.1
 numpy==2.4.4
 peewee==4.0.2
 peewee-migrate==1.15.0
-playwright==1.58.0
-playwright==1.50.0
-
 propcache==0.4.1
 pycookiecheat==0.8.0
 pycparser==3.0
