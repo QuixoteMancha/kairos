@@ -24,6 +24,9 @@ PLATFORMS = [
     ("betano",          "Betano",            "bookmaker",  "https://betano.com"),
     ("smarkets",        "Smarkets",          "exchange",   "https://smarkets.com"),
     ("xbet",            "Xbet",              "bookmaker",  "https://x.bet"),
+    ("polymarket",      "Polymarket",        "prediction_market", "https://polymarket.com"),
+    ("kalshi",          "Kalshi",            "prediction_market", "https://kalshi.com"),
+    ("manifold",        "Manifold",          "prediction_market", "https://manifold.markets"),
 ]
 
 created = 0
