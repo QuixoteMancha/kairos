@@ -72,3 +72,33 @@ def test_deep_scan_empty_book_yields_no_opportunity():
     client = MagicMock()
     client.get_order_book.return_value = {"asks": [], "bids": []}
     assert scan_same_market_arb_deep([ev], _client=client) == []
+
+
+def test_fast_scan_uses_best_bid_ask_for_polymarket_not_synthetic_complement():
+    """Regression test for the 2026-07-04 bug: Polymarket's yes_price/
+    no_price are always complementary (no_price == 1 - yes_price), so
+    imp == 1.0 always and _build_opportunity() never returned a candidate.
+    When best_bid/best_ask are present, the fast scan must use those
+    instead — this is the ONLY way Strategy 3 can ever fire for Polymarket.
+    """
+    ev = _event(yes_price=0.55, no_price=0.45, best_bid=0.50, best_ask=0.48)
+    # yes_ask=0.48, no_ask_approx = 1-0.50 = 0.50 -> imp=0.98 -> real edge
+    arbs = scan_same_market_arb_fast([ev])
+    assert len(arbs) == 1
+    assert arbs[0]["roi"] > 0
+
+
+def test_fast_scan_falls_back_to_synthetic_complement_without_best_bid_ask():
+    # No best_bid/best_ask on the event -> old (never-firing) behavior for
+    # Polymarket persists, documented limitation, not a crash.
+    ev = _event(yes_price=0.55, no_price=0.45)
+    assert scan_same_market_arb_fast([ev]) == []
+
+
+def test_fast_scan_kalshi_unaffected_by_best_bid_ask_logic():
+    # best_bid/best_ask special-casing only applies to platform=="polymarket".
+    ev = _event(platform="kalshi", yes_price=0.40, no_price=0.40, best_bid=0.99, best_ask=0.01)
+    arbs = scan_same_market_arb_fast([ev])
+    assert len(arbs) == 1
+    # roi computed from yes_price/no_price (0.40/0.40), NOT from best_bid/best_ask
+    assert arbs[0]["best"]["yes"][0] == round(1.0 / 0.40, 4)
