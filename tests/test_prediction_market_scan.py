@@ -175,3 +175,74 @@ def test_manifold_vs_real_money_arb_is_rejected():
     with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
         arbs = scanning._scan_prediction_market_arbs()
     assert arbs == []
+
+
+def test_overlapping_cross_platform_and_same_market_arb_keeps_higher_roi_only():
+    """If the same (platform, external_id) leg is claimed by both a
+    cross-platform opportunity and a same-market opportunity, only the
+    higher-net-roi one should survive — they'd compete for the same
+    order-book depth if both were ever executed."""
+    now = datetime.now(timezone.utc)
+    resolution = now + timedelta(hours=6)
+    events = [
+        {
+            # Kalshi's own market: yes+no = 0.90 -> a real same-market arb on
+            # its own (roi ~10% gross). This same kalshi:evt1 leg is ALSO the
+            # best "yes" leg of a much wider cross-platform divergence below.
+            "category": "politics", "external_id": "kalshi:evt1", "platform": "kalshi",
+            "title": "Will the measure pass",
+            "resolution_date": _iso(resolution), "yes_price": 0.30, "no_price": 0.60,
+        },
+        {
+            # Polymarket's own market: yes+no = 1.01 -> no internal arb here,
+            # but its "no" leg pairs with kalshi's "yes" for a wide (~37%
+            # gross) cross-platform arb.
+            "category": "politics", "external_id": "polymarket:evt1", "platform": "polymarket",
+            "title": "Will the measure pass?",
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.68, "no_price": 0.33,
+        },
+    ]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+
+    # Only one opportunity should survive: the cross-platform one (much
+    # wider edge), not the same-market kalshi-only one — both claim the
+    # kalshi:evt1 leg.
+    assert len(arbs) == 1
+    survivor = arbs[0]
+    assert survivor["tipo"] == "prediction_market_cross_platform_arb"
+    leg_ext_ids = {leg.get("external_id") for leg in survivor["legs"]}
+    assert "kalshi:evt1" in leg_ext_ids
+
+
+def test_non_overlapping_arbs_are_both_kept():
+    """Two opportunities touching entirely different markets must both be
+    reported — no false dedup when there's no shared leg."""
+    now = datetime.now(timezone.utc)
+    resolution = now + timedelta(hours=6)
+    events = [
+        # Cross-platform pair, event A (politics) — no internal arb on either leg.
+        {
+            "category": "politics", "external_id": "kalshi:eventA", "platform": "kalshi",
+            "title": "Event A happens",
+            "resolution_date": _iso(resolution), "yes_price": 0.30, "no_price": 0.68,
+        },
+        {
+            "category": "politics", "external_id": "polymarket:eventA", "platform": "polymarket",
+            "title": "Event A happens?",
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.65, "no_price": 0.33,
+        },
+        # Unrelated same-market arb, event B (economics), single platform only.
+        {
+            "category": "economics", "external_id": "kalshi:eventB", "platform": "kalshi",
+            "title": "Event B resolves yes",
+            "resolution_date": _iso(resolution + timedelta(hours=1)), "yes_price": 0.25, "no_price": 0.55,
+        },
+    ]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+
+    types = {a["tipo"] for a in arbs}
+    assert len(arbs) == 2
+    assert "prediction_market_cross_platform_arb" in types
+    assert "same_market_yes_no_arb" in types
