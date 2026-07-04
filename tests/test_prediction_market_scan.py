@@ -246,3 +246,54 @@ def test_non_overlapping_arbs_are_both_kept():
     assert len(arbs) == 2
     assert "prediction_market_cross_platform_arb" in types
     assert "same_market_yes_no_arb" in types
+
+
+
+def test_find_dwell_time_liquidity_overlaps_detects_shared_leg():
+    """Regression for the dwell-time shared-liquidity detection gap (Vesper
+    audit, alto severity): a DwellTimeProposal row and a cross-platform/
+    same-market opportunity sharing the same (book, external_id) key must be
+    reported by find_dwell_time_liquidity_overlaps, even though dwell-time
+    proposals never go through _dedupe_arbs_by_shared_leg."""
+    from src.database.database import DwellTimeProposal, init_db
+
+    init_db()
+    proposal = DwellTimeProposal.create(
+        timestamp=datetime.now(timezone.utc), fixture="Lakers vs Celtics",
+        category="basketball", side="team_a", proposed_price=0.4,
+        expected_time_fraction=0.5, implied_edge_pct=0.05, implied_edge_gross_pct=0.06,
+        book="polymarket", external_id="tok_shared_123",
+    )
+    opportunities = [{
+        "tipo": "same_market_yes_no_arb", "roi": 3.0,
+        "legs": [{"book": "polymarket", "external_id": "tok_shared_123"},
+                 {"book": "polymarket", "external_id": "tok_other_456"}],
+    }]
+
+    overlaps = scanning.find_dwell_time_liquidity_overlaps(opportunities)
+
+    assert len(overlaps) == 1
+    assert overlaps[0]["book"] == "polymarket"
+    assert overlaps[0]["external_id"] == "tok_shared_123"
+    assert overlaps[0]["opportunity_indices"] == [0]
+    assert proposal.id in overlaps[0]["dwell_time_proposal_ids"]
+
+
+def test_find_dwell_time_liquidity_overlaps_empty_when_no_shared_leg():
+    """No overlap reported when the dwell-time proposal's liquidity key
+    doesn't match anything in the current cross-platform/same-market scan."""
+    from src.database.database import DwellTimeProposal, init_db
+
+    init_db()
+    DwellTimeProposal.create(
+        timestamp=datetime.now(timezone.utc), fixture="Yankees vs Red Sox",
+        category="baseball", side="team_a", proposed_price=0.4,
+        expected_time_fraction=0.5, implied_edge_pct=0.05, implied_edge_gross_pct=0.06,
+        book="polymarket", external_id="tok_unrelated_999",
+    )
+    opportunities = [{
+        "tipo": "same_market_yes_no_arb", "roi": 3.0,
+        "legs": [{"book": "polymarket", "external_id": "tok_other_456"}],
+    }]
+
+    assert scanning.find_dwell_time_liquidity_overlaps(opportunities) == []

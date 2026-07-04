@@ -47,6 +47,7 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
     event = {
         "category": "football", "title": "Brazil vs Norway",
         "yes_price": 0.6, "no_price": 0.35, "clob_token_ids": [],
+        "platform": "polymarket",
     }
 
     # The worker imports its collaborators lazily inside _run_once, so patch
@@ -61,8 +62,9 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
                  "team_b": {"price": 0.3, "expected_time_fraction": 0.3, "band": (0.3, 0.4)},
              },
              "implied_edge": 0.2,
+             "implied_edge_gross": 0.25,
              "fillability": {},
-         }), \
+         }) as mock_propose, \
          patch("src.database.database.DwellTimeProposal") as mock_model:
         # Extract the inner _run_once by calling the worker loop once via a
         # sleep patch that raises to break out after one iteration.
@@ -80,3 +82,8 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
         assert k["category"] == "football"
         assert k["fixture"] == "Brazil vs Norway"
         assert k["implied_edge_pct"] == 0.2
+        assert k["implied_edge_gross_pct"] == 0.25
+
+    # Regression: the event's platform must be threaded through to
+    # propose_and_check_fillable so fee-netting isn't silently skipped.
+    assert mock_propose.call_args.kwargs["platform"] == "polymarket"

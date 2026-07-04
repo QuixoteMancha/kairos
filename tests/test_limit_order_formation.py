@@ -83,6 +83,41 @@ def test_unsupported_category_rejected():
     assert "not supported" in result["reason"]
 
 
+def test_gross_edge_field_present_and_equal_to_net_when_platform_unknown():
+    # Regression: implied_edge must be NET of fees, implied_edge_gross must be
+    # the RAW (1 - price_a - price_b). With no platform passed, fee netting
+    # is skipped (documented limitation), so both should collapse to the same
+    # raw value -- but the gross field must always be present once an
+    # opportunity is formed, so callers can't silently mistake net for gross.
+    bands = [
+        DwellBand(low=0.25, high=0.35, side="team_a", expected_time_fraction=0.6),
+        DwellBand(low=0.55, high=0.65, side="team_b", expected_time_fraction=0.6),
+    ]
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=_fake_model(bands)):
+        result = propose_limit_levels("basketball", {"team_a": "Lakers", "team_b": "Celtics"})
+    assert result["opportunity"] is True
+    assert result["implied_edge_gross"] == 0.10
+    assert result["implied_edge"] == 0.10
+
+
+def test_implied_edge_nets_out_platform_fees_when_platform_known():
+    # Regression for the fee-netting bug: with platform="kalshi", implied_edge
+    # (net) must be strictly less than implied_edge_gross once a real
+    # per-platform fee is applied -- this is the field downstream code must
+    # gate/sort on, never the gross one.
+    bands = [
+        DwellBand(low=0.25, high=0.35, side="team_a", expected_time_fraction=0.6),
+        DwellBand(low=0.55, high=0.65, side="team_b", expected_time_fraction=0.6),
+    ]
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=_fake_model(bands)):
+        result = propose_limit_levels(
+            "basketball", {"team_a": "Lakers", "team_b": "Celtics"}, platform="kalshi",
+        )
+    assert result["opportunity"] is True
+    assert result["implied_edge_gross"] == 0.10
+    assert result["implied_edge"] < result["implied_edge_gross"]
+
+
 def test_propose_and_check_fillable_combines_levels_with_real_book():
     bands = [
         DwellBand(low=0.25, high=0.35, side="team_a", expected_time_fraction=0.6),
