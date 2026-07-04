@@ -74,8 +74,8 @@ def _load_top_players(top_n: int, tour: str | None) -> list[tuple[str, str, int]
     Fallback:        CSVs de Jeff Sackmann (GitHub) por tour si el scraper falla.
     """
     from src.database.database import Player
-    from src.scrapers.atp_wta_scraper import get_top_rankings as _official_rankings
-    from src.scrapers.sackmann_scraper import SackmannScraper
+    from src.scrapers.forgotten.atp_wta_scraper import get_top_rankings as _official_rankings
+    from src.scrapers.forgotten.sackmann_scraper import SackmannScraper
 
     tour_arg = tour if tour in ("atp", "wta") else "both"
 
@@ -198,8 +198,8 @@ def _fetch_player(
         (nuevos_partidos_insertados, 0)  — las stats ya vienen del CSV.
     """
     from src.database.database import SofascoreMatchCache
-    from src.scrapers.player_stats_scraper import _sofascore_sync_bp_stats, _sofascore_sync_matches
-    from src.scrapers.sackmann_scraper import SackmannScraper
+    from src.scrapers.forgotten.player_stats_scraper import _sofascore_sync_bp_stats, _sofascore_sync_matches
+    from src.scrapers.forgotten.sackmann_scraper import SackmannScraper
 
     if skip_complete:
         # Una sola query con agregación condicional — evita round-trips a SQLite

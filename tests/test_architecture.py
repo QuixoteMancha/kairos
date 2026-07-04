@@ -30,7 +30,7 @@ NEW_STRUCTURE_MODULES = [
     "src.core.models",
     "src.database.database",
     "src.core.orchestration.engine",
-    "src.core.orchestration.main",
+    "src.scrapers.forgotten.legacy_orchestration_main",
     "src.core.orchestration.scanning",
     "src.core.orchestration.scan_settlement",
     "src.core.orchestration.live_monitor",

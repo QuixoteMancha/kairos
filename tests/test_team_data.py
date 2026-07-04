@@ -8,7 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from src.scrapers.team_data.common import (
+pytestmark = pytest.mark.skip(
+    reason="Team ELO ratings (ClubElo/nflverse/NHL) fed sports value-betting "
+    "models with no prediction-market equivalent — Polymarket/Kalshi/Manifold "
+    "resolve via API/oracle status, not team strength ratings. Archived "
+    "during the prediction-markets pivot (2026-07-03) along with the "
+    "underlying sports bookies (src/scrapers/forgotten/)."
+)
+
+from src.scrapers.forgotten.team_data.common import (
     get_team_rating,
     normalize_team_name,
     upsert_team_rating,

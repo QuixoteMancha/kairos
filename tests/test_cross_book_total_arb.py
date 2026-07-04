@@ -23,8 +23,16 @@ if str(ROOT) not in sys.path:
 
 import pytest
 
-from src.scrapers.stake_scraper import _extract_total_handicap_markets_stake
-from src.scrapers.pinnacle_scraper import _extract_total_handicap_markets_pinnacle, _american_to_decimal
+pytestmark = pytest.mark.skip(
+    reason="Total/handicap market extraction is sports-bookie-specific "
+    "(Stake/Pinnacle GraphQL/Guest API) with no prediction-market equivalent — "
+    "Polymarket/Kalshi/Manifold markets are binary yes/no, not total/handicap "
+    "lines. Archived during the prediction-markets pivot (2026-07-03) along "
+    "with the underlying sports bookies (src/scrapers/forgotten/)."
+)
+
+from src.scrapers.forgotten.stake_scraper import _extract_total_handicap_markets_stake
+from src.scrapers.forgotten.pinnacle_scraper import _extract_total_handicap_markets_pinnacle, _american_to_decimal
 from src.core.orchestration.scanning import _scan_cross_book_over_under
 
 
