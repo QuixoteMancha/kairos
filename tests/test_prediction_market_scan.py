@@ -79,8 +79,73 @@ def test_different_categories_do_not_group():
     assert arbs == []
 
 
+def test_fetch_includes_crypto_5m_and_15m_events_with_distinct_categories():
+    """Polymarket crypto up/down 5m/15m markets must be fetched and tagged
+    with a distinguishable category (not generic 'prediction_market') so
+    same_market_arb evaluates them and the frontend can badge them."""
+    crypto_5m_payload = {"markets": [{
+        "condition_id": "0x5m", "question": "Bitcoin Up or Down - 5m window",
+        "end_date": _iso(datetime.now(timezone.utc) + timedelta(minutes=5)),
+        "yes_price": 0.4, "no_price": 0.55, "clob_token_ids": ["tok_yes_5m", "tok_no_5m"],
+    }]}
+    crypto_15m_payload = {"markets": [{
+        "condition_id": "0x15m", "question": "Ethereum Up or Down - 15m window",
+        "end_date": _iso(datetime.now(timezone.utc) + timedelta(minutes=15)),
+        "yes_price": 0.5, "no_price": 0.45, "clob_token_ids": ["tok_yes_15m", "tok_no_15m"],
+    }]}
+    with patch.object(scanning, "_fetch_prediction_market_events", wraps=scanning._fetch_prediction_market_events) as _wrap, \
+         patch("src.core.orchestration.polymarket_scan.scan_polymarket_finite_events", return_value={"markets": []}), \
+         patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_5m", return_value=crypto_5m_payload), \
+         patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_15m", return_value=crypto_15m_payload), \
+         patch("src.scrapers.manifold_client.ManifoldClient") as MockManifold, \
+         patch("src.scrapers.kalshi_client.KalshiClient") as MockKalshi:
+        MockManifold.return_value.__enter__.return_value.get_finite_events.return_value = []
+        MockKalshi.return_value.__enter__.return_value.get_markets.return_value = []
+
+        events = scanning._fetch_prediction_market_events()
+
+    categories = {e["category"] for e in events}
+    assert categories == {"crypto_5m", "crypto_15m"}
+    assert all(e["platform"] == "polymarket" for e in events)
+
+
+def test_crypto_5m_event_is_evaluated_by_same_market_arb():
+    """A crypto_5m event with a real yes+no<1 gap must still be picked up by
+    scan_same_market_arb_fast — no category-based gate silently excludes it."""
+    events = [{
+        "category": "crypto_5m", "external_id": "polymarket:0xcrypto5m", "platform": "polymarket",
+        "title": "Bitcoin Up or Down - 5m window",
+        "resolution_date": _iso(datetime.now(timezone.utc) + timedelta(minutes=4)),
+        "yes_price": 0.45, "no_price": 0.45, "clob_token_ids": ["tok_yes", "tok_no"],
+    }]
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+        arbs = scanning._scan_prediction_market_arbs()
+    assert len(arbs) == 1
+    assert arbs[0]["tipo"] == "same_market_yes_no_arb"
+    assert arbs[0]["category"] == "crypto_5m"
+
+
+def test_refresh_prediction_market_arbs_in_cache_replaces_only_pm_arbs():
+    """The CB_SCAN_TTL cache-hit fast path must recompute prediction-market
+    arbs fresh (crypto 5m/15m windows can't tolerate 180s staleness) while
+    leaving unrelated cached sports arbs untouched."""
+    stale_pm_arb = {"tipo": "same_market_yes_no_arb", "roi": 1.0, "legs": []}
+    sports_arb = {"tipo": "cross_book_arb_2way", "roi": 5.0, "legs": []}
+    fresh_pm_arb = {"tipo": "same_market_yes_no_arb", "roi": 9.9, "category": "crypto_5m", "legs": []}
+
+    cached = {"ts": "old", "arbs": [sports_arb, stale_pm_arb]}
+    with patch.object(scanning, "_scan_prediction_market_arbs", return_value=[fresh_pm_arb]):
+        refreshed = scanning._refresh_prediction_market_arbs_in_cache(cached)
+
+    assert sports_arb in refreshed["arbs"]
+    assert stale_pm_arb not in refreshed["arbs"]
+    assert fresh_pm_arb in refreshed["arbs"]
+
+
 def test_fetch_skips_platform_on_error_but_keeps_others():
     with patch("src.core.orchestration.polymarket_scan.scan_polymarket_finite_events", side_effect=RuntimeError("boom")), \
+         patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_5m", return_value={"markets": []}), \
+         patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_15m", return_value={"markets": []}), \
          patch("src.scrapers.manifold_client.ManifoldClient") as MockManifold, \
          patch("src.scrapers.kalshi_client.KalshiClient") as MockKalshi:
         MockManifold.return_value.__enter__.return_value.get_finite_events.return_value = [{
