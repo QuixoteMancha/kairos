@@ -16,11 +16,28 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.scrapers import kalshi_client as _kalshi_client_module
 from src.scrapers.kalshi_client import KalshiClient, normalize_market
+
+
+@pytest.fixture(autouse=True)
+def _clear_get_markets_cache():
+    """get_markets() now caches results (TTL=90s, see kalshi_client.py —
+    added 2026-07-04 to avoid repaying the ~48-69s full-pagination cost on
+    every scan cycle). Without clearing this module-level cache between
+    tests, a mocked call in one test can leak its cached result into the
+    next test's assertions (same default cache_key), since the dict persists
+    across the whole test-process lifetime, not per-test.
+    """
+    _kalshi_client_module._get_markets_cache.clear()
+    yield
+    _kalshi_client_module._get_markets_cache.clear()
 
 
 def _close_time(hours_from_now: float) -> str:
