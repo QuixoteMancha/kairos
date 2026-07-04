@@ -127,14 +127,17 @@ def test_arb_still_profitable_net_of_fees_is_kept():
     resolution = now + timedelta(hours=6)
     events = [
         {
+            # yes+no sums to 1.02 (>=0.999) so this platform's OWN market has
+            # no internal same-market arb — only the cross-platform divergence
+            # against polymarket below should fire.
             "category": "economics", "external_id": "kalshi:wide-edge", "platform": "kalshi",
             "title": "Will unemployment exceed 5 percent this report",
-            "resolution_date": _iso(resolution), "yes_price": 0.30, "no_price": 0.55,
+            "resolution_date": _iso(resolution), "yes_price": 0.30, "no_price": 0.72,
         },
         {
             "category": "economics", "external_id": "polymarket:wide-edge", "platform": "polymarket",
             "title": "Will unemployment exceed 5 percent this report?",
-            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.60, "no_price": 0.25,
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.60, "no_price": 0.42,
         },
     ]
     with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
@@ -161,9 +164,12 @@ def test_manifold_vs_real_money_arb_is_rejected():
             "resolution_date": _iso(resolution), "yes_price": 0.20, "no_price": 0.75,
         },
         {
+            # yes+no sums to 1.01 (>=0.999) so polymarket's OWN market has no
+            # internal same-market arb either — manifold is excluded from
+            # same-market arb entirely (mana), regardless of its own prices.
             "category": "crypto", "external_id": "polymarket:btc-100k", "platform": "polymarket",
             "title": "Will BTC exceed 100k by Friday?",
-            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.70, "no_price": 0.25,
+            "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.70, "no_price": 0.31,
         },
     ]
     with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
