@@ -121,3 +121,63 @@ def test_get_markets_can_disable_filters():
         markets = client.get_markets(max_hours_to_resolution=None, exclude_sports=False)
 
     assert len(markets) == 1
+
+
+def test_get_markets_sends_max_close_ts_when_window_set():
+    raw = {"markets": [_raw_market(ticker="ECON-1", category="Economics", close_time=_close_time(10))]}
+    client = KalshiClient()
+    with patch.object(client, "_get", return_value=_fake_response(raw)) as mock_get:
+        client.get_markets(max_hours_to_resolution=48)
+
+    _, kwargs = mock_get.call_args
+    assert "max_close_ts" in kwargs["params"]
+    # sanity: should be ~48h from now, not some stale/hardcoded value
+    import time
+    assert abs(kwargs["params"]["max_close_ts"] - (time.time() + 48 * 3600)) < 5
+
+
+def test_get_markets_paginates_via_cursor():
+    """Regression test for the original bug: get_markets() used to fetch
+    exactly ONE page of `limit` markets and silently drop `cursor`, so a
+    market resolving in <=48h that happened to live on page 2+ was NEVER
+    seen. This simulates 3 pages via cursor chaining."""
+    page1 = {
+        "markets": [_raw_market(ticker="PAGE1", category="Economics", close_time=_close_time(10))],
+        "cursor": "cursor-a",
+    }
+    page2 = {
+        "markets": [_raw_market(ticker="PAGE2", category="Economics", close_time=_close_time(20))],
+        "cursor": "cursor-b",
+    }
+    page3 = {
+        "markets": [_raw_market(ticker="PAGE3", category="Economics", close_time=_close_time(30))],
+        "cursor": "",  # empty cursor == no more pages
+    }
+    responses = [_fake_response(page1), _fake_response(page2), _fake_response(page3)]
+
+    client = KalshiClient()
+    with patch.object(client, "_get", side_effect=responses) as mock_get:
+        markets = client.get_markets(max_hours_to_resolution=48)
+
+    assert mock_get.call_count == 3
+    tickers = {m["raw"]["ticker"] for m in markets}
+    assert tickers == {"PAGE1", "PAGE2", "PAGE3"}
+
+    # second call must carry cursor-a, third must carry cursor-b
+    second_call_params = mock_get.call_args_list[1].kwargs["params"]
+    third_call_params = mock_get.call_args_list[2].kwargs["params"]
+    assert second_call_params["cursor"] == "cursor-a"
+    assert third_call_params["cursor"] == "cursor-b"
+
+
+def test_get_markets_stops_at_max_pages_cap():
+    """Defensive cap — don't loop forever if Kalshi always returns a cursor."""
+    infinite_page = {
+        "markets": [_raw_market(ticker="X", category="Economics", close_time=_close_time(10))],
+        "cursor": "always-more",
+    }
+    client = KalshiClient()
+    with patch.object(client, "_get", return_value=_fake_response(infinite_page)) as mock_get:
+        client.get_markets(max_hours_to_resolution=48)
+
+    assert mock_get.call_count == client.MAX_PAGES
