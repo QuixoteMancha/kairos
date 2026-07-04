@@ -111,14 +111,29 @@ def test_fetch_includes_crypto_5m_and_15m_events_with_distinct_categories():
 
 def test_crypto_5m_event_is_evaluated_by_same_market_arb():
     """A crypto_5m event with a real yes+no<1 gap must still be picked up by
-    scan_same_market_arb_fast — no category-based gate silently excludes it."""
+    scan_same_market_arb_fast — no category-based gate silently excludes it.
+
+    Polymarket same-market candidates are re-verified against the real CLOB
+    order book (Bug 2 fix) before being returned, so the book lookup is
+    mocked here to return depth consistent with the snapshot prices — this
+    test is about the category not being gated, not about the deep-check
+    arithmetic itself (see test_same_market_arb.py for that)."""
     events = [{
         "category": "crypto_5m", "external_id": "polymarket:0xcrypto5m", "platform": "polymarket",
         "title": "Bitcoin Up or Down - 5m window",
         "resolution_date": _iso(datetime.now(timezone.utc) + timedelta(minutes=4)),
         "yes_price": 0.45, "no_price": 0.45, "clob_token_ids": ["tok_yes", "tok_no"],
     }]
-    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+
+    class _FakeClient:
+        def get_order_book(self, token_id):
+            return {"asks": [(0.45, 1000.0)], "bids": [(0.44, 1000.0)]}
+
+        def close(self):
+            pass
+
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events), \
+         patch("src.scrapers.polymarket_client.PolymarketClient", return_value=_FakeClient()):
         arbs = scanning._scan_prediction_market_arbs()
     assert len(arbs) == 1
     assert arbs[0]["tipo"] == "same_market_yes_no_arb"
