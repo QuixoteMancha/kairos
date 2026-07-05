@@ -82,6 +82,41 @@ def test_normalize_market_falls_back_to_bid_ask_midpoint_without_last_price():
     assert event["no_price"] == 0.38
 
 
+def test_normalize_market_reads_live_dollars_schema():
+    """Regression test — confirmed live 2026-07-05 against
+    external-api.kalshi.com that the production /markets response no longer
+    sends cents-keyed fields (yes_bid/yes_ask/no_bid/no_ask/last_price) at
+    all, only dollar-string fields (yes_bid_dollars/yes_ask_dollars/etc,
+    already 0-1 scaled, not cents). Without reading these, normalize_market()
+    silently fell back to the hardcoded 0.5/0.5 default for every real
+    Kalshi market."""
+    raw = {
+        "ticker": "KXUCLGAME-26JUL07BBLLEV-LEV",
+        "event_ticker": "KXUCLGAME-26JUL07BBLLEV",
+        "title": "Banja Luka vs Levski Sofia Winner?",
+        "status": "active",
+        "close_time": _close_time(24),
+        "yes_bid_dollars": "0.3000",
+        "yes_ask_dollars": "0.4000",
+        "no_bid_dollars": "0.6000",
+        "no_ask_dollars": "0.7000",
+        "last_price_dollars": "0.3500",
+    }
+    event = normalize_market(raw)
+
+    assert event["yes_bid"] == 0.30
+    assert event["yes_ask"] == 0.40
+    assert event["no_bid"] == 0.60
+    assert event["no_ask"] == 0.70
+    assert event["yes_price"] == 0.35
+    assert event["no_price"] == 0.65
+    # category is absent from the live schema entirely (not just a different
+    # key) — normalize_market must not crash, and callers relying on
+    # exclude_sports=True should know this filter is currently a no-op
+    # against live data (see kalshi_client.py module docstring / Priya's report).
+    assert event["category"] == "uncategorized"
+
+
 def test_normalize_market_handles_missing_close_time():
     event = normalize_market(_raw_market(close_time=None))
 
