@@ -176,6 +176,34 @@ def test_get_markets_excludes_sports_by_default():
     assert tickers == {"ECON-1"}
 
 
+def test_get_markets_excludes_mve_combo_products():
+    """Confirmed live 2026-07-05 against external-api.kalshi.com: 74/200
+    markets under Kairos's real get_markets() params were Multivariate Event
+    (combo/parlay) products — a "yes X,yes Y,yes Z,..." concatenated title
+    with an `event_ticker` starting with "KXMVE". These are not single-event
+    YES/NO questions and must never reach normalize_market()'s output, since
+    every downstream matcher/arb strategy assumes one market == one binary
+    proposition."""
+    raw = {
+        "markets": [
+            _raw_market(ticker="ECON-1", category="Economics", close_time=_close_time(10)),
+            _raw_market(
+                ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026FOO-BAR",
+                event_ticker="KXMVESPORTSMULTIGAMEEXTENDED-S2026FOO",
+                category="uncategorized",
+                title="yes Oklahoma,yes Scottie Scheffler,yes France,yes Norway",
+                close_time=_close_time(10),
+            ),
+        ]
+    }
+    client = KalshiClient()
+    with patch.object(client, "_get", return_value=_fake_response(raw)):
+        markets = client.get_markets()
+
+    tickers = {m["raw"]["ticker"] for m in markets}
+    assert tickers == {"ECON-1"}
+
+
 def test_get_markets_filters_to_48h_resolution_window():
     raw = {
         "markets": [
