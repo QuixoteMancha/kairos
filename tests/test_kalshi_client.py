@@ -117,6 +117,35 @@ def test_normalize_market_reads_live_dollars_schema():
     assert event["category"] == "uncategorized"
 
 
+def test_normalize_market_treats_zero_last_price_as_no_trade_yet():
+    """Regression test — confirmed live 2026-07-05: Kalshi sends
+    last_price_dollars="0.0000" as a literal sentinel for "no trade has
+    happened yet" on brand-new markets, even when a real two-sided bid/ask
+    spread already exists (e.g. a fresh KXDOTA2MAP-style market). Treating
+    that 0 as a genuine last-traded price collapsed yes_price to 0.0 (and
+    no_price to 1.0) despite live quotes showing real two-sided interest —
+    which would silently recreate the same "imp always ~1.0, no candidate
+    ever" structural bug already fixed for Polymarket (commit e9aa55b), this
+    time via Kalshi's yes_price+no_price fallback path in same_market_arb.py.
+    Must prefer the bid/ask midpoint instead."""
+    raw = {
+        "ticker": "KXDOTA2MAP-26JUL071230VPLGD-1",
+        "event_ticker": "KXDOTA2MAP-26JUL071230VPLGD",
+        "title": "Will Virtus.pro win map 1?",
+        "status": "active",
+        "close_time": _close_time(6),
+        "yes_bid_dollars": "0.2600",
+        "yes_ask_dollars": "0.3200",
+        "no_bid_dollars": "0.6800",
+        "no_ask_dollars": "0.7400",
+        "last_price_dollars": "0.0000",
+    }
+    event = normalize_market(raw)
+
+    assert event["yes_price"] == 0.29  # midpoint of 0.26/0.32, not 0.0
+    assert event["no_price"] == 0.71
+
+
 def test_normalize_market_handles_missing_close_time():
     event = normalize_market(_raw_market(close_time=None))
 
