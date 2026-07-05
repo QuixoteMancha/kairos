@@ -5,13 +5,33 @@ Uses a synthetic event that "appears" on 2-3 platforms with different prices,
 mocking each platform's fetch function so no network calls happen.
 """
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from src.core.orchestration import scanning
 
 
 def _iso(dt):
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _mock_poly_client(token_prices: dict):
+    """Patches PolymarketClient (as imported by cross_platform_deep's
+    deep-verify step) so Strategy-2 candidates carrying a polymarket leg with
+    clob_token_ids can pass fail-closed re-verification in these
+    scanning-level tests without a real network call.
+
+    `token_prices`: {token_id: best_ask_price} — mirrors the price the test's
+    fast-scan snapshot already assumed, so the deep-verify step confirms
+    (rather than changes) the expected roi in tests that aren't specifically
+    exercising the deep-verify divergence/failure behavior (see
+    tests/test_cross_platform_deep.py for those).
+    """
+    client = MagicMock()
+    client.get_order_book.side_effect = lambda token_id: (
+        {"asks": [(token_prices[token_id], 1000.0)], "bids": []}
+        if token_id in token_prices else {"asks": [], "bids": []}
+    )
+    return patch("src.scrapers.polymarket_client.PolymarketClient", return_value=client)
 
 
 def test_no_cross_platform_match_yields_no_opportunity():
@@ -33,6 +53,7 @@ def test_cross_platform_arb_detected_with_price_divergence():
             "category": "politics", "external_id": "polymarket:same-event", "platform": "polymarket",
             "title": "Will candidate A win the special election",
             "resolution_date": _iso(resolution), "yes_price": 0.55, "no_price": 0.45,
+            "clob_token_ids": ["yes-same-event", "no-same-event"],
         },
         {
             "category": "politics", "external_id": "kalshi:SAME-EVENT", "platform": "kalshi",
@@ -45,7 +66,10 @@ def test_cross_platform_arb_detected_with_price_divergence():
             "resolution_date": _iso(resolution - timedelta(minutes=10)), "yes_price": 0.50, "no_price": 0.50,
         },
     ]
-    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+    # Best NO leg is polymarket (no_price=0.45 -> ask 0.45) — deep-verify
+    # confirms the same price the fast-scan already assumed.
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events), \
+            _mock_poly_client({"no-same-event": 0.45}):
         arbs = scanning._scan_prediction_market_arbs()
 
     assert len(arbs) == 1
@@ -218,9 +242,13 @@ def test_arb_still_profitable_net_of_fees_is_kept():
             "category": "economics", "external_id": "polymarket:wide-edge", "platform": "polymarket",
             "title": "Will unemployment exceed 5 percent this report?",
             "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.60, "no_price": 0.42,
+            "clob_token_ids": ["yes-wide-edge", "no-wide-edge"],
         },
     ]
-    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+    # Best yes = kalshi (0.30), best no = polymarket (0.42) — deep-verify
+    # confirms the polymarket "no" leg's ask matches the snapshot.
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events), \
+            _mock_poly_client({"no-wide-edge": 0.42}):
         arbs = scanning._scan_prediction_market_arbs()
     assert len(arbs) == 1
     arb = arbs[0]
@@ -280,9 +308,14 @@ def test_overlapping_cross_platform_and_same_market_arb_keeps_higher_roi_only():
             "category": "politics", "external_id": "polymarket:evt1", "platform": "polymarket",
             "title": "Will the measure pass?",
             "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.68, "no_price": 0.33,
+            "clob_token_ids": ["yes-evt1", "no-evt1"],
         },
     ]
-    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+    # Best yes = kalshi (0.30 -> odds 3.33), best no = polymarket (0.33 ->
+    # odds ~3.03) — deep-verify confirms the polymarket "no" leg's ask
+    # matches the snapshot.
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events), \
+            _mock_poly_client({"no-evt1": 0.33}):
         arbs = scanning._scan_prediction_market_arbs()
 
     # Only one opportunity should survive: the cross-platform one (much
@@ -311,6 +344,7 @@ def test_non_overlapping_arbs_are_both_kept():
             "category": "politics", "external_id": "polymarket:eventA", "platform": "polymarket",
             "title": "Event A happens?",
             "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.65, "no_price": 0.33,
+            "clob_token_ids": ["yes-eventA", "no-eventA"],
         },
         # Unrelated same-market arb, event B (economics), single platform only.
         {
@@ -319,7 +353,10 @@ def test_non_overlapping_arbs_are_both_kept():
             "resolution_date": _iso(resolution + timedelta(hours=1)), "yes_price": 0.25, "no_price": 0.55,
         },
     ]
-    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events):
+    # Best yes = kalshi (0.30 -> odds 3.33), best no = polymarket (0.33 ->
+    # odds ~3.03) — deep-verify confirms the polymarket "no" leg's ask.
+    with patch.object(scanning, "_fetch_prediction_market_events", return_value=events), \
+            _mock_poly_client({"no-eventA": 0.33}):
         arbs = scanning._scan_prediction_market_arbs()
 
     types = {a["tipo"] for a in arbs}
