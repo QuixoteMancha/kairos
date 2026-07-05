@@ -110,6 +110,32 @@ def test_transfer_ledger_sums_to_zero(rebalance_env):
     assert round(net, 2) == 0.0, f"los asientos de transferencia no suman cero: {net}"
 
 
+def test_manifold_excluded_from_real_money_rebalance(rebalance_env):
+    """Manifold es 'mana' (dinero virtual no retirable) — nunca debe
+    participar como donor/recipient en el rebalanceo de capital REAL, aunque
+    esté activo, tenga wallet y métricas > 0 (regresión: antes _CBPLAT
+    incluía Manifold sin filtrar por REAL_MONEY_PLATFORMS)."""
+    Platform.create(slug="manifold", name="Manifold", is_active=True)
+    Wallet.create(platform="manifold", initial_balance=500.0, balance=500.0,
+                  equity=500.0, deposits=0.0, withdrawals=0.0)
+    cb._cb_book_metrics["manifold"] = {"last_count": 5}
+    state.wallets.clear()
+
+    reb.run_rebalance()
+
+    ledger_platforms = {
+        r.platform
+        for r in WalletLedger.select().where(WalletLedger.op_type == "rebalance_transfer")
+    }
+    assert "manifold" not in ledger_platforms, (
+        "Manifold no debe recibir/donar capital real en el rebalanceo"
+    )
+    manifold_wallet = wmod.get_wallet("manifold")
+    assert manifold_wallet.balance == 500.0, (
+        "el balance de Manifold no debe cambiar por el rebalanceo de capital real"
+    )
+
+
 def test_no_rebalance_when_paused_does_not_move_capital(rebalance_env):
     # Si ya está pausado y balanceado, no fuerza nada raro; pero el cooldown y
     # la pausa no deben crear/destruir capital. Forzamos cooldown activo.
