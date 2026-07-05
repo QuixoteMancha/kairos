@@ -130,3 +130,44 @@ def test_circuit_breaker_reset_requires_and_uses_explicit_platform(app_client):
 def test_circuit_breaker_reset_without_platform_is_rejected(app_client):
     r = app_client.post("/api/circuit-breaker/reset", json={"new_peak": 150.0})
     assert r.status_code in (400, 422)
+
+
+def test_delete_bet_adjusts_correct_platform_not_active_platform(app_client):
+    """
+    DELETE /api/bet/<bet_id> must adjust the balance of the bet's OWN
+    platform, never state.active_platform. Here active_platform is
+    'cross_book' (an internal mode marker, not a real wallet) while the bet
+    actually belongs to a distinct real platform ('test_pm_delete'). Without
+    the fix, get_wallet()/save_wallet() would fall back to active_platform
+    and either touch the wrong wallet or resurrect a phantom 'cross_book'
+    one; the real platform's balance would never be credited back.
+    """
+    from src.database.database import Wallet, WalletBet
+    from src.core import state
+
+    slug = "test_pm_delete"
+    _seed_wallet(slug, balance=40.0, equity=50.0)
+    assert state.active_platform == "cross_book"
+
+    WalletBet.create(
+        bet_id="bet-delete-1", platform=slug, placed_at=datetime.now().isoformat(),
+        fixture_name="Will Y happen", arb_tipo="inside-arb", total_staked=10.0,
+        guaranteed_return=10.5, roi=5.0, status="pending", resolution_scope="match",
+    )
+    try:
+        r = app_client.delete("/api/bet/bet-delete-1")
+        assert r.status_code == 200
+        body = r.get_json()
+
+        # The pending stake must be refunded to the bet's real platform.
+        w_row = Wallet.get(Wallet.platform == slug)
+        assert w_row.balance == pytest.approx(50.0)
+        assert body["balance"] == pytest.approx(50.0)
+
+        # No phantom 'cross_book' wallet should have been created/touched.
+        assert Wallet.get_or_none(Wallet.platform == "cross_book") is None
+
+        # Bet must actually be gone.
+        assert WalletBet.get_or_none(WalletBet.bet_id == "bet-delete-1") is None
+    finally:
+        _cleanup_wallet(slug)
