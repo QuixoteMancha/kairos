@@ -49,6 +49,9 @@ def test_run_cycle_endpoint_uses_real_scan_but_writes_only_paper_tables(client):
     with patch(
         "src.core.orchestration.scanning._scan_prediction_market_arbs",
         return_value=[],
+    ), patch(
+        "src.core.orchestration.scanning._fetch_prediction_market_events",
+        return_value=[],
     ):
         resp = client.post("/api/paper/run-cycle?max_hours=1")
     assert resp.status_code == 200

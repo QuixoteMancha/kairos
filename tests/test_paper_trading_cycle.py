@@ -59,7 +59,7 @@ def test_run_cycle_opens_and_settles_fillable_opp_compounding_balance():
     opp = _fake_opp(roi=6.4, ext_id="evt-fill-1")
     with _mock_fill_engine(fillable=True):
         result = cycle.run_paper_trading_cycle(
-            wallet_label="test-wallet-2", _opportunities=[opp], min_roi_pct=2.0, stake_fraction=0.05,
+            wallet_label="test-wallet-2", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0, stake_fraction=0.05,
         )
     assert result["opened"] == 1
     assert result["settled_win"] == 1
@@ -76,7 +76,7 @@ def test_run_cycle_opens_and_settles_fillable_opp_compounding_balance():
 def test_last_cycle_summary_persisted_even_with_zero_opportunities():
     # "Nothing found" must still be recorded — silence is indistinguishable
     # from a dead worker, this is the evidence the dashboard reads.
-    result = cycle.run_paper_trading_cycle(wallet_label="test-wallet-7", _opportunities=[], min_roi_pct=2.0)
+    result = cycle.run_paper_trading_cycle(wallet_label="test-wallet-7", _opportunities=[], _raw_events=[], min_roi_pct=2.0)
     assert result["opportunities_scanned"] == 0
     assert "ran_at" in result
 
@@ -90,7 +90,7 @@ def test_run_cycle_marks_unfillable_without_moving_capital():
     opp = _fake_opp(roi=6.4, ext_id="evt-nofill-1")
     with _mock_fill_engine(fillable=False):
         result = cycle.run_paper_trading_cycle(
-            wallet_label="test-wallet-3", _opportunities=[opp], min_roi_pct=2.0, stake_fraction=0.05,
+            wallet_label="test-wallet-3", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0, stake_fraction=0.05,
         )
     assert result["opened"] == 0
     assert result["unfillable"] == 1
@@ -102,15 +102,15 @@ def test_run_cycle_marks_unfillable_without_moving_capital():
 def test_run_cycle_skips_low_roi_and_duplicates():
     low_roi_opp = _fake_opp(roi=0.5, ext_id="evt-lowroi")
     result = cycle.run_paper_trading_cycle(
-        wallet_label="test-wallet-4", _opportunities=[low_roi_opp], min_roi_pct=2.0,
+        wallet_label="test-wallet-4", _opportunities=[low_roi_opp], _raw_events=[], min_roi_pct=2.0,
     )
     assert result["skipped_low_roi"] == 1
     assert result["opened"] == 0
 
     opp = _fake_opp(roi=6.4, ext_id="evt-dupe-1")
     with _mock_fill_engine(fillable=True):
-        r1 = cycle.run_paper_trading_cycle(wallet_label="test-wallet-5", _opportunities=[opp], min_roi_pct=2.0)
-        r2 = cycle.run_paper_trading_cycle(wallet_label="test-wallet-5", _opportunities=[opp], min_roi_pct=2.0)
+        r1 = cycle.run_paper_trading_cycle(wallet_label="test-wallet-5", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0)
+        r2 = cycle.run_paper_trading_cycle(wallet_label="test-wallet-5", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0)
     assert r1["opened"] == 1
     assert r2["opened"] == 0
     assert r2["skipped_dupe"] == 1
@@ -123,7 +123,7 @@ def test_never_touches_real_wallet_tables():
     before_l = WalletLedger.select().count()
     opp = _fake_opp(roi=6.4, ext_id="evt-isolation-1")
     with _mock_fill_engine(fillable=True):
-        cycle.run_paper_trading_cycle(wallet_label="test-wallet-6", _opportunities=[opp], min_roi_pct=2.0)
+        cycle.run_paper_trading_cycle(wallet_label="test-wallet-6", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0)
     after_w = Wallet.select().count()
     after_l = WalletLedger.select().count()
     assert before_w == after_w
