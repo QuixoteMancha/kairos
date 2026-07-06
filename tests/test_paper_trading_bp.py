@@ -34,6 +34,17 @@ def test_wallet_endpoint_seeds_default_200(client):
     assert data["initial_balance"] == 200.0
 
 
+def test_wallet_endpoint_splits_balance_by_platform_for_display(client):
+    resp = client.get("/api/paper/wallet")
+    data = resp.get_json()
+    by_platform = data["by_platform"]
+    assert set(by_platform.keys()) == {"polymarket", "kalshi", "manifold"}
+    total = sum(v["balance"] for v in by_platform.values())
+    assert total == pytest.approx(200.0, abs=0.01)
+    for v in by_platform.values():
+        assert v["label"] == "paper"
+
+
 def test_run_cycle_endpoint_uses_real_scan_but_writes_only_paper_tables(client):
     with patch(
         "src.core.orchestration.scanning._scan_prediction_market_arbs",
