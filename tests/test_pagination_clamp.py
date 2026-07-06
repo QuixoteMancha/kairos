@@ -20,19 +20,20 @@ def client(tmp_path, monkeypatch):
     test_db = SqliteDatabase(":memory:")
     monkeypatch.setattr(dbmod, "db", test_db)
     models = [dbmod.Platform, dbmod.Wallet, dbmod.WalletBet, dbmod.WalletLedger]
-    test_db.bind(models, bind_refs=False, bind_backrefs=False)
-    test_db.connect()
-    test_db.create_tables(models)
+    with test_db.bind_ctx(models, bind_refs=False, bind_backrefs=False):
+        test_db.connect()
+        test_db.create_tables(models)
 
-    dbmod.Wallet.create(platform="polymarket", initial_balance=50, balance=50, equity=50)
+        dbmod.Wallet.create(platform="polymarket", initial_balance=50, balance=50, equity=50)
 
-    from src.web.blueprints.audit_bp import audit_bp
-    app = Flask(__name__)
-    app.register_blueprint(audit_bp)
-    yield app.test_client()
+        from src.web.blueprints.audit_bp import audit_bp
+        app = Flask(__name__)
+        app.register_blueprint(audit_bp)
+        with app.test_client() as c:
+            yield c
 
-    test_db.drop_tables(models)
-    test_db.close()
+        test_db.drop_tables(models)
+        test_db.close()
 
 
 def test_ledger_negative_page_size_is_clamped(client):
