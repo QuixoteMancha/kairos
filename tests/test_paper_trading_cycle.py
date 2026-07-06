@@ -73,6 +73,19 @@ def test_run_cycle_opens_and_settles_fillable_opp_compounding_balance():
     assert bet.pnl == pytest.approx(0.64, abs=0.01)
 
 
+def test_last_cycle_summary_persisted_even_with_zero_opportunities():
+    # "Nothing found" must still be recorded — silence is indistinguishable
+    # from a dead worker, this is the evidence the dashboard reads.
+    result = cycle.run_paper_trading_cycle(wallet_label="test-wallet-7", _opportunities=[], min_roi_pct=2.0)
+    assert result["opportunities_scanned"] == 0
+    assert "ran_at" in result
+
+    persisted = cycle.get_last_cycle_summary()
+    assert persisted is not None
+    assert persisted["opportunities_scanned"] == 0
+    assert persisted["wallet_label"] == "test-wallet-7"
+
+
 def test_run_cycle_marks_unfillable_without_moving_capital():
     opp = _fake_opp(roi=6.4, ext_id="evt-nofill-1")
     with _mock_fill_engine(fillable=False):
