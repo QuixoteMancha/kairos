@@ -193,3 +193,33 @@ def test_directional_resolution_win_and_loss_heuristics():
     bet_win = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-win")
     assert bet_win.status == "strategy1_resolved_directional_win"
     assert bet_win.pnl > 0
+
+
+def test_indeterminate_at_awaiting_hedge_refunds_stake_no_capital_lost():
+    """Regression test for the real bug found in production 2026-07-07:
+    a position that already committed capital (reached awaiting_hedge) but
+    resolves ambiguous must have its stake REFUNDED, never left deducted
+    forever with no ledger entry (that silently drained the wallet balance
+    to negative in prod: 32 positions, $175.16 stuck, balance went to
+    -$0.44)."""
+    w = cycle.get_or_create_wallet("s1-wallet-8")
+    cycle._run_strategy1_pass(w, [_event("evt-ambig", 0.50)])
+    w2 = cycle.SimulatedWallet.get_by_id(w.id)
+    cycle._run_strategy1_pass(w2, [_event("evt-ambig", 0.60)])  # leader fills, leaves awaiting_hedge
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-ambig")
+    assert bet.status == "strategy1_awaiting_hedge"
+    stake_usd = bet.total_staked
+    assert stake_usd > 0
+    balance_after_fill = cycle.SimulatedWallet.get_by_id(w.id).balance
+
+    # Event disappears (resolves/closes) with last_leader_price ambiguous (0.60,
+    # neither >=0.95 nor <=0.05) -> must void/refund, not leave stuck.
+    w3 = cycle.SimulatedWallet.get_by_id(w.id)
+    stats = cycle._run_strategy1_pass(w3, [])
+    assert stats["strategy1_indeterminate"] == 1
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-ambig")
+    assert bet.status == "strategy1_indeterminate"
+    assert bet.pnl == 0.0
+
+    balance_after_void = cycle.SimulatedWallet.get_by_id(w.id).balance
+    assert balance_after_void == pytest.approx(balance_after_fill + stake_usd)
