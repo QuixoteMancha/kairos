@@ -62,3 +62,4 @@ __pycache__/
 
 # Claude Code session worktrees/state
 .claude/
+.brightdata_last_ip
