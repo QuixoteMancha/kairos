@@ -138,6 +138,100 @@ def test_settled_bet_persists_readable_title_not_just_raw_external_ids():
     assert "evt-title-1" in bet.bet_id
 
 
+# --- Real-fill-slippage PnL recompute (2026-07-08) -------------------------
+#
+# Root cause fixed here: `pnl` for Strategy 2/3/football was computed purely
+# from the scan-time quoted `roi_pct` (top-of-book odds), completely
+# ignoring the REAL `avg_fill_price` per leg that `paper_fill_engine.py`
+# already computes by walking the real order book. `_recompute_pnl_from_fills`
+# now uses that real per-leg price when available, falling back to the
+# quoted roi_pct when any leg lacks usable fill data.
+
+def test_recompute_pnl_uses_real_slippage_when_available():
+    """With real slippage (avg_fill_price worse than the quoted target), the
+    real net ROI must come out LOWER than an inflated quoted roi_pct —
+    and the function must return this real figure, not the quoted one."""
+    fill_result_worse = {
+        "legs": [
+            {"leg_side": "yes", "platform": "polymarket", "avg_fill_price": 0.70, "classification": "full_fill"},
+            {"leg_side": "no", "platform": "polymarket", "avg_fill_price": 0.29, "classification": "full_fill"},
+        ]
+    }
+    pnl_worse, net_roi_worse = cycle._recompute_pnl_from_fills(fill_result_worse, stake_usd=10.0, roi_pct_fallback=50.0)
+    assert net_roi_worse is not None
+    # real imp = 0.99 -> roi_gross = (1-0.99)/0.99*100 ~= 1.01%, minus fees,
+    # must be far lower than the inflated 50% fallback it would otherwise use
+    assert net_roi_worse < 50.0
+    assert pnl_worse == pytest.approx(10.0 * (net_roi_worse / 100.0), abs=1e-6)
+
+
+def test_recompute_pnl_falls_back_to_quoted_roi_when_leg_missing_fill_price():
+    """Fail-closed: if any leg is missing avg_fill_price (no_data,
+    unsupported_amm, network error), never invent a real-fill number — use
+    the quoted roi_pct unchanged."""
+    fill_result = {
+        "legs": [
+            {"leg_side": "yes", "platform": "polymarket", "avg_fill_price": 0.65, "classification": "full_fill"},
+            {"leg_side": "no", "platform": "kalshi", "avg_fill_price": None, "classification": "no_data"},
+        ]
+    }
+    pnl, net_roi_real = cycle._recompute_pnl_from_fills(fill_result, stake_usd=10.0, roi_pct_fallback=6.4)
+    assert net_roi_real is None
+    assert pnl == pytest.approx(10.0 * (6.4 / 100.0), abs=1e-9)
+
+
+def test_recompute_pnl_matches_quoted_roi_on_perfect_fill_sanity_check():
+    """Sanity check: when avg_fill_price equals the exact target/quoted
+    price for both legs (zero slippage, perfect fill), the real recompute
+    must reproduce the same net ROI the scan-time quoted formula would give
+    for that same price pair — proving the new formula is consistent with
+    the old one in the ideal case, not just a different approximation."""
+    from src.core.orchestration.platform_fees import leg_fee_pct
+
+    yes_price, no_price = 1 / 1.5, 1 / 3.2  # exactly what _fake_opp()'s odds imply
+    imp = yes_price + no_price
+    roi_gross = (1 - imp) / imp * 100
+    fee_cost_pct = (
+        leg_fee_pct("polymarket", yes_price) * yes_price
+        + leg_fee_pct("polymarket", no_price) * no_price
+    ) / imp * 100
+    expected_net_roi = roi_gross - fee_cost_pct
+
+    fill_result = {
+        "legs": [
+            {"leg_side": "yes", "platform": "polymarket", "avg_fill_price": yes_price, "classification": "full_fill"},
+            {"leg_side": "no", "platform": "polymarket", "avg_fill_price": no_price, "classification": "full_fill"},
+        ]
+    }
+    pnl, net_roi_real = cycle._recompute_pnl_from_fills(fill_result, stake_usd=10.0, roi_pct_fallback=999.0)
+    assert net_roi_real == pytest.approx(expected_net_roi, abs=1e-3)
+    assert pnl == pytest.approx(10.0 * (expected_net_roi / 100.0), abs=1e-3)
+
+
+def test_run_cycle_settles_with_real_fill_pnl_end_to_end():
+    """End-to-end: run_paper_trading_cycle must persist bet.pnl computed
+    from real avg_fill_price (via _recompute_pnl_from_fills), not the
+    quoted roi_pct, when the (mocked) fill engine reports real prices."""
+    opp = _fake_opp(roi=50.0, ext_id="evt-realfill-1")  # deliberately inflated quoted roi
+    fake_legs = [
+        {"leg_side": "yes", "platform": "polymarket", "avg_fill_price": 0.70, "fill_pct": 100.0, "classification": "full_fill"},
+        {"leg_side": "no", "platform": "polymarket", "avg_fill_price": 0.29, "fill_pct": 100.0, "classification": "full_fill"},
+    ]
+    with patch(
+        "src.core.orchestration.paper_fill_engine.simulate_arb_legs_multi_platform",
+        return_value={"legs": fake_legs},
+    ):
+        cycle.run_paper_trading_cycle(
+            wallet_label="test-wallet-realfill", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0, stake_fraction=0.05,
+        )
+    bet = SimulatedBet.get(SimulatedBet.bet_id.contains("evt-realfill-1"))
+    assert bet.status == "settled_win"
+    # stake = 200*0.05 = 10; real imp = 0.99 -> roi_gross ~1.01%, well below
+    # the quoted 50% -> pnl must be far smaller than 10*0.50=5.0
+    assert bet.pnl < 1.0
+    assert bet.pnl > -1.0
+
+
 def test_estimate_strategy1_epsilon_uses_dwell_time_for_football():
     """First live wiring of the dwell-time models into Strategy 1's level
     placement: a football/soccer candidate with a 'vs'-shaped title must use
