@@ -78,6 +78,27 @@ def test_single_leg_fill_deducts_capital_and_moves_to_awaiting_hedge():
 
     w3 = cycle.SimulatedWallet.get_by_id(w.id)
     assert w3.balance < balance_before  # capital committed to the directional leg
+    assert bet.actual_filled_pct == pytest.approx(50.0)  # 1 of 2 intended legs filled
+
+
+def test_actual_filled_pct_reaches_100_only_when_hedge_also_fills():
+    """Regression test for the real bug found 2026-07-08: `actual_filled_pct`
+    was hardcoded to 0.0 at candidate creation and never updated — the
+    frontend (PaperBetGroup.vue "✓ FILLED" badge) had no real signal that a
+    leg had actually executed. Semantics: 50% after leg1 fills, 100% only
+    once the hedge also fills (real 2-leg arb); stays at 50% forever if it
+    resolves directional (hedge never filled) — pairs with the "⚠ 1 PATA"
+    badge for exactly that case."""
+    w = cycle.get_or_create_wallet("s1-wallet-fillpct")
+    cycle._run_strategy1_pass(w, [_event("evt-fillpct", 0.50)])
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-fillpct")
+    assert bet.actual_filled_pct == 0.0  # still observing, no leg filled yet
+
+    w2 = cycle.SimulatedWallet.get_by_id(w.id)
+    cycle._run_strategy1_pass(w2, [_event("evt-fillpct", 0.60)])  # leg1 fills
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-fillpct")
+    assert bet.status == "strategy1_awaiting_hedge"
+    assert bet.actual_filled_pct == pytest.approx(50.0)
 
 
 def test_both_legs_cross_same_cycle_is_indeterminate():
@@ -162,6 +183,7 @@ def test_hedge_fills_settles_as_arb_with_positive_pnl():
     bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-arb")
     assert bet.status == "strategy1_resolved_arb"
     assert bet.pnl > 0
+    assert bet.actual_filled_pct == pytest.approx(100.0)  # both legs filled, real arb
 
 
 def test_event_disappears_before_any_fill_is_indeterminate_no_capital_moved():
@@ -223,6 +245,57 @@ def test_indeterminate_at_awaiting_hedge_refunds_stake_no_capital_lost():
 
     balance_after_void = cycle.SimulatedWallet.get_by_id(w.id).balance
     assert balance_after_void == pytest.approx(balance_after_fill + stake_usd)
+
+
+def test_pending_awaiting_hedge_position_does_not_reduce_equity():
+    """Regression test for the real bug found 2026-07-08: a merely-PENDING
+    Strategy 1 position (`strategy1_awaiting_hedge`, capital committed but
+    outcome unknown) must NOT make the wallet's `equity` dip as if it were
+    an immediate realized loss — that's exactly what the real Wallet model
+    avoids via `equity = balance + pending_staked` (wallet.py). Only
+    `balance` (free cash) should drop at open; `equity` stays flat until
+    the position is actually settled (win/loss/void)."""
+    w = cycle.get_or_create_wallet("s1-wallet-equity-pending")
+    equity_before = w.equity
+    cycle._run_strategy1_pass(w, [_event("evt-eq", 0.50)])
+    w2 = cycle.SimulatedWallet.get_by_id(w.id)
+    cycle._run_strategy1_pass(w2, [_event("evt-eq", 0.60)])  # leg1 fills -> awaiting_hedge
+
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-eq")
+    assert bet.status == "strategy1_awaiting_hedge"
+
+    w3 = cycle.SimulatedWallet.get_by_id(w.id)
+    assert w3.balance < equity_before  # capital committed, balance genuinely down
+    assert w3.equity == pytest.approx(equity_before)  # but NOT shown as a loss yet
+
+
+def test_directional_loss_drops_equity_only_at_realization_not_before():
+    """Companion to the above: once the pending position is REALIZED as a
+    directional loss, equity must catch down to match balance (the stake is
+    genuinely gone at that point) — it shouldn't stay artificially high
+    forever either."""
+    w = cycle.get_or_create_wallet("s1-wallet-equity-loss")
+    cycle._run_strategy1_pass(w, [_event("evt-eqloss", 0.50)])
+    w2 = cycle.SimulatedWallet.get_by_id(w.id)
+    cycle._run_strategy1_pass(w2, [_event("evt-eqloss", 0.60)])  # awaiting_hedge, equity still flat
+
+    w3 = cycle.SimulatedWallet.get_by_id(w.id)
+    equity_while_pending = w3.equity
+    balance_while_pending = w3.balance
+    assert equity_while_pending > balance_while_pending  # pending stake still counted as equity
+
+    # Drive last_leader_price down into the loss zone, then let the event vanish.
+    cycle._run_strategy1_pass(cycle.SimulatedWallet.get_by_id(w.id), [_event("evt-eqloss", 0.03)])
+    w4 = cycle.SimulatedWallet.get_by_id(w.id)
+    stats = cycle._run_strategy1_pass(w4, [])  # event vanishes -> resolves directional loss
+    assert stats["strategy1_directional_resolved"] == 1
+
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-eqloss")
+    assert bet.status == "strategy1_resolved_directional_loss"
+    assert bet.pnl < 0
+
+    w5 = cycle.SimulatedWallet.get_by_id(w.id)
+    assert w5.equity == pytest.approx(w5.balance)  # now correctly caught down, no lingering phantom equity
 
 
 # ─────────────────────────────────────────────────────────────────────────────

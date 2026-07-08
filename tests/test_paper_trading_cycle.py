@@ -116,6 +116,81 @@ def test_run_cycle_skips_low_roi_and_duplicates():
     assert r2["skipped_dupe"] == 1
 
 
+def test_settled_bet_persists_readable_title_not_just_raw_external_ids():
+    """Regression test for the real bug found 2026-07-08: bets from
+    Strategy 2/3/football had no human-readable `title` in resolution_meta,
+    so the frontend history fell back to displaying the raw `bet_id`
+    (`f"{tipo}:{ext_id}-{ext_id}..."`) — often a very long, unreadable
+    concatenation of Polymarket/Kalshi external ids. Strategy 1 already did
+    this correctly; strategies 2/3/football must too, using the
+    opportunity's own `fixture`/`title` field."""
+    import json
+    opp = _fake_opp(roi=6.4, ext_id="evt-title-1")
+    opp["fixture"] = "Team A vs Team B"
+    with _mock_fill_engine(fillable=True):
+        cycle.run_paper_trading_cycle(
+            wallet_label="test-wallet-title", _opportunities=[opp], _raw_events=[], min_roi_pct=2.0,
+        )
+    bet = SimulatedBet.get(SimulatedBet.strategy == "strategy_3_same_market")
+    meta = json.loads(bet.resolution_meta)
+    assert meta["title"] == "Team A vs Team B"
+    # bet_id itself must stay untouched (dedup key derived from ext_ref)
+    assert "evt-title-1" in bet.bet_id
+
+
+def test_estimate_strategy1_epsilon_uses_dwell_time_for_football():
+    """First live wiring of the dwell-time models into Strategy 1's level
+    placement: a football/soccer candidate with a 'vs'-shaped title must use
+    the dwell-time model's dispersion-derived epsilon, not the fixed
+    EPSILON_INITIAL constant."""
+    from src.core.strategies.dwell_time.base import DwellBand
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    bands = [
+        DwellBand(low=0.40, high=0.60, side="Team A", expected_time_fraction=1.0),
+        DwellBand(low=0.40, high=0.60, side="Team B", expected_time_fraction=1.0),
+    ]
+    fake_model = MagicMock()
+    fake_model.estimate.return_value = bands
+    event = {"category": "football", "title": "Team A vs Team B"}
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=fake_model):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert source == "dwell_time:football"
+    assert eps != EPSILON_INITIAL
+
+
+def test_estimate_strategy1_epsilon_falls_back_when_no_team_names():
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    event = {"category": "football", "title": "Some prop bet title"}
+    eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert source.startswith("fallback_generic:no_team_names")
+
+
+def test_estimate_strategy1_epsilon_falls_back_for_unwired_category():
+    """Tennis has no live context source wired into this cycle yet — must
+    fall back to the generic epsilon, never guess/fail."""
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    event = {"category": "tennis", "title": "Player A vs Player B"}
+    eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert "tennis" in source
+
+
+def test_estimate_strategy1_epsilon_never_raises_on_model_error():
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    broken_model = MagicMock()
+    broken_model.estimate.side_effect = RuntimeError("boom")
+    event = {"category": "football", "title": "Team A vs Team B"}
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=broken_model):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert source.startswith("fallback_generic:model_error")
+
+
 def test_never_touches_real_wallet_tables():
     from src.database.models.wallet import Wallet, WalletLedger
 

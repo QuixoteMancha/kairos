@@ -5,6 +5,7 @@ from src.core.strategies.dwell_time.base import DwellBand
 from src.core.strategies.limit_order_formation import (
     propose_limit_levels,
     propose_and_check_fillable,
+    estimate_dynamic_epsilon,
 )
 
 
@@ -158,3 +159,44 @@ def test_propose_and_check_fillable_no_opportunity_skips_book_lookup():
     assert result["opportunity"] is False
     assert result["fillability"] == {}
     fake_client.get_order_book.assert_not_called()
+
+
+# ── estimate_dynamic_epsilon: dwell-time -> Strategy 1 level offset wiring ──
+
+def test_estimate_dynamic_epsilon_uses_model_when_available():
+    bands = [
+        DwellBand(low=0.40, high=0.60, side="team_a", expected_time_fraction=1.0),
+        DwellBand(low=0.40, high=0.60, side="team_b", expected_time_fraction=1.0),
+    ]
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=_fake_model(bands)):
+        eps, source = estimate_dynamic_epsilon("football", {"team_a": "A", "team_b": "B"}, fallback=0.03)
+    assert source == "dwell_time:football"
+    assert 0.01 <= eps <= 0.08
+
+
+def test_estimate_dynamic_epsilon_fallback_baseball_always_uncalibrated():
+    # Baseball is explicitly banned as a volatility source regardless of
+    # whether a model is registered/returns bands — never used per explicit
+    # user instruction (its own docstring says "approximation, not
+    # calibrated").
+    bands = [DwellBand(low=0.1, high=0.9, side="team_a", expected_time_fraction=1.0)]
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=_fake_model(bands)):
+        eps, source = estimate_dynamic_epsilon("baseball", {"team_a": "A", "team_b": "B"}, fallback=0.03)
+    assert eps == 0.03
+    assert source.startswith("fallback_generic:category_not_calibrated")
+
+
+def test_estimate_dynamic_epsilon_fallback_no_model_registered():
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=None):
+        eps, source = estimate_dynamic_epsilon("basketball", {"team_a": "A", "team_b": "B"}, fallback=0.03)
+    assert eps == 0.03
+    assert source.startswith("fallback_generic:no_model")
+
+
+def test_estimate_dynamic_epsilon_fallback_on_model_error():
+    broken = MagicMock()
+    broken.estimate.side_effect = RuntimeError("boom")
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=broken):
+        eps, source = estimate_dynamic_epsilon("football", {"team_a": "A", "team_b": "B"}, fallback=0.03)
+    assert eps == 0.03
+    assert source.startswith("fallback_generic:model_error")

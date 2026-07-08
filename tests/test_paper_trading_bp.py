@@ -104,3 +104,30 @@ def test_bets_endpoint_pagination(client):
     d3 = r3.get_json()
     assert d3["offset"] == 5
     assert len(d3["bets"]) == 10
+
+
+def test_bets_endpoint_returns_resolution_meta_and_fill_json(client):
+    """Regression test for the real bug found 2026-07-08: `/api/paper/bets`
+    never returned `resolution_meta` (holds the human-readable `title`) nor
+    `simulated_fill_json` (holds real per-leg side/price/stake from the fill
+    engine) — the frontend history had nothing to build a readable title or
+    real leg detail from, only the bare `bet_id` and platform names."""
+    import json
+    from src.core.orchestration.paper_trading_cycle import get_or_create_wallet
+
+    w = get_or_create_wallet()
+    SimulatedBet.create(
+        bet_id="bet-meta-check", wallet=w, strategy="strategy_3_same_market",
+        status="settled_win", opened_at="2026-07-08T00:00:00",
+        resolution_meta=json.dumps({"title": "Team X vs Team Y"}),
+        simulated_fill_json=json.dumps({"legs": [
+            {"platform": "polymarket", "leg_side": "yes", "avg_fill_price": 0.42, "filled_usd": 5.0, "fill_pct": 100.0},
+            {"platform": "polymarket", "leg_side": "no", "avg_fill_price": 0.55, "filled_usd": 5.0, "fill_pct": 100.0},
+        ]}),
+    )
+    r = client.get("/api/paper/bets?limit=10&page=1")
+    bet = next(b for b in r.get_json()["bets"] if b["bet_id"] == "bet-meta-check")
+    assert json.loads(bet["resolution_meta"])["title"] == "Team X vs Team Y"
+    fill = json.loads(bet["simulated_fill_json"])
+    assert len(fill["legs"]) == 2
+    assert fill["legs"][0]["platform"] == "polymarket"
