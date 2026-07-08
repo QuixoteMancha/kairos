@@ -68,3 +68,39 @@ def test_ledger_and_bets_endpoints_empty_wallet(client):
     r2 = client.get("/api/paper/bets")
     assert r2.status_code == 200
     assert r2.get_json()["bets"] == []
+    assert r2.get_json()["total_count"] == 0
+    assert r2.get_json()["has_more"] is False
+
+
+def test_bets_endpoint_pagination(client):
+    from src.core.orchestration.paper_trading_cycle import get_or_create_wallet
+
+    w = get_or_create_wallet()
+    for i in range(25):
+        SimulatedBet.create(
+            bet_id=f"bet-{i:03d}", wallet=w, strategy="strategy_1_universal",
+            status="strategy1_observing", opened_at=f"2026-07-0{1 + i % 9}T00:00:{i:02d}",
+        )
+
+    r1 = client.get("/api/paper/bets?limit=10&page=1")
+    d1 = r1.get_json()
+    assert len(d1["bets"]) == 10
+    assert d1["total_count"] == 25
+    assert d1["page"] == 1
+    assert d1["has_more"] is True
+
+    r2 = client.get("/api/paper/bets?limit=10&page=3")
+    d2 = r2.get_json()
+    assert len(d2["bets"]) == 5  # 25 total, page 3 of size 10 -> only 5 left
+    assert d2["has_more"] is False
+
+    # No overlap between pages (offset advances correctly)
+    ids_p1 = {b["bet_id"] for b in d1["bets"]}
+    ids_p3 = {b["bet_id"] for b in d2["bets"]}
+    assert ids_p1.isdisjoint(ids_p3)
+
+    # Explicit offset overrides page-derived offset
+    r3 = client.get("/api/paper/bets?limit=10&offset=5")
+    d3 = r3.get_json()
+    assert d3["offset"] == 5
+    assert len(d3["bets"]) == 10
