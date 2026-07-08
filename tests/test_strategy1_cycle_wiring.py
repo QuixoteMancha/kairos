@@ -8,9 +8,10 @@ import json
 
 import pytest
 
-from src.database.database import init_db
+from src.database.database import init_db, AppConfig
 from src.database.models.paper_wallet import SimulatedWallet, SimulatedLedger, SimulatedBet
 from src.core.orchestration import paper_trading_cycle as cycle
+from src.core.orchestration import daily_portfolio_rotation as rotation
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +20,21 @@ def _clean_paper_tables():
     SimulatedBet.delete().execute()
     SimulatedLedger.delete().execute()
     SimulatedWallet.delete().execute()
+    # This file exercises Strategy 1 STATE-MACHINE mechanics (observing ->
+    # awaiting_hedge -> resolved), which is orthogonal to the daily
+    # conservative/aggressive rotation added in daily_portfolio_rotation.py
+    # (see get_strategy1_stake_scale(), consulted at candidate-admission
+    # time in _run_strategy1_pass). Without an explicit rotation state, the
+    # module fail-closes to the conservative preset (tier C uncalibrated ->
+    # scale 0.0), which would zero out every stake in this file and break
+    # tests that have nothing to do with rotation. Seed an aggressive
+    # rotation state (equivalent to "no rotation constraint active yet",
+    # matching the pre-rotation behavior these tests were written against)
+    # so this file keeps testing what it was written to test.
+    AppConfig.set_value(rotation.ROTATION_STATE_KEY, json.dumps({
+        "preset": rotation.PRESET_AGGRESSIVE,
+        "caps": rotation.PRESETS[rotation.PRESET_AGGRESSIVE],
+    }))
     yield
     SimulatedBet.delete().execute()
     SimulatedLedger.delete().execute()
