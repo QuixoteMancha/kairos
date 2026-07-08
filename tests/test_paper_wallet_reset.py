@@ -68,6 +68,45 @@ def test_reset_nonexistent_wallet_fails_closed():
     assert result["reason"] == "wallet_not_found"
 
 
+def test_purge_deletes_bets_and_ledger_rows():
+    w = cycle.get_or_create_wallet("reset-wallet-purge")
+    SimulatedBet.create(bet_id="purge-bet-1", wallet=w, strategy="strategy_1_universal",
+                        status="strategy1_indeterminate", pnl=0.0)
+    SimulatedBet.create(bet_id="purge-bet-2", wallet=w, strategy="strategy_1_universal",
+                        status="strategy1_resolved_arb", pnl=1.5)
+    cycle._write_ledger(w, "open_position", -5.0, "strategy_1_universal", note="test")
+
+    result = cycle.reset_wallet("reset-wallet-purge", initial_balance=200.0, archive_bets=False)
+    assert result["purged"] is True
+    assert result["deleted_bets"] == 2
+    assert result["deleted_ledger_rows"] == 1  # the pre-existing open_position row
+
+    assert SimulatedBet.select().where(SimulatedBet.wallet == w).count() == 0
+    # Only the fresh "reset" ledger entry written AFTER the purge should remain
+    remaining = list(SimulatedLedger.select().where(SimulatedLedger.wallet == w))
+    assert len(remaining) == 1
+    assert remaining[0].op_type == "reset"
+
+    w2 = SimulatedWallet.get(SimulatedWallet.label == "reset-wallet-purge")
+    assert w2.balance == 200.0
+
+
+def test_purge_endpoint():
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        client.get("/api/paper/wallet?label=purge-endpoint-wallet")
+        w = SimulatedWallet.get(SimulatedWallet.label == "purge-endpoint-wallet")
+        SimulatedBet.create(bet_id="purge-endpoint-bet", wallet=w, strategy="strategy_1_universal",
+                            status="strategy1_observing")
+        resp = client.post("/api/paper/wallet/reset", json={"label": "purge-endpoint-wallet", "purge": True})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["purged"] is True
+        assert data["deleted_bets"] == 1
+        assert SimulatedBet.select().where(SimulatedBet.wallet == w).count() == 0
+
+
 def test_reset_endpoint():
     app = create_app()
     app.config["TESTING"] = True
