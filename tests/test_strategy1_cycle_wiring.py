@@ -26,7 +26,7 @@ def _clean_paper_tables():
 
 
 def _event(ext_id="evt-1", yes_price=0.50, platform="polymarket", resolution_date=None, category="tennis",
-           best_bid=None, best_ask=None):
+           best_bid=None, best_ask=None, title=None):
     """NOTE: for platform="polymarket" with no best_bid/best_ask given, the
     naive yes_price/(1-yes_price) complement is used (same fallback the real
     code uses for Kalshi/Manifold) — this is mathematically INCAPABLE of ever
@@ -36,7 +36,7 @@ def _event(ext_id="evt-1", yes_price=0.50, platform="polymarket", resolution_dat
     return {
         "external_id": ext_id, "yes_price": yes_price, "platform": platform,
         "category": category, "resolution_date": resolution_date,
-        "best_bid": best_bid, "best_ask": best_ask,
+        "best_bid": best_bid, "best_ask": best_ask, "title": title,
     }
 
 
@@ -223,3 +223,145 @@ def test_indeterminate_at_awaiting_hedge_refunds_stake_no_capital_lost():
 
     balance_after_void = cycle.SimulatedWallet.get_by_id(w.id).balance
     assert balance_after_void == pytest.approx(balance_after_fill + stake_usd)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Real-result resolution cascade (docs/strategy1-real-result-resolution-2026-07-07.md)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_title_persisted_in_meta_on_candidate_creation():
+    """§0 of Vesper's design: `title` is a one-line prerequisite for the
+    whole real-result matching cascade -- without it there is no text input
+    for the name extractor."""
+    w = cycle.get_or_create_wallet("s1-wallet-title")
+    cycle._run_strategy1_pass(w, [_event("evt-title", 0.52, title="Will Novak Djokovic beat Carlos Alcaraz?")])
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-title")
+    meta = json.loads(bet.resolution_meta)
+    assert meta["title"] == "Will Novak Djokovic beat Carlos Alcaraz?"
+
+
+@pytest.mark.parametrize("title,category,expected", [
+    ("Will Novak Djokovic beat Carlos Alcaraz?", "tennis", ("Novak Djokovic", "Carlos Alcaraz")),
+    ("Rafael Nadal vs Daniil Medvedev", "tennis", ("Rafael Nadal", "Daniil Medvedev")),
+    ("Iga Swiatek to beat Aryna Sabalenka", "tennis", ("Iga Swiatek", "Aryna Sabalenka")),
+    ("Will Real Madrid beat Barcelona?", "football", ("Real Madrid", "Barcelona")),
+    ("Los Angeles Lakers vs. Boston Celtics", "basketball", ("Los Angeles Lakers", "Boston Celtics")),
+    ("New York Yankees to beat Boston Red Sox", "baseball", ("New York Yankees", "Boston Red Sox")),
+])
+def test_extract_match_names_known_title_patterns(title, category, expected):
+    assert cycle._extract_match_names(title, category) == expected
+
+
+@pytest.mark.parametrize("title,category", [
+    (None, "tennis"),
+    ("", "tennis"),
+    ("BTC above $100k by Friday?", "crypto"),  # no vs/beat pattern at all
+    ("Will the Fed cut rates in July?", "politics"),
+])
+def test_extract_match_names_fails_closed_on_unmatched_title(title, category):
+    assert cycle._extract_match_names(title, category) is None
+
+
+def _s1_meta(**overrides) -> dict:
+    base = {
+        "title": "Will Player A beat Player B?", "category": "tennis",
+        "resolution_date": "2026-07-01", "leader": "yes",
+        "stake_usd": 10.0, "n": 20.0, "last_leader_price": 0.97,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_cascade_uses_real_result_when_matching_succeeds(monkeypatch):
+    """§2 of the design: real result strictly wins over the price heuristic
+    when matching succeeds, even if the price heuristic would have said
+    something different (here leader's last price of 0.03 would heuristically
+    read as a LOSS, but the mocked real result says the leader's side won)."""
+    monkeypatch.setattr(
+        cycle, "_try_resolve_via_real_result",
+        lambda meta, now: {"status": "resolved", "leader_won": True, "source": "flashscore_tennis"},
+    )
+    w = cycle.get_or_create_wallet("s1-wallet-real-win")
+    bet = SimulatedBet.create(
+        bet_id="paper-strategy1-real-win", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs="[]", opened_at=cycle._now_iso(), total_staked=10.0,
+        expected_roi_pct=0.0, simulated_fill_json="", actual_filled_pct=0.0,
+        status="strategy1_awaiting_hedge",
+        resolution_meta=json.dumps(_s1_meta(last_leader_price=0.03)),
+    )
+    stats = {"strategy1_directional_resolved": 0, "strategy1_indeterminate": 0}
+    cycle._resolve_strategy1_directional(bet, _s1_meta(last_leader_price=0.03), w, stats)
+    assert bet.status == "strategy1_resolved_directional_win"
+    assert bet.pnl > 0
+    meta = json.loads(bet.resolution_meta)
+    assert meta["resolved_via"] == "real_result_flashscore_tennis"
+    assert stats["strategy1_directional_resolved"] == 1
+
+
+def test_cascade_falls_back_to_price_heuristic_when_matching_fails(monkeypatch):
+    """When `find_match_result`/`find_team_match_result` (mocked here at the
+    `_try_resolve_via_real_result` boundary) return no usable match, the
+    existing, unchanged price heuristic must still resolve the position."""
+    monkeypatch.setattr(
+        cycle, "_try_resolve_via_real_result",
+        lambda meta, now: {"status": "unsupported"},
+    )
+    w = cycle.get_or_create_wallet("s1-wallet-fallback")
+    meta = _s1_meta(last_leader_price=0.97)
+    bet = SimulatedBet.create(
+        bet_id="paper-strategy1-fallback", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs="[]", opened_at=cycle._now_iso(), total_staked=10.0,
+        expected_roi_pct=0.0, simulated_fill_json="", actual_filled_pct=0.0,
+        status="strategy1_awaiting_hedge",
+        resolution_meta=json.dumps(meta),
+    )
+    stats = {"strategy1_directional_resolved": 0, "strategy1_indeterminate": 0}
+    cycle._resolve_strategy1_directional(bet, meta, w, stats)
+    assert bet.status == "strategy1_resolved_directional_win"
+    saved_meta = json.loads(bet.resolution_meta)
+    assert saved_meta["resolved_via"] == "price_heuristic_win_unverified"
+    assert stats["strategy1_directional_resolved"] == 1
+
+
+def test_cascade_waits_for_real_result_timeout_before_degrading(monkeypatch):
+    """§4 of the design: a "pending" real-result status (match not finished/
+    not found yet) must NOT degrade to the price heuristic immediately --
+    it waits up to `_S1_REAL_RESULT_TIMEOUT_HOURS`, refreshing the price
+    heuristic input each cycle, before falling through."""
+    monkeypatch.setattr(
+        cycle, "_try_resolve_via_real_result",
+        lambda meta, now: {"status": "pending"},
+    )
+    w = cycle.get_or_create_wallet("s1-wallet-timeout")
+    meta = _s1_meta(last_leader_price=0.97)
+    bet = SimulatedBet.create(
+        bet_id="paper-strategy1-timeout", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs="[]", opened_at=cycle._now_iso(), total_staked=10.0,
+        expected_roi_pct=0.0, simulated_fill_json="", actual_filled_pct=0.0,
+        status="strategy1_awaiting_hedge",
+        resolution_meta=json.dumps(meta),
+    )
+    stats = {"strategy1_directional_resolved": 0, "strategy1_indeterminate": 0}
+
+    # First attempt: sets the timestamp, does NOT resolve yet (neither real
+    # result nor price heuristic).
+    cycle._resolve_strategy1_directional(bet, meta, w, stats)
+    assert bet.status == "strategy1_awaiting_hedge"
+    assert stats["strategy1_directional_resolved"] == 0
+    saved_meta = json.loads(bet.resolution_meta)
+    assert "real_result_attempt_started_at" in saved_meta
+
+    # Second attempt, still well within the timeout window -- keeps waiting.
+    cycle._resolve_strategy1_directional(bet, saved_meta, w, stats)
+    assert bet.status == "strategy1_awaiting_hedge"
+    assert stats["strategy1_directional_resolved"] == 0
+
+    # Simulate the timeout having elapsed by backdating the attempt start.
+    from datetime import datetime, timezone, timedelta
+    old_start = datetime.now(timezone.utc) - timedelta(hours=cycle._S1_REAL_RESULT_TIMEOUT_HOURS + 1)
+    saved_meta["real_result_attempt_started_at"] = old_start.isoformat()
+    cycle._resolve_strategy1_directional(bet, saved_meta, w, stats)
+    assert bet.status == "strategy1_resolved_directional_win"  # degraded to price heuristic (0.97 >= threshold)
+    final_meta = json.loads(bet.resolution_meta)
+    assert final_meta["resolved_via"] == "price_heuristic_win_unverified"
+    assert stats["strategy1_directional_resolved"] == 1
