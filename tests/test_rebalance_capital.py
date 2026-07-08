@@ -136,6 +136,40 @@ def test_manifold_excluded_from_real_money_rebalance(rebalance_env):
     )
 
 
+def test_manifold_excluded_from_idle_donor_pool(rebalance_env):
+    """Regresión específica (2026-07-08, hallazgo de auditoría verificado por
+    Sara): Manifold SIN scraper activo (no en cb._cb_book_metrics, por lo que
+    nunca entra a `active_slugs`) con un balance alto caía en el bucket de
+    'wallets ociosas' (`idle_balances`) del rebalanceo, porque ese loop solo
+    excluía slugs ya presentes en `balances` -- sin filtrar por _CBPLAT ni por
+    REAL_MONEY_PLATFORMS. Eso permitía que Manifold actuara como donante de
+    'capital real' en la pasada de déficit. Distinto del test de arriba
+    (`test_manifold_excluded_from_real_money_rebalance`), que cubre el path
+    con métricas activas (`active_slugs`) -- este cubre el path SIN métricas
+    (`idle_balances`), que era el que realmente tenía el agujero."""
+    Platform.create(slug="manifold", name="Manifold", is_active=True)
+    Wallet.create(platform="manifold", initial_balance=500.0, balance=500.0,
+                  equity=500.0, deposits=0.0, withdrawals=0.0)
+    # Deliberadamente SIN entrada en cb._cb_book_metrics -> nunca entra a
+    # active_slugs, cae directo al loop de "wallets ociosas".
+    state.wallets.clear()
+
+    reb.run_rebalance()
+
+    ledger_platforms = {
+        r.platform
+        for r in WalletLedger.select().where(WalletLedger.op_type == "rebalance_transfer")
+    }
+    assert "manifold" not in ledger_platforms, (
+        "Manifold (sin scraper activo) no debe entrar al pool de donantes ociosos "
+        "ni recibir/donar capital real en el rebalanceo"
+    )
+    manifold_wallet = wmod.get_wallet("manifold")
+    assert manifold_wallet.balance == 500.0, (
+        "el balance de Manifold no debe cambiar por el rebalanceo de capital real"
+    )
+
+
 def test_no_rebalance_when_paused_does_not_move_capital(rebalance_env):
     # Si ya está pausado y balanceado, no fuerza nada raro; pero el cooldown y
     # la pausa no deben crear/destruir capital. Forzamos cooldown activo.
