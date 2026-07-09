@@ -47,7 +47,7 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
     event = {
         "category": "football", "title": "Brazil vs Norway",
         "yes_price": 0.6, "no_price": 0.35, "clob_token_ids": [],
-        "platform": "polymarket",
+        "platform": "kalshi",
     }
 
     # The worker imports its collaborators lazily inside _run_once, so patch
@@ -86,4 +86,4 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
 
     # Regression: the event's platform must be threaded through to
     # propose_and_check_fillable so fee-netting isn't silently skipped.
-    assert mock_propose.call_args.kwargs["platform"] == "polymarket"
+    assert mock_propose.call_args.kwargs["platform"] == "kalshi"

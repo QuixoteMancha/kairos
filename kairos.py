@@ -31,16 +31,12 @@ Comandos principales:
   stop              → Detener
 
 Comandos utilitarios (no son el "programa principal"):
-  simulate          → Simulación con wallet virtual (testing/estrategia)
-  scan              → Escaneo manual one-shot
   status / history / pending / resolve
   scrape / players  → Pipelines de recolección de datos (pueden ser automatizados)
 
 Ejemplos:
   python kairos.py run
   python kairos.py run --interval 30 --auto-bet
-  python kairos.py simulate --balance 5000 --auto 10
-  python kairos.py scan
 """
 
 import argparse
@@ -54,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.core.logging_config import configure_logging
 configure_logging()
 
-from src.core.math.simulation import SimulationEngine, VirtualWallet
+from src.core.math.simulation import VirtualWallet
 
 # ============================================================================
 # HELPERS DE PRESENTACIÓN
@@ -106,67 +102,6 @@ def _print_pending(wallet: VirtualWallet):
 
 
 # ============================================================================
-# CMD: SCAN
-# ============================================================================
-
-def cmd_scan(min_roi: float = -1.0):
-    from src.core.math.arbitrage import scan_match_arb
-    from src.scrapers.stake_scraper import StakeScraper
-
-    print(f"\n  SCAN — cuotas en vivo de Stake\n  {'─'*58}")
-    with StakeScraper() as s:
-        fixtures = s.get_tennis_fixtures()
-    print(f"  {len(fixtures)} fixtures | {sum(len(f.markets) for f in fixtures)} mercados\n")
-
-    found_arbs = []
-    for fx in fixtures:
-        if not fx.markets:
-            continue
-        opps = scan_match_arb(fx.markets, min_roi=min_roi, verbose=False, include_stat=True)
-        for o in opps:
-            found_arbs.append((fx, o))
-
-    if found_arbs:
-        seen = set()
-        unique = []
-        for fx, o in sorted(found_arbs, key=lambda x: -x[1].roi):
-            k = (fx.fixture_id, o.descripcion)
-            if k not in seen:
-                seen.add(k)
-                unique.append((fx, o))
-        print(f"  ✓ {len(unique)} arb(s) únicos  ROI >= {min_roi*100:.1f}%:\n")
-        for fx, o in unique:
-            tipo_label = {'inside': 'INSIDE', 'cross': 'CROSS ', 'stat': 'STAT  '}.get(o.tipo, o.tipo)
-            print(f"  [{tipo_label}] ROI={o.roi*100:.2f}%  {fx.p1_name} vs {fx.p2_name}")
-            print(f"         {o.descripcion}")
-            for leg in o.legs:
-                m = leg['market']
-                side_str = 'P1/Over ' if leg['side'] == 'p1' else 'P2/Under'
-                print(f"         {m.label():36s}  {side_str}  @{leg['odd']:.2f}")
-            print()
-    else:
-        print(f"  ✗ Sin arbs activos con ROI >= {min_roi*100:.1f}%\n")
-
-    print(f"\n  TOP 10 mercados con menor sobreround:\n  {'─'*58}")
-    rows = []
-    for fx in fixtures:
-        for m in fx.markets:
-            or_ = (1/m.odd_p1 + 1/m.odd_p2) - 1
-            rows.append((fx, m, or_))
-    rows.sort(key=lambda x: x[2])
-    for fx, m, or_ in rows[:10]:
-        sign = "+" if or_ > 0 else ""
-        label = getattr(m, 'market_name', None) or m.tipo
-        if m.linea is not None:
-            label += f"({m.linea:+.1f})"
-        print(
-            f"  {sign}{or_*100:.3f}%  {fx.p1_name[:20]:<20} vs {fx.p2_name[:20]:<20}"
-            f"  {label:<32}  P1@{m.odd_p1:.2f}  P2@{m.odd_p2:.2f}"
-        )
-    print()
-
-
-# ============================================================================
 # CMD: DASHBOARD
 # ============================================================================
 
@@ -180,34 +115,6 @@ def cmd_dashboard(args):
         bet_pct=args.bet_pct,
         reload=args.reload,
     )
-
-
-# ============================================================================
-# CMD: SIMULATE
-# ============================================================================
-
-def cmd_simulate(args):
-    if args.reset:
-        wallet = VirtualWallet(initial_balance=args.balance)
-        wallet.save()
-        print(f"\n  ✓ Wallet reseteada con balance inicial ${args.balance:,.2f}")
-    else:
-        wallet = VirtualWallet.load_or_create(initial_balance=args.balance)
-        print("\n  ✓ Wallet cargada (SQLite)")
-
-    engine = SimulationEngine(
-        wallet=wallet,
-        max_bet_pct=args.bet_pct,
-        min_roi=args.min_roi,
-        include_stat=args.include_stat,
-    )
-
-    if args.auto > 0:
-        engine.run_continuous(rounds=args.auto, delay_sec=args.delay, mode='auto')
-    elif args.rounds > 1:
-        engine.run_continuous(rounds=args.rounds, delay_sec=args.delay, mode='interactive')
-    else:
-        engine.run_round(mode='interactive', verbose=True)
 
 
 # ============================================================================
@@ -432,8 +339,6 @@ def main():
 
     if args.cmd in ('run', 'dashboard'):
         cmd_dashboard(args)
-    elif args.cmd == 'simulate':  cmd_simulate(args)
-    elif args.cmd == 'scan':      cmd_scan(min_roi=args.min_roi)
     elif args.cmd == 'status':    cmd_status()
     elif args.cmd == 'history':   cmd_history(args.n)
     elif args.cmd == 'pending':   cmd_pending()

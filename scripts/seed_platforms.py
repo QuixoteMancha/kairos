@@ -11,13 +11,17 @@ from src.database.database import db, Platform as PlatformRow, Wallet as WalletR
 
 # Legacy sportsbook-style platforms were removed during the prediction-markets
 # pivot; the seed now only wires up the currently active prediction-market
-# platforms.
+# platform.
 PLATFORMS = [
     # slug               display_name         ptype         url
-    ("polymarket",      "Polymarket",        "prediction_market", "https://polymarket.com"),
     ("kalshi",          "Kalshi",            "prediction_market", "https://kalshi.com"),
 ]
-LEGACY_PLATFORM_SLUGS: set[str] = set()
+# Polymarket was removed from this project 2026-07-09 (unfillable limit
+# orders, apparent bot-driven queue-jumping on their book) — archived, not
+# deleted: its historical Platform row/Wallet balance/bet history are kept
+# for the record, just deactivated so it no longer shows as an active
+# tradable platform.
+LEGACY_PLATFORM_SLUGS: set[str] = {"polymarket"}
 
 created = 0
 for slug in LEGACY_PLATFORM_SLUGS:

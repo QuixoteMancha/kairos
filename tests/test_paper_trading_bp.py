@@ -38,7 +38,7 @@ def test_wallet_endpoint_splits_balance_by_platform_for_display(client):
     resp = client.get("/api/paper/wallet")
     data = resp.get_json()
     by_platform = data["by_platform"]
-    assert set(by_platform.keys()) == {"polymarket", "kalshi"}
+    assert set(by_platform.keys()) == {"kalshi"}
     total = sum(v["balance"] for v in by_platform.values())
     assert total == pytest.approx(200.0, abs=0.01)
     for v in by_platform.values():
@@ -121,8 +121,8 @@ def test_bets_endpoint_returns_resolution_meta_and_fill_json(client):
         status="settled_win", opened_at="2026-07-08T00:00:00",
         resolution_meta=json.dumps({"title": "Team X vs Team Y"}),
         simulated_fill_json=json.dumps({"legs": [
-            {"platform": "polymarket", "leg_side": "yes", "avg_fill_price": 0.42, "filled_usd": 5.0, "fill_pct": 100.0},
-            {"platform": "polymarket", "leg_side": "no", "avg_fill_price": 0.55, "filled_usd": 5.0, "fill_pct": 100.0},
+            {"platform": "kalshi", "leg_side": "yes", "avg_fill_price": 0.42, "filled_usd": 5.0, "fill_pct": 100.0},
+            {"platform": "kalshi", "leg_side": "no", "avg_fill_price": 0.55, "filled_usd": 5.0, "fill_pct": 100.0},
         ]}),
     )
     r = client.get("/api/paper/bets?limit=10&page=1")
@@ -130,4 +130,4 @@ def test_bets_endpoint_returns_resolution_meta_and_fill_json(client):
     assert json.loads(bet["resolution_meta"])["title"] == "Team X vs Team Y"
     fill = json.loads(bet["simulated_fill_json"])
     assert len(fill["legs"]) == 2
-    assert fill["legs"][0]["platform"] == "polymarket"
+    assert fill["legs"][0]["platform"] == "kalshi"

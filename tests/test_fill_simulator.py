@@ -1,7 +1,10 @@
-"""Tests for src.core.orchestration.fill_simulator (read-only, no order execution)."""
-from unittest.mock import MagicMock
+"""Tests for src.core.orchestration.fill_simulator (read-only, no order execution).
 
-from src.core.orchestration.fill_simulator import simulate_arb_legs, simulate_limit_fill
+`simulate_arb_legs()` (Polymarket-only) was removed along with Polymarket
+from this project 2026-07-09 — `simulate_limit_fill()` is the generic
+walk-the-book primitive still used by paper_fill_engine.py's Kalshi
+simulation."""
+from src.core.orchestration.fill_simulator import simulate_limit_fill
 
 
 def test_full_fill_when_depth_covers_capital():
@@ -37,39 +40,3 @@ def test_only_qualifying_levels_count():
     sim = simulate_limit_fill(asks, target_price=0.50, capital_usd=1000.0, side="buy")
     assert sim["filled_usd"] == 50.0  # only the 0.50 level (100 * 0.50)
     assert sim["depth_exhausted"] is True
-
-
-def test_simulate_arb_legs_no_polymarket_leg_returns_empty():
-    arb = {"fixture": "x", "legs": [
-        {"side": "yes", "book": "kalshi", "odd": 2.0},
-        {"side": "no", "book": "legacy_amm", "odd": 1.8},
-    ]}
-    assert simulate_arb_legs(arb) == []
-
-
-def test_simulate_arb_legs_missing_token_id_skips_leg():
-    arb = {"fixture": "x", "legs": [
-        {"side": "yes", "book": "polymarket", "odd": 2.0, "polymarket_token_id": None},
-        {"side": "no", "book": "kalshi", "odd": 1.8},
-    ]}
-    assert simulate_arb_legs(arb) == []
-
-
-def test_simulate_arb_legs_with_polymarket_token_uses_injected_client():
-    mock_client = MagicMock()
-    mock_client.get_order_book.return_value = {
-        "asks": [(0.40, 1000.0)], "bids": [],
-    }
-    arb = {"fixture": "Will X happen", "legs": [
-        {"side": "yes", "book": "polymarket", "odd": 2.5, "polymarket_token_id": "tok123"},
-        {"side": "no", "book": "kalshi", "odd": 1.8},
-    ]}
-    results = simulate_arb_legs(arb, capital_tiers=[50.0, 1000.0], _client=mock_client)
-
-    mock_client.get_order_book.assert_called_once_with("tok123")
-    assert len(results) == 2  # one per capital tier, only for the polymarket leg
-    assert all(r["platform"] == "polymarket" and r["leg_side"] == "yes" for r in results)
-    small = next(r for r in results if r["requested_usd"] == 50.0)
-    big = next(r for r in results if r["requested_usd"] == 1000.0)
-    assert small["classification"] == "full_fill"
-    assert big["classification"] in ("depth_limited_partial", "depth_limited_none")

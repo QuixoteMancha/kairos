@@ -62,12 +62,12 @@ def test_recent_bet_is_skipped():
     from src.core.orchestration.wallet import get_wallet
     now_iso = datetime.now().isoformat()
     _make_arb_legs("cb_recent01", "Player One vs Player Two",
-                    [("polymarket", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], ts=now_iso)
+                    [("stake", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], ts=now_iso)
     with patch("src.scrapers.flashscore_scraper.find_match_result") as _fs:
         settled = st._settle_cross_book_bets_by_score(min_hours_past=3.0)
     assert [s for s in settled if s.startswith("cb_recent01")] == []
     _fs.assert_not_called()
-    bet = next(b for b in get_wallet("polymarket").bets if b.bet_id == "cb_recent01_pol_p1")
+    bet = next(b for b in get_wallet("stake").bets if b.bet_id == "cb_recent01_sta_p1")
     assert bet.status == "pending"
 
 
@@ -75,13 +75,13 @@ def test_falls_back_to_flashscore_for_tennis_when_sofascore_misses():
     """Sofascore (stub) no encuentra nada → Flashscore decide el ganador."""
     from src.core.orchestration.wallet import get_wallet
     _make_arb_legs("cb_itf01", "John Smith vs Carlos Diaz",
-                    [("polymarket", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], sport="tennis")
+                    [("stake", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], sport="tennis")
     with patch("src.scrapers.flashscore_scraper.find_match_result",
                return_value={"resultado": "2-0"}) as _fs:
         settled = st._settle_cross_book_bets_by_score(min_hours_past=0.0)
     _fs.assert_called()
     assert len([s for s in settled if s.startswith("cb_itf01")]) == 2
-    pin = next(b for b in get_wallet("polymarket").bets if b.bet_id == "cb_itf01_pol_p1")
+    pin = next(b for b in get_wallet("stake").bets if b.bet_id == "cb_itf01_sta_p1")
     uni = next(b for b in get_wallet("kalshi").bets if b.bet_id == "cb_itf01_kal_p2")
     assert pin.status == "won" and pin.pnl > 0
     assert uni.status == "lost" and uni.pnl < 0
@@ -91,13 +91,13 @@ def test_falls_back_to_flashscore_for_team_sport():
     """Liga menor de fútbol no vista por Kambi → Flashscore por equipo resuelve."""
     from src.core.orchestration.wallet import get_wallet
     _make_arb_legs("cb_minor01", "Legia Warszawa vs Zielona Gora",
-                    [("polymarket", "draw", 3.2, 4.0), ("kalshi", "p2", 4.5, 4.0)], sport="football")
+                    [("stake", "draw", 3.2, 4.0), ("kalshi", "p2", 4.5, 4.0)], sport="football")
     with patch("src.scrapers.flashscore_scraper.find_team_match_result",
                return_value={"resultado": "1-1", "winner": "draw"}) as _fs:
         settled = st._settle_cross_book_bets_by_score(min_hours_past=0.0)
     _fs.assert_called()
     assert len([s for s in settled if s.startswith("cb_minor01")]) == 2
-    draw_bet = next(b for b in get_wallet("polymarket").bets if b.bet_id == "cb_minor01_pol_draw")
+    draw_bet = next(b for b in get_wallet("stake").bets if b.bet_id == "cb_minor01_sta_draw")
     p2_bet = next(b for b in get_wallet("kalshi").bets if b.bet_id == "cb_minor01_kal_p2")
     assert draw_bet.status == "won"
     assert p2_bet.status == "lost"
@@ -107,12 +107,12 @@ def test_no_source_resolves_stays_pending():
     """Ni Sofascore ni Flashscore encuentran el partido → sigue pending (se reintenta en 8h)."""
     from src.core.orchestration.wallet import get_wallet
     _make_arb_legs("cb_unknown01", "Obscure United vs Faraway FC",
-                    [("polymarket", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], sport="football")
+                    [("stake", "p1", 1.9, 5.0), ("kalshi", "p2", 2.1, 5.0)], sport="football")
     with patch("src.scrapers.flashscore_scraper.find_team_match_result", return_value=None) as _fs:
         settled = st._settle_cross_book_bets_by_score(min_hours_past=0.0)
     _fs.assert_called()
     assert [s for s in settled if s.startswith("cb_unknown01")] == []
-    bet = next(b for b in get_wallet("polymarket").bets if b.bet_id == "cb_unknown01_pol_p1")
+    bet = next(b for b in get_wallet("stake").bets if b.bet_id == "cb_unknown01_sta_p1")
     assert bet.status == "pending"
 
 
@@ -120,7 +120,7 @@ def test_sofascore_match_takes_priority_over_flashscore():
     """Si Sofascore SÍ encuentra el partido, no debe consultarse Flashscore."""
     from src.core.orchestration.wallet import get_wallet
     _make_arb_legs("cb_sofa01", "Real Strong vs Weak FC",
-                    [("polymarket", "p1", 1.5, 5.0), ("kalshi", "p2", 3.0, 5.0)], sport="football")
+                    [("stake", "p1", 1.5, 5.0), ("kalshi", "p2", 3.0, 5.0)], sport="football")
     with patch("src.scrapers.sofascore_scraper.SofascoreScraper") as _SofaCls, \
          patch("src.scrapers.flashscore_scraper.find_team_match_result") as _fs:
         _inst = _SofaCls.return_value.__enter__.return_value
@@ -128,7 +128,7 @@ def test_sofascore_match_takes_priority_over_flashscore():
         settled = st._settle_cross_book_bets_by_score(min_hours_past=0.0)
     _fs.assert_not_called()
     assert len([s for s in settled if s.startswith("cb_sofa01")]) == 2
-    pin = next(b for b in get_wallet("polymarket").bets if b.bet_id == "cb_sofa01_pol_p1")
+    pin = next(b for b in get_wallet("stake").bets if b.bet_id == "cb_sofa01_sta_p1")
     assert pin.status == "won"
 
 
@@ -136,17 +136,17 @@ def test_stat_and_kambi_tipos_not_touched():
     """arb_tipo='stat' o no cross-book no debe ser tocado por esta función."""
     from src.core.math.simulation import SimBet, BetLeg
     from src.core.orchestration.wallet import get_wallet
-    w = get_wallet("polymarket")
+    w = get_wallet("stake")
     bet = SimBet(
         bet_id="stat_untouched_01", timestamp="2026-06-10T12:00:00",
         fixture_name="Some Team vs Other Team", arb_tipo="stat",
         arb_descripcion="t", total_staked=5.0, guaranteed_return=10.0,
         roi=0.03, legs=[BetLeg(market_label="p1@2.0", side="p1", odd=2.0, stake=5.0,
                                 expected_return=10.0)],
-        platform="polymarket", sport="football",
+        platform="stake", sport="football",
     )
     w.bets.append(bet)
     with patch("src.scrapers.flashscore_scraper.find_team_match_result") as _fs:
         st._settle_cross_book_bets_by_score(min_hours_past=0.0)
     _fs.assert_not_called()
-    assert next(b for b in get_wallet("polymarket").bets if b.bet_id == "stat_untouched_01").status == "pending"
+    assert next(b for b in get_wallet("stake").bets if b.bet_id == "stat_untouched_01").status == "pending"

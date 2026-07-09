@@ -70,21 +70,31 @@ def _sum_wallets_from_db_reload() -> float:
     return round(total, 2)
 
 
-def test_rebalance_runs_and_moves_capital(rebalance_env):
-    total_before = round(100.0 + 2.0, 2)
+def test_rebalance_is_noop_with_single_real_money_platform(rebalance_env):
+    """POLICY (2026-07-09): Polymarket was removed from this project, leaving
+    Kalshi as the ONLY real-money platform (REAL_MONEY_PLATFORMS = {"kalshi"}).
+    Rebalancing capital structurally requires >= 2 real-money platforms to
+    move money between (see run_rebalance's `len(active_slugs) < 2` guard) —
+    with a single one, it must always be a documented no-op, not a bug. The
+    early-return no-op path never populates `state.wallets`, so check the DB
+    row directly instead."""
     did = reb.run_rebalance()
-    assert did is True, "debería ejecutar al menos una transferencia (pinnacle deficitario)"
-    # pinnacle recibió capital → ya no está en ~2
-    assert state.wallets["kalshi"].balance > 2.0
+    assert did is False, "no debería haber transferencia posible con una sola plataforma real-money"
+    assert Wallet.get(Wallet.platform == "kalshi").balance == 2.0
 
 
 def test_capital_conserved_in_memory(rebalance_env):
+    """With only one real-money platform, run_rebalance() is a documented
+    no-op (see test_rebalance_is_noop_with_single_real_money_platform) and
+    never populates `state.wallets` — assert capital conservation via the DB
+    reload path instead, same as test_capital_conserved_after_reload."""
     total_before = round(100.0 + 2.0, 2)
     reb.run_rebalance()
-    total_after = _sum_wallets_in_memory()
+    total_after = _sum_wallets_from_db_reload()
     assert total_after == total_before, (
         f"capital no conservado: {total_before} → {total_after}"
     )
+
 
 
 def test_capital_conserved_after_reload(rebalance_env):

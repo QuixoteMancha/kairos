@@ -1,7 +1,7 @@
 """
 test_scan_match_arb_sport.py — bug multi-deporte: ArbScanner.sport defaulteaba
 a 'football' y scan_match_arb (el unico entry point publico, usado solo por
-callers tennis: wallet_bets.py, hedge_routes.py, simulation_engine.py) no
+callers tennis: wallet_bets.py, hedge_routes.py) no
 tenia parametro sport -- las 5 estrategias cross-arb especificas de tenis
 (if self.sport == "tennis": ...) nunca se ejecutaban en produccion.
 """

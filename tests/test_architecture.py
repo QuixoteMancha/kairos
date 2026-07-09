@@ -36,7 +36,6 @@ NEW_STRUCTURE_MODULES = [
     "src.core.orchestration.live_monitor",
     "src.core.orchestration.workers",
     "src.core.math.simulation",
-    "src.core.math.simulation_engine",
     "src.core.math.arbitrage",
     "src.core.math.elo",
     "src.core.math.hedge",

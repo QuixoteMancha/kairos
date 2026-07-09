@@ -55,9 +55,10 @@ def test_norm_cross_book_matching_via_frozenset():
 
 def test_default_platforms_are_prediction_markets():
     # Sports bookies (stake/pinnacle/unibet/...) were archived during the
-    # prediction-markets pivot (2026-07-03); the pool is now prediction-market
-    # platforms only.
-    assert set(_CROSS_BOOK_PLATFORMS) == {"polymarket", "kalshi"}
+    # prediction-markets pivot (2026-07-03); Polymarket was removed entirely
+    # 2026-07-09 (unfillable limit orders, apparent bot-driven queue-jumping
+    # on their book) — the pool is now Kalshi only.
+    assert set(_CROSS_BOOK_PLATFORMS) == {"kalshi"}
 
 
 # ── _fetch_book_fixtures ──────────────────────────────────────────────────────

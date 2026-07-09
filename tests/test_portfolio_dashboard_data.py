@@ -227,23 +227,6 @@ def test_platforms_lists_all_seeded(client):
     assert stake["balance"] == 300.0
 
 
-@pytest.mark.skip(
-    reason="Tested Kambi-family slug aliasing (ubse->unibet) which was removed "
-    "from _BOOK_NAME_MAP with the sports bookies during the prediction-markets "
-    "pivot (2026-07-03) — polymarket/kalshi/legacy archived platforms have no aliases, so this "
-    "dedup scenario no longer applies."
-)
-def test_platforms_dedup_normalized_slug(client):
-    """Wallets con slugs alias (ubse → unibet) se agrupan en una sola card."""
-    # 'ubse' normaliza a 'unibet'; su balance debe sumarse a la card unibet.
-    Wallet.create(platform="ubse", initial_balance=25.0, balance=25.0,
-                  equity=25.0, deposits=25.0, withdrawals=0.0)
-    j = client.get("/api/wallet/platforms").get_json()
-    unibet_cards = [p for p in j["platforms"] if p["slug"] == "unibet"]
-    assert len(unibet_cards) == 1  # no duplicado
-    assert unibet_cards[0]["balance"] == 125.0  # 100 + 25
-
-
 def test_platforms_equity_includes_pending(client):
     """El equity por plataforma incluye el stake pendiente de esa casa."""
     _bet("p1", "pinnacle", "pending", 60.0)
