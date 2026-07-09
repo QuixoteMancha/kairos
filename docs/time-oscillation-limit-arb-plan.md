@@ -49,7 +49,7 @@ dwell-time.** Reasons:
 | `platform_fees.leg_fee_pct()` | `src/core/orchestration/platform_fees.py` | Reuse AS-IS for net-edge calculation. |
 | `DwellTimeProposal` model + `find_dwell_time_liquidity_overlaps()` | `src/database/models/domain.py`, `scanning.py` | Reuse pattern, NOT the same table (see Phase 4) — same shape of "read-only proposal row" + "cross-strategy overlap detector", needs its own table and its own overlap detector generalized to N strategies. |
 | `run_dwell_time_strategy_worker()` loop shape | `workers.py:456` | Reuse the loop skeleton (poll events, build context, call proposer, persist, sleep) for the new worker. |
-| Polymarket `/prices-history` endpoint | confirmed public, no client wiring yet | NEW: needs a client method (Phase 1). Kalshi/Manifold equivalents unconfirmed — treat as "Polymarket only" until Priya confirms others. |
+| Polymarket `/prices-history` endpoint | confirmed public, no client wiring yet | NEW: needs a client method (Phase 1). Kalshi/legacy archived-platform equivalents unconfirmed — treat as "Polymarket only" until Priya confirms others. |
 
 ## 3. Phased plan
 
@@ -178,7 +178,7 @@ Mitigation to design in Phase 2/3, not deferred:
 3. **Volatility lookback window / regime choice (Phase 1)** — a genuine
    calibration decision, not something to hardcode unilaterally; route
    through Vesper before trusting any live output.
-4. **Kalshi/Manifold price-history support** — unconfirmed whether
+4. **Kalshi/legacy archived-platform price-history support** — unconfirmed whether
    equivalent endpoints exist publicly; until Priya confirms, this strategy
    should be scoped Polymarket-only. Confirm before Phase 1 assumes
    multi-platform.

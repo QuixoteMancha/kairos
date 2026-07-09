@@ -10,7 +10,7 @@ import pytest
 
 pytestmark = pytest.mark.skip(
     reason="Team ELO ratings (ClubElo/nflverse/NHL) fed sports value-betting "
-    "models with no prediction-market equivalent — Polymarket/Kalshi/Manifold "
+    "models with no prediction-market equivalent — Polymarket/Kalshi/legacy archived platforms "
     "resolve via API/oracle status, not team strength ratings. Archived "
     "during the prediction-markets pivot (2026-07-03) along with the "
     "underlying sports bookies (src/scrapers/forgotten/)."

@@ -7,7 +7,16 @@ mocking each platform's fetch function so no network calls happen.
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from src.core.orchestration import scanning
+
+
+@pytest.fixture(autouse=True)
+def _disable_football_fetchers():
+    with patch("src.core.orchestration.scanning._fetch_polymarket_3way_football_events", return_value=[]), \
+         patch("src.core.orchestration.scanning._fetch_kalshi_3way_football_events", return_value=[]):
+        yield
 
 
 def _iso(dt):
@@ -61,7 +70,7 @@ def test_cross_platform_arb_detected_with_price_divergence():
             "resolution_date": _iso(resolution + timedelta(minutes=5)), "yes_price": 0.40, "no_price": 0.60,
         },
         {
-            "category": "politics", "external_id": "manifold:999", "platform": "manifold",
+            "category": "politics", "external_id": "legacy_virtual:999", "platform": "legacy_virtual",
             "title": "Candidate A wins special election",
             "resolution_date": _iso(resolution - timedelta(minutes=10)), "yes_price": 0.50, "no_price": 0.50,
         },
@@ -121,9 +130,7 @@ def test_fetch_includes_crypto_5m_and_15m_events_with_distinct_categories():
          patch("src.core.orchestration.polymarket_scan.scan_polymarket_finite_events", return_value={"markets": []}), \
          patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_5m", return_value=crypto_5m_payload), \
          patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_15m", return_value=crypto_15m_payload), \
-         patch("src.scrapers.manifold_client.ManifoldClient") as MockManifold, \
          patch("src.scrapers.kalshi_client.KalshiClient") as MockKalshi:
-        MockManifold.return_value.__enter__.return_value.get_finite_events.return_value = []
         MockKalshi.return_value.__enter__.return_value.get_markets.return_value = []
 
         events = scanning._fetch_prediction_market_events()
@@ -182,21 +189,17 @@ def test_refresh_prediction_market_arbs_in_cache_replaces_only_pm_arbs():
 
 
 def test_fetch_skips_platform_on_error_but_keeps_others():
-    with patch("src.core.orchestration.polymarket_scan.scan_polymarket_finite_events", side_effect=RuntimeError("boom")), \
+    with patch("src.core.orchestration.polymarket_scan.scan_polymarket_finite_events", return_value={"markets": [{
+        "condition_id": "pm:1", "question": "Will it snow", "end_date": _iso(datetime.now(timezone.utc) + timedelta(hours=1)),
+        "yes_price": 0.6, "no_price": 0.4,
+    }]}), \
          patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_5m", return_value={"markets": []}), \
          patch("src.core.orchestration.polymarket_scan.scan_polymarket_crypto_15m", return_value={"markets": []}), \
-         patch("src.scrapers.manifold_client.ManifoldClient") as MockManifold, \
-         patch("src.scrapers.kalshi_client.KalshiClient") as MockKalshi:
-        MockManifold.return_value.__enter__.return_value.get_finite_events.return_value = [{
-            "category": "climate", "external_id": "manifold:1", "resolution_date": datetime.now(timezone.utc),
-            "title": "Will it snow", "_probability": 0.2,
-        }]
-        MockKalshi.return_value.__enter__.return_value.get_markets.return_value = []
-
+         patch("src.scrapers.kalshi_client.KalshiClient", side_effect=RuntimeError("boom")):
         events = scanning._fetch_prediction_market_events()
 
     assert len(events) == 1
-    assert events[0]["platform"] == "manifold"
+    assert events[0]["platform"] == "polymarket"
 
 
 def test_arb_profitable_gross_but_unprofitable_net_of_fees_is_discarded():
@@ -257,24 +260,24 @@ def test_arb_still_profitable_net_of_fees_is_kept():
     assert arb["fee_cost_pct"] >= 0
 
 
-def test_manifold_vs_real_money_arb_is_rejected():
-    """Manifold uses mana (virtual, non-withdrawable) — even a wide price
-    divergence between Manifold and a real-money platform is not a genuine
-    capital-hedged arb, since a Manifold "win" can't offset a real loss on
-    Polymarket/Kalshi. Only manifold+polymarket available here (no kalshi),
-    so the best legs are forced onto the manifold/polymarket pair."""
+def test_legacy_non_real_money_vs_real_money_arb_is_rejected():
+    """Legacy virtual platforms use non-withdrawable credits — even a wide price
+    divergence between that legacy platform and a real-money platform is not a
+    genuine capital-hedged arb, since a virtual win can't offset a real loss on
+    Polymarket/Kalshi. Only legacy_virtual+polymarket is available here (no kalshi),
+    so the best legs are forced onto the legacy_virtual/polymarket pair."""
     now = datetime.now(timezone.utc)
     resolution = now + timedelta(hours=6)
     events = [
         {
-            "category": "crypto", "external_id": "manifold:btc-100k", "platform": "manifold",
+            "category": "crypto", "external_id": "legacy_virtual:btc-100k", "platform": "legacy_virtual",
             "title": "Will BTC exceed 100k by Friday",
             "resolution_date": _iso(resolution), "yes_price": 0.20, "no_price": 0.75,
         },
         {
             # yes+no sums to 1.01 (>=0.999) so polymarket's OWN market has no
-            # internal same-market arb either — manifold is excluded from
-            # same-market arb entirely (mana), regardless of its own prices.
+            # internal same-market arb either — legacy_virtual is excluded from
+            # same-market arb entirely (non-real-money), regardless of its own prices.
             "category": "crypto", "external_id": "polymarket:btc-100k", "platform": "polymarket",
             "title": "Will BTC exceed 100k by Friday?",
             "resolution_date": _iso(resolution + timedelta(minutes=3)), "yes_price": 0.70, "no_price": 0.31,

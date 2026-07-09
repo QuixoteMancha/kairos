@@ -9,19 +9,24 @@ sys.path.insert(0, "/app")
 # Bootstrap DB
 from src.database.database import db, Platform as PlatformRow, Wallet as WalletRow
 
-# Sports bookies (pinnacle/unibet/comeon/stake/betsson/nordicbet/coolbet/
-# marathonbet/1xbet/winamax/betano/smarkets/xbet) were removed from this seed
-# during the prediction-markets pivot (2026-07-03) — their simulated capital
-# was purged from platform/wallet and related tables in production. Kairos
-# now seeds only prediction-market platforms.
+# Legacy sportsbook-style platforms were removed during the prediction-markets
+# pivot; the seed now only wires up the currently active prediction-market
+# platforms.
 PLATFORMS = [
     # slug               display_name         ptype         url
     ("polymarket",      "Polymarket",        "prediction_market", "https://polymarket.com"),
     ("kalshi",          "Kalshi",            "prediction_market", "https://kalshi.com"),
-    ("manifold",        "Manifold",          "prediction_market", "https://manifold.markets"),
 ]
+LEGACY_PLATFORM_SLUGS: set[str] = set()
 
 created = 0
+for slug in LEGACY_PLATFORM_SLUGS:
+    legacy_row = PlatformRow.get_or_none(slug=slug)
+    if legacy_row is not None and legacy_row.is_active:
+        legacy_row.is_active = False
+        legacy_row.save()
+        print(f"  . Deactivated legacy platform: {slug}")
+
 for slug, name, ptype, url in PLATFORMS:
     row, was_created = PlatformRow.get_or_create(
         slug=slug,

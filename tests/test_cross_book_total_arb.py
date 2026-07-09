@@ -26,7 +26,7 @@ import pytest
 pytestmark = pytest.mark.skip(
     reason="Total/handicap market extraction is sports-bookie-specific "
     "(Stake/Pinnacle GraphQL/Guest API) with no prediction-market equivalent — "
-    "Polymarket/Kalshi/Manifold markets are binary yes/no, not total/handicap "
+    "Polymarket/Kalshi/legacy archived-platform markets are binary yes/no, not total/handicap "
     "lines. Archived during the prediction-markets pivot (2026-07-03) along "
     "with the underlying sports bookies (src/scrapers/forgotten/)."
 )

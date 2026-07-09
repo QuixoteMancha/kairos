@@ -22,7 +22,7 @@ from src.core.orchestration import cross_book_settle as cbs
 pytestmark = pytest.mark.skip(
     reason="Kambi live-score settlement is sports-bookie-specific infrastructure "
     "(unibet/betsson/coolbet/nordicbet/comeon CDN) with no prediction-market "
-    "equivalent — Polymarket/Kalshi/Manifold resolve via API/oracle status, not "
+    "equivalent — Polymarket/Kalshi/legacy archived platforms resolve via API/oracle status, not "
     "live match scores. Archived during the prediction-markets pivot (2026-07-03) "
     "along with the underlying sports bookies (src/scrapers/forgotten/)."
 )

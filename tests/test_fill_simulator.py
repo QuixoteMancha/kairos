@@ -42,7 +42,7 @@ def test_only_qualifying_levels_count():
 def test_simulate_arb_legs_no_polymarket_leg_returns_empty():
     arb = {"fixture": "x", "legs": [
         {"side": "yes", "book": "kalshi", "odd": 2.0},
-        {"side": "no", "book": "manifold", "odd": 1.8},
+        {"side": "no", "book": "legacy_amm", "odd": 1.8},
     ]}
     assert simulate_arb_legs(arb) == []
 

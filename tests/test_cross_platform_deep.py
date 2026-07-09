@@ -87,9 +87,10 @@ def test_missing_token_id_fails_closed():
 
 
 def test_no_polymarket_leg_no_client_needed():
-    # Both legs non-polymarket (e.g. kalshi vs manifold, hypothetically) —
-    # nothing to verify against a real book, both legs trusted as-is.
-    candidate = _candidate(yes_book="kalshi", no_book="manifold")
+    # Both legs non-polymarket (e.g. kalshi vs a legacy virtual platform,
+    # hypothetically) — nothing to verify against a real book, both legs
+    # trusted as-is.
+    candidate = _candidate(yes_book="kalshi", no_book="legacy_virtual")
     out = deep_verify_cross_platform_arbs([candidate])
     assert len(out) == 1
     assert out[0]["roi"] > 0

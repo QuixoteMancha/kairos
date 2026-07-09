@@ -110,15 +110,15 @@ def test_transfer_ledger_sums_to_zero(rebalance_env):
     assert round(net, 2) == 0.0, f"los asientos de transferencia no suman cero: {net}"
 
 
-def test_manifold_excluded_from_real_money_rebalance(rebalance_env):
-    """Manifold es 'mana' (dinero virtual no retirable) — nunca debe
-    participar como donor/recipient en el rebalanceo de capital REAL, aunque
-    esté activo, tenga wallet y métricas > 0 (regresión: antes _CBPLAT
-    incluía Manifold sin filtrar por REAL_MONEY_PLATFORMS)."""
-    Platform.create(slug="manifold", name="Manifold", is_active=True)
-    Wallet.create(platform="manifold", initial_balance=500.0, balance=500.0,
+def test_legacy_virtual_excluded_from_real_money_rebalance(rebalance_env):
+    """Una plataforma virtual legacy nunca debe participar como donor/recipient
+    en el rebalanceo de capital REAL, aunque esté activa, tenga wallet y
+    métricas > 0 (regresión: antes _CBPLAT incluía ese tipo de plataforma sin
+    filtrar por REAL_MONEY_PLATFORMS)."""
+    Platform.create(slug="legacy_virtual", name="Legacy Virtual", is_active=True)
+    Wallet.create(platform="legacy_virtual", initial_balance=500.0, balance=500.0,
                   equity=500.0, deposits=0.0, withdrawals=0.0)
-    cb._cb_book_metrics["manifold"] = {"last_count": 5}
+    cb._cb_book_metrics["legacy_virtual"] = {"last_count": 5}
     state.wallets.clear()
 
     reb.run_rebalance()
@@ -127,28 +127,29 @@ def test_manifold_excluded_from_real_money_rebalance(rebalance_env):
         r.platform
         for r in WalletLedger.select().where(WalletLedger.op_type == "rebalance_transfer")
     }
-    assert "manifold" not in ledger_platforms, (
-        "Manifold no debe recibir/donar capital real en el rebalanceo"
+    assert "legacy_virtual" not in ledger_platforms, (
+        "Una plataforma virtual legacy no debe recibir/donar capital real en el rebalanceo"
     )
-    manifold_wallet = wmod.get_wallet("manifold")
-    assert manifold_wallet.balance == 500.0, (
-        "el balance de Manifold no debe cambiar por el rebalanceo de capital real"
+    legacy_wallet = wmod.get_wallet("legacy_virtual")
+    assert legacy_wallet.balance == 500.0, (
+        "el balance de una plataforma virtual legacy no debe cambiar por el rebalanceo de capital real"
     )
 
 
-def test_manifold_excluded_from_idle_donor_pool(rebalance_env):
+def test_legacy_virtual_excluded_from_idle_donor_pool(rebalance_env):
     """Regresión específica (2026-07-08, hallazgo de auditoría verificado por
-    Sara): Manifold SIN scraper activo (no en cb._cb_book_metrics, por lo que
-    nunca entra a `active_slugs`) con un balance alto caía en el bucket de
-    'wallets ociosas' (`idle_balances`) del rebalanceo, porque ese loop solo
-    excluía slugs ya presentes en `balances` -- sin filtrar por _CBPLAT ni por
-    REAL_MONEY_PLATFORMS. Eso permitía que Manifold actuara como donante de
-    'capital real' en la pasada de déficit. Distinto del test de arriba
-    (`test_manifold_excluded_from_real_money_rebalance`), que cubre el path
-    con métricas activas (`active_slugs`) -- este cubre el path SIN métricas
-    (`idle_balances`), que era el que realmente tenía el agujero."""
-    Platform.create(slug="manifold", name="Manifold", is_active=True)
-    Wallet.create(platform="manifold", initial_balance=500.0, balance=500.0,
+    Sara): una plataforma virtual legacy SIN scraper activo (no en
+    cb._cb_book_metrics, por lo que nunca entra a `active_slugs`) con un
+    balance alto caía en el bucket de 'wallets ociosas' (`idle_balances`) del
+    rebalanceo, porque ese loop solo excluía slugs ya presentes en `balances`
+    -- sin filtrar por _CBPLAT ni por REAL_MONEY_PLATFORMS. Eso permitía que
+    esa plataforma actuara como donante de 'capital real' en la pasada de
+    déficit. Distinto del test de arriba
+    (`test_legacy_virtual_excluded_from_real_money_rebalance`), que cubre el
+    path con métricas activas (`active_slugs`) -- este cubre el path SIN
+    métricas (`idle_balances`), que era el que realmente tenía el agujero."""
+    Platform.create(slug="legacy_virtual", name="Legacy Virtual", is_active=True)
+    Wallet.create(platform="legacy_virtual", initial_balance=500.0, balance=500.0,
                   equity=500.0, deposits=0.0, withdrawals=0.0)
     # Deliberadamente SIN entrada en cb._cb_book_metrics -> nunca entra a
     # active_slugs, cae directo al loop de "wallets ociosas".
@@ -160,13 +161,13 @@ def test_manifold_excluded_from_idle_donor_pool(rebalance_env):
         r.platform
         for r in WalletLedger.select().where(WalletLedger.op_type == "rebalance_transfer")
     }
-    assert "manifold" not in ledger_platforms, (
-        "Manifold (sin scraper activo) no debe entrar al pool de donantes ociosos "
+    assert "legacy_virtual" not in ledger_platforms, (
+        "Una plataforma virtual legacy (sin scraper activo) no debe entrar al pool de donantes ociosos "
         "ni recibir/donar capital real en el rebalanceo"
     )
-    manifold_wallet = wmod.get_wallet("manifold")
-    assert manifold_wallet.balance == 500.0, (
-        "el balance de Manifold no debe cambiar por el rebalanceo de capital real"
+    legacy_wallet = wmod.get_wallet("legacy_virtual")
+    assert legacy_wallet.balance == 500.0, (
+        "el balance de una plataforma virtual legacy no debe cambiar por el rebalanceo de capital real"
     )
 
 

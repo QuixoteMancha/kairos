@@ -38,7 +38,7 @@ def test_wallet_endpoint_splits_balance_by_platform_for_display(client):
     resp = client.get("/api/paper/wallet")
     data = resp.get_json()
     by_platform = data["by_platform"]
-    assert set(by_platform.keys()) == {"polymarket", "kalshi", "manifold"}
+    assert set(by_platform.keys()) == {"polymarket", "kalshi"}
     total = sum(v["balance"] for v in by_platform.values())
     assert total == pytest.approx(200.0, abs=0.01)
     for v in by_platform.values():

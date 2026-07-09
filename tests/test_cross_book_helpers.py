@@ -57,7 +57,7 @@ def test_default_platforms_are_prediction_markets():
     # Sports bookies (stake/pinnacle/unibet/...) were archived during the
     # prediction-markets pivot (2026-07-03); the pool is now prediction-market
     # platforms only.
-    assert set(_CROSS_BOOK_PLATFORMS) == {"polymarket", "kalshi", "manifold"}
+    assert set(_CROSS_BOOK_PLATFORMS) == {"polymarket", "kalshi"}
 
 
 # ── _fetch_book_fixtures ──────────────────────────────────────────────────────

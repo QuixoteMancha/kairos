@@ -22,7 +22,7 @@ Autora: Nora (planificadora de roadmap). Reporta a Sara.
   se toma el número 102.7s documentado en memoria como dato válido, sin
   re-verificación propia.
 - No se investigaron APIs externas (Polymarket Liquidity Rewards, endpoints de
-  price-history de Kalshi/Manifold) más allá de lo ya documentado en memoria —
+  price-history de Kalshi/legacy archived platforms) más allá de lo ya documentado en memoria —
   quedan como estaban: "investigado previamente, no reconfirmado hoy".
 
 **Explícitamente fuera de este documento:**
@@ -177,7 +177,7 @@ Del documento `docs/time-oscillation-limit-arb-plan.md` sección 5:
    el documento ya recomienda "separada" con justificación técnica.
 3. Ventana de lookback / régimen de volatilidad — decisión de calibración, no de
    arquitectura, ruteada a Vesper antes de confiar en el output.
-4. Soporte de price-history en Kalshi/Manifold — sin confirmar; hasta que Priya
+4. Soporte de price-history en Kalshi/legacy archived platforms — sin confirmar; hasta que Priya
    lo confirme, alcance Polymarket-only.
 5. **Sistema de "claim" de capital compartido entre las 4 estrategias — la más
    crítica y la única que bloquea arquitectura, no solo alcance.** Hoy ninguna de
@@ -221,7 +221,7 @@ Del documento `docs/time-oscillation-limit-arb-plan.md` sección 5:
   como punto de partida.
 - **Riesgo de negocio, no técnico:** si D3 se resuelve como "cablear fuente real
   de fútbol", eso reabre la pregunta de si vale la pena el esfuerzo dado que
-  Kalshi/Manifold excluyen deportes por diseño (`football-arb-orphaned-by-
+  Kalshi/legacy archived platforms excluyen deportes por diseño (`football-arb-orphaned-by-
   design`, confirmado arquitectónico) — cablear una fuente nueva podría requerir
   un scraper adicional fuera del alcance de "solo prediction markets", lo cual
   podría chocar con el pivote irreversible ya confirmado (frente descartar

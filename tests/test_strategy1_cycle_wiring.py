@@ -45,7 +45,7 @@ def _event(ext_id="evt-1", yes_price=0.50, platform="polymarket", resolution_dat
            best_bid=None, best_ask=None, title=None):
     """NOTE: for platform="polymarket" with no best_bid/best_ask given, the
     naive yes_price/(1-yes_price) complement is used (same fallback the real
-    code uses for Kalshi/Manifold) — this is mathematically INCAPABLE of ever
+    code uses for Kalshi/legacy archived platforms) — this is mathematically INCAPABLE of ever
     producing a viable hedge (imp is always exactly 1.0 at any snapshot), so
     any test that needs a genuinely fillable hedge scenario MUST pass
     best_bid/best_ask explicitly to reflect a real (non-complementary) spread."""
@@ -148,7 +148,7 @@ def test_both_legs_cross_same_cycle_is_indeterminate():
 
 def test_naive_complement_fallback_can_never_produce_a_viable_hedge():
     """Documents the structural math fact (see _yes_no_ask docstring): with
-    no best_bid/best_ask (Kalshi/Manifold, or Polymarket without book data),
+    no best_bid/best_ask (Kalshi/legacy archived platforms, or Polymarket without book data),
     yes/no are always exactly complementary at any snapshot, so
     propose_hedge_order() can never find a viable price at the crossing
     instant. This is expected, not a bug — real arb windows need the actual

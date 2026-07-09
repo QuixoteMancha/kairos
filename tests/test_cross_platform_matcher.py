@@ -34,20 +34,20 @@ def test_match_events_groups_same_event_across_platforms():
     events = [
         _Ev("finance", "Will the Fed cut rates by 25bps in July?", base, "kalshi"),
         _Ev("finance", "Fed cuts rates 25bps in July", base + timedelta(hours=1), "polymarket"),
-        _Ev("finance", "Fed cuts rates 25 bps in July meeting", base + timedelta(hours=2), "manifold"),
+        _Ev("finance", "Fed cuts rates 25 bps in July meeting", base + timedelta(hours=2), "legacy_virtual"),
         _Ev("sports", "Lakers beat Celtics tonight?", base, "kalshi"),
     ]
     groups = match_events(events, title_threshold=0.6)
     cross = [g for g in groups if g.is_cross_platform]
     assert len(cross) == 1
-    assert cross[0].platforms == {"kalshi", "polymarket", "manifold"}
+    assert cross[0].platforms == {"kalshi", "polymarket", "legacy_virtual"}
 
 
 def test_match_events_respects_category_and_window():
     base = datetime(2026, 7, 3, 18, 0)
     events = [
         _Ev("finance", "Fed cuts rates 25bps", base, "kalshi"),
-        _Ev("finance", "Fed cuts rates 25bps", base + timedelta(hours=12), "manifold"),
+        _Ev("finance", "Fed cuts rates 25bps", base + timedelta(hours=12), "legacy_virtual"),
     ]
     groups = match_events(events)
     assert not any(g.is_cross_platform for g in groups)
@@ -121,7 +121,7 @@ def test_match_events_does_not_transitively_chain_unrelated_events():
     must not end up grouped together."""
     base = datetime(2026, 7, 3, 18, 0)
     a = _Ev("finance", "Will ETH be above $5k by Friday?", base, "kalshi")
-    b = _Ev("finance", "Will ETH price move by Friday?", base, "manifold")  # vague, no numbers -> matches both
+    b = _Ev("finance", "Will ETH price move by Friday?", base, "legacy_virtual")  # vague, no numbers -> matches both
     c = _Ev("finance", "Will ETH be above $8k by Friday?", base, "polymarket")
     groups = match_events([a, b, c], title_threshold=0.5)
 
@@ -205,7 +205,7 @@ def test_optimized_match_events_matches_reference_on_date_boundary_cases():
     events = [
         _Ev("finance", "Will BTC close above $90k today?", midnight - timedelta(hours=5, minutes=59), "kalshi"),
         _Ev("finance", "Will BTC close above $90k today?", midnight, "polymarket"),
-        _Ev("finance", "Will BTC close above $90k today?", midnight + timedelta(hours=5, minutes=59), "manifold"),
+        _Ev("finance", "Will BTC close above $90k today?", midnight + timedelta(hours=5, minutes=59), "legacy_virtual"),
         # Just OUTSIDE the window relative to the first event above (>6h away).
         _Ev("finance", "Will BTC close above $90k today?", midnight + timedelta(hours=6, minutes=1) + timedelta(hours=5, minutes=59), "kalshi"),
     ]
@@ -223,7 +223,7 @@ def test_optimized_match_events_matches_reference_random_dataset():
     rng = random.Random(1234)
     categories = ["finance", "politics", "climate", "sports"]
     base = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
-    platforms = ["kalshi", "polymarket", "manifold"]
+    platforms = ["kalshi", "polymarket", "legacy_virtual"]
 
     subjects = [
         "Will the Fed cut rates by {n}bps in {month}?",
@@ -266,7 +266,7 @@ def test_match_events_scales_to_large_single_category_volume():
 
     events = [_Ev("uncategorized", rand_title(), base, "kalshi") for _ in range(800)]
     events += [_Ev("finance", f"Will BTC hit ${rng.randint(50, 150)}k?", base, "polymarket") for _ in range(15)]
-    events += [_Ev("politics", f"Will candidate {i} win?", base, "manifold") for i in range(10)]
+    events += [_Ev("politics", f"Will candidate {i} win?", base, "legacy_virtual") for i in range(10)]
     rng.shuffle(events)
 
     t0 = time.time()

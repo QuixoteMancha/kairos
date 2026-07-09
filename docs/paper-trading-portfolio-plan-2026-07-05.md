@@ -12,14 +12,14 @@ Este documento es SOLO PLAN — no contiene código ni edita archivos existentes
 - `src/database/models/wallet.py` — modelos reales `Wallet`/`WalletBet`/`WalletBetLeg`/`WalletLedger`/`WalletDeposit`/`WalletWithdraw` (peewee, sqlite vía `db` en `src/database/database.py`). Confirmado: `Wallet.platform` default `'stake'` (el landmine documentado en memoria — cualquier tabla nueva de paper-trading NO debe repetir este patrón de default implícito).
 - `src/core/orchestration/portfolio.py` (316 líneas, completo) — `build_portfolio()`, `StrategyProfile`, Kelly fraccional (`KELLY_FRACTION=0.25`), `STRATEGY_BUCKET` mapea a `football_elo_value`/`nfl_elo_value`/`nhl_elo_value` (deportes, no prediction markets), `feasible_2pct`, persistencia vía `AppConfig` (JSON, key `strategy_portfolio_v1`).
 - `src/core/orchestration/strategy_allocator.py` (527 líneas, completo) — `StrategyAllocator.allocate()`, buckets `low_risk_arb`/`medium_value_stat`/`risk_managed_hedge`/`other`, `classify_opportunity()` clasifica por substring en `o["tipo"]` (`"arb"`, `"stat"`/`"model"`/`"value"`, `"hedge"`), EWMA de calidad realizada por bucket (`update_realized`), `SPORT_TO_STRATEGY` (deportes → estrategia de backtest), `_apply_portfolio()` filtra/pondera value-bets vía pesos del portfolio.
-- `src/core/orchestration/fill_simulator.py` (159 líneas, completo) — **acoplado a Polymarket únicamente**: `simulate_arb_legs()` filtra `leg.get("book") == "polymarket" and leg.get("polymarket_token_id")`, descarta explícitamente patas Kalshi/Manifold ("no known public order-book-depth endpoint wired into their clients yet — documented limitation"). `simulate_limit_fill()` (la función núcleo de walk-the-book) SÍ es genérica: recibe `book_side: list[tuple[price, size]]`, `target_price`, `capital_usd`, `side` — no conoce de estrategias ni de plataforma. Es reutilizable para las 4 estrategias siempre que se le pase el book real de cualquier plataforma en ese formato.
+- `src/core/orchestration/fill_simulator.py` (159 líneas, completo) — **acoplado a Polymarket únicamente**: `simulate_arb_legs()` filtra `leg.get("book") == "polymarket" and leg.get("polymarket_token_id")`, descarta explícitamente patas Kalshi/legacy archived platforms ("no known public order-book-depth endpoint wired into their clients yet — documented limitation"). `simulate_limit_fill()` (la función núcleo de walk-the-book) SÍ es genérica: recibe `book_side: list[tuple[price, size]]`, `target_price`, `capital_usd`, `side` — no conoce de estrategias ni de plataforma. Es reutilizable para las 4 estrategias siempre que se le pase el book real de cualquier plataforma en ese formato.
 - `src/web/blueprints/wallet.py` — rutas reales del wallet (`/api/wallet`, `/api/wallet/total`, `/api/wallet/stats`, `/api/wallet/platforms`, `/api/wallet/set-platform`) como referencia de patrón de blueprint a replicar para paper-trading.
 - `src/web/blueprints/prediction_markets_bp.py` — patrón de blueprint ya usado para endpoints de prediction markets (`/api/scan/prediction-markets/*`).
 - `frontend/src/pages/` — solo 3 páginas hoy (`DashboardPage.vue`, `PlayerPage.vue`, `AuditPage.vue`); `frontend/src/components/wallet/` tiene `WalletCard.vue`, `DepositModal.vue`, `WithdrawModal.vue` como referencia de componente a extender/clonar, no un `PortfolioPage` existente.
 - Confirmado por Read: no existe hoy ningún módulo `simulated_wallet.py`/`paper_trading.py` en el repo (grep sin resultados relevantes fuera de docs).
 
 **Asumido por falta de acceso/tiempo (marcado explícitamente, no verificado con código):**
-- Que Kalshi y Manifold exponen profundidad de book pública utilizable para fills simulados de Strategy 2/3/football — la memoria del proyecto (`kairos-strategy4-kalshi-manifold-data-research`) dice que existen endpoints de trade tick-level sin auth, pero no confirmé aquí si dan **profundidad de order book** (bids/asks con tamaño) o solo trades ejecutados. Esto es un riesgo de Fase 2, ver más abajo.
+- Que Kalshi y los platforms legacy archivados exponen profundidad de book pública utilizable para fills simulados de Strategy 2/3/football — la memoria del proyecto (`kairos-strategy4-kalshi-legacy-data-research`) dice que existen endpoints de trade tick-level sin auth, pero no confirmado aquí si dan **profundidad de order book** (bids/asks con tamaño) o solo trades ejecutados. Esto es un riesgo de Fase 2, ver más abajo.
 - Que la fórmula de sizing de Vesper (`docs/universal-limit-order-strategy-math-audit-2026-07-05.md`) definirá qué campos de fill necesita la Strategy 1 universal — no leí ese archivo (puede no existir aún, según el encargo).
 - Que "compounding agresivo" implica reinversión automática del balance simulado completo en cada ciclo (no un % fijo separado como reserva) — esto es justamente uno de los puntos de decisión abajo, no lo asumo resuelto.
 
@@ -77,7 +77,7 @@ bet_id               CharField PK
 wallet_id            FK → SimulatedWallet
 strategy             CharField          # una de las 4
 platform_legs        TextField (JSON)   # lista de plataformas reales involucradas
-                                          # (polymarket/kalshi/manifold) — NO "paper",
+                                          # (polymarket/kalshi/legacy archived platforms) — NO "paper",
                                           # eso es solo el wallet. Necesario para que
                                           # el reporting distinga "arb cross Polymarket-Kalshi"
                                           # vs "arb same-market Polymarket" etc.
@@ -105,12 +105,12 @@ resolution_meta       TextField, default=""
 
 ## 2. Motor de simulación de fills
 
-**Hallazgo clave:** `simulate_limit_fill()` (fill_simulator.py:24-83) es genérico y reutilizable tal cual para las 4 estrategias — solo necesita `book_side`, `target_price`, `capital_usd`, `side`. Pero `simulate_arb_legs()` (fill_simulator.py:94-159) SÍ está acoplado: hardcodea `leg.get("book") == "polymarket"` (línea 124) y usa `PolymarketClient().get_order_book(token_id)` (línea 140) como única fuente de book. Descarta Kalshi/Manifold explícitamente por falta de cliente con order-book-depth wireado.
+**Hallazgo clave:** `simulate_limit_fill()` (fill_simulator.py:24-83) es genérico y reutilizable tal cual para las 4 estrategias — solo necesita `book_side`, `target_price`, `capital_usd`, `side`. Pero `simulate_arb_legs()` (fill_simulator.py:94-159) SÍ está acoplado: hardcodea `leg.get("book") == "polymarket"` (línea 124) y usa `PolymarketClient().get_order_book(token_id)` (línea 140) como única fuente de book. Descarta Kalshi/legacy archived platforms explícitamente por falta de cliente con order-book-depth wireado.
 
 **Adaptación propuesta (no implementada aquí, solo especificada):**
 - Nueva función `simulate_arb_legs_multi_platform(arb, capital_tiers, clients={})` en un módulo nuevo `src/core/orchestration/paper_fill_engine.py` que:
   1. Reutiliza `simulate_limit_fill()` tal cual (sin tocarla).
-  2. Por cada pata del arb, despacha a un cliente de order-book según `leg["book"]`: Polymarket ya resuelto (usa el mismo `PolymarketClient.get_order_book`); Kalshi/Manifold requieren **primero confirmar si sus clientes actuales exponen bids/asks con tamaño** — esto es un riesgo de investigación, no asumido aquí (ver Riesgos).
+  2. Por cada pata del arb, despacha a un cliente de order-book según `leg["book"]`: Polymarket ya resuelto (usa el mismo `PolymarketClient.get_order_book`); Kalshi/legacy archived platforms requieren **primero confirmar si sus clientes actuales exponen bids/asks con tamaño** — esto es un riesgo de investigación, no asumido aquí (ver Riesgos).
   3. Para Strategy 1 universal (limit orders secuenciales), la simulación de fill debe ser **temporal, no solo de profundidad**: no alcanza con "¿hay suficiente tamaño al precio X?", hace falta simular si la orden se llenó **dentro de la ventana de dwell-time** antes de que el usuario cancele la que no llenó. `simulate_limit_fill()` no modela tiempo — esto es una extensión necesaria, candidata natural para que la diseñe Vesper junto con el sizing (mismo dominio matemático), o para una Fase 2b separada si Vesper no la cubre.
   4. Para Strategy 3 (same-market yes/no) y football 3-way, el fill se simula por N patas simultáneas de la MISMA plataforma — reutilizable con múltiples llamadas a `simulate_limit_fill()`, una por pata, sin necesitar lógica temporal (todas se colocan a la vez, no hay cancelación intermedia).
   5. Para Strategy 2 (cross-platform), reutilizable casi 1:1 con la lógica actual de `simulate_arb_legs()`, extendida a más de una plataforma con book real.
@@ -119,7 +119,7 @@ resolution_meta       TextField, default=""
 
 **Paralelizable:** la extensión de `simulate_arb_legs()` a multi-plataforma (adaptador nuevo, sin tocar el archivo existente) es paralelizable con la Fase 1 (esquema de datos). NO es paralelizable con la parte temporal de Strategy 1 — esa depende de que Vesper entregue su fórmula de sizing, porque el "tamaño objetivo de la 3ra pata de cobertura" determina qué `capital_usd` pasarle a `simulate_limit_fill` en ese caso.
 
-**Criterio de "terminado":** un test de integración corre `simulate_arb_legs_multi_platform` contra un arb sintético con patas en Polymarket+Kalshi (o el book real capturado en un fixture), y produce `fill_pct`/`avg_fill_price`/`classification` para cada pata sin lanzar excepción cuando falta el cliente de una plataforma (debe skipear documentando la limitación, igual que hoy hace con Kalshi/Manifold en el código real).
+**Criterio de "terminado":** un test de integración corre `simulate_arb_legs_multi_platform` contra un arb sintético con patas en Polymarket+Kalshi (o el book real capturado en un fixture), y produce `fill_pct`/`avg_fill_price`/`classification` para cada pata sin lanzar excepción cuando falta el cliente de una plataforma (debe skipear documentando la limitación, igual que hoy hace con Kalshi/legacy archived platforms en el código real).
 
 ---
 
@@ -150,7 +150,7 @@ resolution_meta       TextField, default=""
 | Fase | Qué construye | Depende de | Paralelizable con |
 |---|---|---|---|
 | **A. Esquema de datos** (`src/database/models/paper_wallet.py`) | `SimulatedWallet`/`SimulatedLedger`/`SimulatedBet`, migración/creación de tablas | Nada (solo este documento) | B, C — arranca YA |
-| **B. Motor de fills multi-plataforma** (`src/core/orchestration/paper_fill_engine.py`) | Adaptador que reusa `simulate_limit_fill` para Strategy 2/3/football; investiga si Kalshi/Manifold exponen order-book | Nada para 2/3/football. La parte temporal de Strategy 1 depende de Vesper | A, C (para 2/3/football) — NO para la parte de Strategy 1 |
+| **B. Motor de fills multi-plataforma** (`src/core/orchestration/paper_fill_engine.py`) | Adaptador que reusa `simulate_limit_fill` para Strategy 2/3/football; investiga si Kalshi/legacy archived platforms exponen order-book | Nada para 2/3/football. La parte temporal de Strategy 1 depende de Vesper | A, C (para 2/3/football) — NO para la parte de Strategy 1 |
 | **C. Paper-portfolio/allocator** (`src/core/orchestration/paper_portfolio.py`) | Agregación de `StrategyProfile` desde `SimulatedBet`, pesos diarios, target 2% | Esquema de A (para leer `SimulatedBet`), pero puede mockear datos mientras A se termina | A (en paralelo con datos sintéticos), B |
 | **D. Motor de ejecución de ciclo diario** (nuevo, ej. `src/core/orchestration/paper_trading_cycle.py`) | Orquesta: escanea oportunidades reales (reusa `scanning.py`/`cross_platform_deep.py`/`same_market_arb.py`/`football_3way_arb.py`), pide fill simulado a B, decide mezcla vía C, escribe A | A + B + C completas | No — es integración final, secuencial |
 | **E. Endpoints backend** (`src/web/blueprints/paper_trading_bp.py`) | `/api/paper/wallet`, `/api/paper/ledger?days=N`, `/api/paper/portfolio`, `/api/paper/bets` | A completa (lee de las tablas); puede stub-earse antes de D | C, D parcialmente |
@@ -175,7 +175,7 @@ resolution_meta       TextField, default=""
 
 **[DECISIÓN SARA #1] — ¿Tiempo real o backtest histórico?**
 ¿El paper-trading escanea eventos EN VIVO (mismo pipeline de `scanning.py` corriendo en tiempo real, con fills simulados contra el book real del momento) o corre un backtest contra datos históricos que el sistema ya capturó (logs de arbs detectados en rondas anteriores)?
-- Recomendación no vinculante: tiempo real. El pedido del usuario es "ver cómo compone" — un backtest sobre datos ya vistos no demuestra nada nuevo sobre el comportamiento futuro del sistema, y el motor de fills (sección 2) fue diseñado justamente para simular contra profundidad real actual, no reconstruible fácilmente en retrospectiva para Kalshi/Manifold (no hay snapshots históricos de su order book guardados, según lo investigado).
+- Recomendación no vinculante: tiempo real. El pedido del usuario es "ver cómo compone" — un backtest sobre datos ya vistos no demuestra nada nuevo sobre el comportamiento futuro del sistema, y el motor de fills (sección 2) fue diseñado justamente para simular contra profundidad real actual, no reconstruible fácilmente en retrospectiva para Kalshi/legacy archived platforms (no hay snapshots históricos de su order book guardados, según lo investigado).
 
 **[DECISIÓN SARA #2] — ¿Se resetea el paper-wallet al cambiar de estrategia?**
 Si se implementa un cambio en Strategy 1 (post-diseño de Vesper) o se ajusta el allocator, ¿el `SimulatedWallet` mantiene continuidad histórica (el compounding sigue desde donde estaba) o se resetea a 200 USDC para no contaminar la curva con reglas viejas?
@@ -189,15 +189,15 @@ Si se implementa un cambio en Strategy 1 (post-diseño de Vesper) o se ajusta el
 Sección 3 propuso tentativamente tratar Strategy 1 como `"medium_value_stat"` (riesgo intermedio, por el riesgo de no-fill de la 3ra pata) y Strategy 2/3/football como `"low_risk_arb"` puro. Esto no está confirmado — depende de qué tan predecible resulte el fill-rate de Strategy 1 una vez Vesper entregue la fórmula.
 - Recomendación no vinculante: mantenerlo abierto explícitamente hasta ver los primeros datos reales de fill-rate de Strategy 1 en paper — no fijar el bucket antes de tener evidencia.
 
-**[DECISIÓN SARA #5] — Umbral real de Kalshi/Manifold order-book depth (bloqueante de investigación, no de diseño).**
-No confirmé en esta pasada si los clientes actuales de Kalshi/Manifold exponen bids/asks con tamaño (solo confirmé que Polymarket sí, vía `fill_simulator.py`). Si no lo exponen, Strategy 2/3/football en paper-trading tendrían que simular fills solo para la pata Polymarket y asumir optimismo (o pesimismo conservador) en las patas Kalshi/Manifold — lo cual violaría el requisito de "no fills sintéticos optimistas" a medias.
+**[DECISIÓN SARA #5] — Umbral real de Kalshi/legacy archived platforms order-book depth (bloqueante de investigación, no de diseño).**
+No confirmé en esta pasada si los clientes actuales de Kalshi/legacy archived platforms exponen bids/asks con tamaño (solo confirmado que Polymarket sí, vía `fill_simulator.py`). Si no lo exponen, Strategy 2/3/football en paper-trading tendrían que simular fills solo para la pata Polymarket y asumir optimismo (o pesimismo conservador) en las patas Kalshi/legacy archived platforms — lo cual violaría el requisito de "no fills sintéticos optimistas" a medias.
 - Recomendación no vinculante: asignar esta verificación como primer sub-paso de la Fase B, antes de escribir el adaptador — es investigación de 30-60 min (grep en los clientes existentes + un fetch de prueba), no una decisión de diseño.
 
 ---
 
 ## 7. Riesgos conocidos
 
-- **Kalshi/Manifold order-book depth sin confirmar** (ver decisión #5) — riesgo de que el motor de fills termine siendo Polymarket-only en la práctica, lo cual limitaría fuertemente qué tan realista es el paper-trading de Strategy 2/football (que casi siempre tienen una pata no-Polymarket).
+- **Kalshi/legacy archived platforms order-book depth sin confirmar** (ver decisión #5) — riesgo de que el motor de fills termine siendo Polymarket-only en la práctica, lo cual limitaría fuertemente qué tan realista es el paper-trading de Strategy 2/football (que casi siempre tienen una pata no-Polymarket).
 - **Strategy 1 universal es un hueco de diseño en paralelo** — cualquier fecha de "Fase D completa" depende de un entregable externo (Vesper) fuera del control de esta planificación; si Vesper tarda, Fases A/B(parcial)/C/E pueden avanzar igual con Strategy 2/3/football solamente, mostrando compounding con 3 de 4 estrategias.
 - **`_EST_DAILY_BETS` (portfolio.py:240-245) es un placeholder calibrado para deportes** — reemplazarlo con datos reales de volumen de arb detectado requiere agregar telemetría existente (logs de scan) que no confirmé que esté en un formato fácilmente consultable; podría necesitar una sub-tarea de ETL antes de que `_estimate_daily_roi` sea confiable para prediction markets.
 - **Ubicación del router de Vue no confirmada** — no leí el archivo de configuración de rutas del frontend en esta pasada; la Fase F necesita ese archivo identificado antes de crear `PaperTradingPage.vue`.

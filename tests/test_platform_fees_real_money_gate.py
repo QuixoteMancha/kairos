@@ -2,10 +2,10 @@
 test_platform_fees_real_money_gate.py — fail-closed invariant for is_real_money_arb().
 
 Regression guard: is_real_money_arb() used to fail-OPEN — if both legs were
-unknown/unregistered platforms (not just Manifold), it incorrectly returned
-True, letting the caller (scanning.py cross-platform hedge check) treat an
-unhedgeable arb as capital-hedged. The gate must be fail-closed: True only
-when BOTH legs are explicitly in REAL_MONEY_PLATFORMS.
+unknown/unregistered platforms (not just a legacy non-real-money platform),
+it incorrectly returned True, letting the caller (scanning.py cross-platform
+hedge check) treat an unhedgeable arb as capital-hedged. The gate must be
+fail-closed: True only when BOTH legs are explicitly in REAL_MONEY_PLATFORMS.
 """
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ def test_both_real_money_platforms_true():
     assert is_real_money_arb("Polymarket", "KALSHI") is True
 
 
-def test_manifold_leg_is_never_real_money():
-    assert is_real_money_arb("polymarket", "manifold") is False
-    assert is_real_money_arb("manifold", "kalshi") is False
-    assert is_real_money_arb("manifold", "manifold") is False
+def test_legacy_non_real_money_leg_is_never_real_money():
+    assert is_real_money_arb("polymarket", "legacy_virtual") is False
+    assert is_real_money_arb("legacy_virtual", "kalshi") is False
+    assert is_real_money_arb("legacy_virtual", "legacy_virtual") is False
 
 
 def test_both_unknown_platforms_fail_closed():

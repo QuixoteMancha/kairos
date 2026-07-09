@@ -1,6 +1,6 @@
 """Tests for simulate_arb_legs_multi_platform() — multi-platform paper fill
-engine (Polymarket real depth + Kalshi real depth, Manifold explicitly
-unsupported)."""
+engine (Polymarket real depth + Kalshi real depth, legacy AMM-style
+platforms explicitly unsupported)."""
 
 from unittest.mock import MagicMock
 
@@ -40,9 +40,9 @@ def test_two_leg_arb_polymarket_and_kalshi_no_exception():
     assert kalshi_result["classification"] in ("full_fill", "depth_limited_partial", "depth_limited_none")
 
 
-def test_manifold_leg_returns_unsupported_amm():
+def test_legacy_amm_leg_returns_unsupported_amm():
     arb = _arb([
-        {"side": "yes", "book": "manifold", "odd": 1.8, "external_id": "manifold:abc"},
+        {"side": "yes", "book": "legacy_amm", "odd": 1.8, "external_id": "legacy_amm:abc"},
     ])
     result = simulate_arb_legs_multi_platform(arb, capital_usd=50.0)
     assert result["legs"][0]["classification"] == "unsupported_amm"
