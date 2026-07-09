@@ -6,7 +6,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Arquitectura técnica + **diagramas de flujo Mermaid** (Engine workers, Scan+Allocator multi-sport, Live Monitor + delegación por deporte) |
 | [betting_settlement_rules.md](betting_settlement_rules.md) | Reglas de settlement por book + **diagrama de estados** de apuestas (won/lost/void/pending) |
 | [AUTH_FLOW.md](AUTH_FLOW.md) | Flujos de autenticación y proxies para books + Sofascore/Flashscore |
-| [POLYMARKET_REAL_TRADING_PLAN.md](POLYMARKET_REAL_TRADING_PLAN.md) | Hoja de ruta ejecutable para integrar Polymarket crypto 5m en modo real (scanner, ejecución, conciliación, settlement, riesgo) |
+| [POLYMARKET_REAL_TRADING_PLAN.md](POLYMARKET_REAL_TRADING_PLAN.md) | ⚠️ OBSOLETO (2026-07-09): Polymarket fue removido por completo del proyecto (código y scope). Documento conservado solo como referencia histórica de diseño, no describe capacidad actual del sistema. |
 | [ANALYTICS.md](ANALYTICS.md) | Consultas analíticas DuckDB/SQLite, endpoints `/api/analytics/*`, vistas `v_match_pnl` |
 | [strategies_models.md](strategies_models.md) | Modelos estadísticos por deporte (ELO, Dixon-Coles, NBA, etc.) y madurez de cada estrategia |
 

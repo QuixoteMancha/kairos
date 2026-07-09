@@ -1,6 +1,16 @@
 # Polymarket Real Trading Plan (Crypto 5m)
 
-> **Estado**: Sprint 1 completado. El motor de tripletas (`polymarket_triplet_live.py`) implementa Sprint 2–4 en modo paper. Pendiente: integración con CLOB API real para ejecución de órdenes.
+> ⚠️ **OBSOLETO (2026-07-09)**: Polymarket fue removido por completo del proyecto —
+> decisión del usuario: una orden límite manual pequeña vs. ~1M USD de volumen no se
+> ejecutó, sospecha de bots haciendo queue-jumping en el book de Polymarket. Kalshi es
+> hoy la única plataforma real-money (`REAL_MONEY_PLATFORMS = {"kalshi"}`). Todo el
+> código descrito en este plan (`polymarket_scan.py`, `polymarket_triplet_live.py`,
+> etc.) ya no existe en el repo (confirmado: solo quedan `.pyc` huérfanos, ningún
+> import activo). Documento conservado ÚNICAMENTE como referencia histórica de diseño
+> — no reactivar sin una decisión explícita nueva del usuario si Polymarket recupera
+> relevancia en el futuro.
+>
+> **Estado histórico (previo a la remoción)**: Sprint 1 completado. El motor de tripletas (`polymarket_triplet_live.py`) implementaba Sprint 2–4 en modo paper. Pendiente: integración con CLOB API real para ejecución de órdenes.
 
 ## Objetivo
 Integrar trading real en Polymarket para mercados crypto de 5 minutos con capital inicial de prueba (USD 200), bajo controles estrictos de riesgo operativo y contable.
