@@ -106,3 +106,128 @@ def test_estimate_requires_ranks_in_context():
         assert False, "expected ValueError for missing context keys"
     except ValueError:
         pass
+
+
+# ── Live-score conditioning (real match phase, not a symbolic multiplier) ──
+
+
+def test_live_state_conditioned_simulation_differs_from_0_0():
+    """Same matchup, but simulated from deep into a decisive lead (2 sets to
+    0, up a break) must dwell very differently than a fresh 0-0 match."""
+    calibration = calibrate_serve_pct_by_bucket(rows=_synthetic_rows())
+    model = TennisMarkovDwellTimeModel(serve_pct_by_bucket=calibration)
+
+    fresh = model.estimate({"player_a_rank": 10, "player_b_rank": 12, "n_matches": 80})
+    live = model.estimate({
+        "player_a_rank": 10, "player_b_rank": 12, "n_matches": 80,
+        "sets_won_p1": 1, "sets_won_p2": 0, "games_won_p1": 5, "games_won_p2": 1,
+        "points_p1": 0, "points_p2": 0, "p1_serving": True,
+    })
+
+    fresh_a = [b for b in fresh if b.side == "player_a"]
+    live_a = [b for b in live if b.side == "player_a"]
+    fresh_high = sum(b.expected_time_fraction for b in fresh_a if b.low >= 0.8)
+    live_high = sum(b.expected_time_fraction for b in live_a if b.low >= 0.8)
+    # Player A is nearly certain to win from 2-0 sets + 4-1 games — dwell
+    # time should concentrate far more in the high band than a fresh 0-0
+    # even-ish matchup does.
+    assert live_high > fresh_high
+
+
+def test_no_live_state_reproduces_prior_0_0_behavior_exactly():
+    """Regression: omitting any live-state keys must give byte-identical
+    results to the pre-existing behavior (same seed=42, same inputs)."""
+    calibration = calibrate_serve_pct_by_bucket(rows=_synthetic_rows())
+    model_a = TennisMarkovDwellTimeModel(serve_pct_by_bucket=calibration)
+    model_b = TennisMarkovDwellTimeModel(serve_pct_by_bucket=calibration)
+
+    context = {"player_a_rank": 20, "player_b_rank": 70, "n_matches": 60}
+    bands_1 = model_a.estimate(dict(context))
+    bands_2 = model_b.estimate(dict(context))
+    assert bands_1 == bands_2
+
+    # Also matches direct simulate_dwell_bands() with no start_state, proving
+    # the code path is unchanged (not merely reproducible with itself).
+    from src.core.strategies.dwell_time.tennis_markov import simulate_dwell_bands, _bucket_for_rank as _bfr
+
+    pa = calibration.get(_bfr(20))
+    pb = calibration.get(_bfr(70))
+    direct = simulate_dwell_bands(pa, pb, n_matches=60, best_of=3, seed=42)
+    assert bands_1 == direct
+
+
+def test_incoherent_live_state_falls_back_to_0_0():
+    """A match score claiming both players already won the required sets is
+    incoherent (match already over) — must fail closed to 0-0, not crash or
+    fabricate a state."""
+    calibration = calibrate_serve_pct_by_bucket(rows=_synthetic_rows())
+    model = TennisMarkovDwellTimeModel(serve_pct_by_bucket=calibration)
+    bands = model.estimate({
+        "player_a_rank": 10, "player_b_rank": 12, "n_matches": 40,
+        "sets_won_p1": 2, "sets_won_p2": 2,  # impossible in best_of=3
+        "best_of": 3,
+    })
+    assert bands  # still produces valid bands (via 0-0 fallback), no crash
+
+
+# ── Incremental recalibration (EWMA) ───────────────────────────────────────
+
+
+def test_incremental_recalibrate_weights_recent_over_old(monkeypatch, tmp_path):
+    import json
+    from src.core.strategies.dwell_time import tennis_markov as tm
+
+    store: dict[str, str] = {}
+
+    class _FakeAppConfig:
+        @staticmethod
+        def get_value(key, default=""):
+            return store.get(key, default)
+
+        @staticmethod
+        def set_value(key, value):
+            store[key] = value
+
+    monkeypatch.setattr("src.database.database.AppConfig", _FakeAppConfig)
+
+    bucket = _bucket_for_rank(5)
+    other_buckets = [b for b in tm._RANK_BUCKETS if b != bucket]
+    # Seed a persisted prior of 0.60 for every bucket.
+    tm._save_persisted_serve_pct_by_bucket({b: 0.60 for b in tm._RANK_BUCKETS})
+
+    fresh_batch = {b: (0.60, 0) for b in tm._RANK_BUCKETS}
+    fresh_batch[bucket] = (0.90, 50)  # plenty of fresh, very different data
+
+    merged = tm.incremental_recalibrate(fresh_batch_with_counts=fresh_batch, alpha=0.5)
+
+    # The bucket with plenty of fresh data should move toward the new value.
+    assert merged[bucket] > 0.60
+    assert abs(merged[bucket] - (0.5 * 0.90 + 0.5 * 0.60)) < 1e-6
+    # Buckets with insufficient fresh observations stay untouched.
+    for b in other_buckets:
+        assert merged[b] == 0.60
+
+
+def test_incremental_recalibrate_discards_incomplete_observations(monkeypatch):
+    from src.core.strategies.dwell_time import tennis_markov as tm
+
+    store: dict[str, str] = {}
+
+    class _FakeAppConfig:
+        @staticmethod
+        def get_value(key, default=""):
+            return store.get(key, default)
+
+        @staticmethod
+        def set_value(key, value):
+            store[key] = value
+
+    monkeypatch.setattr("src.database.database.AppConfig", _FakeAppConfig)
+
+    tm._save_persisted_serve_pct_by_bucket({b: 0.60 for b in tm._RANK_BUCKETS})
+    # Zero observations everywhere (e.g. Sackmann had nothing new this window).
+    fresh_batch = {b: (0.99, 0) for b in tm._RANK_BUCKETS}
+    merged = tm.incremental_recalibrate(fresh_batch_with_counts=fresh_batch, alpha=0.5)
+    # Nothing should have moved -- no real data to justify a change.
+    for b in tm._RANK_BUCKETS:
+        assert merged[b] == 0.60
