@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.sports import baseball, basketball, ice_hockey, american_football, football
+from src.core.resolvers.sports import baseball, basketball, ice_hockey, american_football, football
 
 
 # ── settle_bet: deportes con liquidación determinista ─────────────────────────
@@ -151,13 +151,13 @@ class TestLiveStatDanger:
         assert is_d is False and is_w is True
 
     def test_football_total_pressure(self):
-        from src.core.sports import football
+        from src.core.resolvers.sports import football
         # total con oponente igualando tras goles → danger
         is_d, _, _ = football.get_live_stat_danger("total_goals", 0, 1, in_play=True)
         assert is_d is True
 
     def test_tennis_set_total_trigger(self):
-        from src.core.sports import tennis
+        from src.core.resolvers.sports import tennis
         is_d, is_w, _ = tennis.get_live_stat_danger(
             "set_total_juegos", 1, 0, in_play=True, leg_set_num=1
         )
@@ -183,7 +183,7 @@ class TestComputeQ4HedgeExistingBet:
 
     def test_existing_bet_p1_uses_original_odd(self):
         from unittest.mock import patch
-        from src.core.sports import basketball as bb
+        from src.core.resolvers.sports import basketball as bb
 
         existing_bet = {"selection": "p1", "stake": 10.0, "odd": 1.5}
         live_odds = {
@@ -207,7 +207,7 @@ class TestComputeQ4HedgeExistingBet:
 
     def test_existing_bet_p2_uses_original_odd(self):
         from unittest.mock import patch
-        from src.core.sports import basketball as bb
+        from src.core.resolvers.sports import basketball as bb
 
         existing_bet = {"selection": "p2", "stake": 10.0, "odd": 1.5}
         live_odds = {

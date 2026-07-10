@@ -33,7 +33,7 @@ from src.core.math.arbitrage.detectors.cross import (
     scan_cross_both_players_over,
     _hedge_probs_both_players_over,
 )
-from src.core.sports.tennis import SET_SCORE_PROBS_ATP
+from src.core.resolvers.sports.tennis import SET_SCORE_PROBS_ATP
 
 
 def test_hedge_probs_both_players_over_boundary_sanity():

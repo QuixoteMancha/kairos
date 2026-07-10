@@ -34,7 +34,7 @@ def _make_player_with_elo(nombre, elo, surface="Hard"):
 
 
 def test_elo_p_match_favors_higher_rating():
-    from src.core.sports.tennis import _elo_p_match
+    from src.core.resolvers.sports.tennis import _elo_p_match
 
     strong = _make_player_with_elo("Otelo Elohigh", 1700)
     weak = _make_player_with_elo("Petrona Elolow", 1400)
@@ -47,7 +47,7 @@ def test_elo_p_match_favors_higher_rating():
 
 
 def test_elo_p_match_equal_ratings_is_50_50():
-    from src.core.sports.tennis import _elo_p_match
+    from src.core.resolvers.sports.tennis import _elo_p_match
 
     a = _make_player_with_elo("Quintus Eloeven", 1550)
     b = _make_player_with_elo("Rosalva Eloevena", 1550)
@@ -57,7 +57,7 @@ def test_elo_p_match_equal_ratings_is_50_50():
 def test_elo_p_match_unknown_players_default_to_neutral():
     """Jugadores sin fila PlayerElo -> ELO_START para ambos -> 0.5."""
     from src.database.models.domain import Player
-    from src.core.sports.tennis import _elo_p_match
+    from src.core.resolvers.sports.tennis import _elo_p_match
 
     a = Player.create(nombre="Severo Noelorow")
     b = Player.create(nombre="Tabita Noelotwo")
@@ -65,7 +65,7 @@ def test_elo_p_match_unknown_players_default_to_neutral():
 
 
 def test_compose_prematch_prediction_uses_elo_method_without_stats():
-    from src.core.sports.tennis import compose_prematch_prediction
+    from src.core.resolvers.sports.tennis import compose_prematch_prediction
 
     a = _make_player_with_elo("Ulises Composeone", 1650)
     b = _make_player_with_elo("Valeria Composetwo", 1500)
@@ -79,7 +79,7 @@ def test_compose_prematch_prediction_uses_elo_method_without_stats():
 
 def test_compose_prematch_prediction_uses_elo_surf_method_with_real_stats():
     from src.database.models.domain import PlayerStats
-    from src.core.sports.tennis import compose_prematch_prediction
+    from src.core.resolvers.sports.tennis import compose_prematch_prediction
 
     a = _make_player_with_elo("Wilfredo Composestat", 1600)
     b = _make_player_with_elo("Ximena Composestattwo", 1550)
@@ -102,7 +102,7 @@ def test_compose_prematch_prediction_uses_elo_surf_method_with_real_stats():
 def test_compose_prematch_prediction_falls_back_to_elo_with_incomplete_stats():
     """Si solo uno de los dos tiene stats reales de saque, sigue method='elo'."""
     from src.database.models.domain import PlayerStats
-    from src.core.sports.tennis import compose_prematch_prediction
+    from src.core.resolvers.sports.tennis import compose_prematch_prediction
 
     a = _make_player_with_elo("Yago Composepartial", 1600)
     b = _make_player_with_elo("Zoraida Composepartialtwo", 1550)

@@ -40,7 +40,7 @@ NEW_STRUCTURE_MODULES = [
     "src.core.math.elo",
     "src.core.math.hedge",
     "src.core.math.backtest",
-    "src.core.sports",
+    "src.core.resolvers.sports",
     "src.web.create_app",
 ]
 
@@ -106,7 +106,7 @@ REQUIRED_SPORT_FUNCS = [
 @pytest.mark.parametrize("sport", SPORT_MODULES)
 def test_sport_module_exposes_live_api(sport):
     """Cada módulo de deporte expone la API de live-hedge usada por el monitor."""
-    mod = importlib.import_module(f"src.core.sports.{sport}")
+    mod = importlib.import_module(f"src.core.resolvers.sports.{sport}")
     for fn in REQUIRED_SPORT_FUNCS:
         assert hasattr(mod, fn), f"{sport} no expone {fn}()"
         assert callable(getattr(mod, fn))
@@ -116,7 +116,7 @@ def test_sport_module_exposes_live_api(sport):
 
 def test_sport_registry_complete():
     """El registro de configs cubre exactamente los 6 deportes habilitados."""
-    from src.core.sports import all_sports, get_sport_config
+    from src.core.resolvers.sports import all_sports, get_sport_config
 
     sports = all_sports()
     assert len(sports) == 6
@@ -129,16 +129,16 @@ def test_sport_registry_complete():
 @pytest.mark.parametrize("sport", SPORT_MODULES)
 def test_dispatch_matches_sport_module(sport):
     """El dispatcher de sports/__init__ devuelve lo mismo que el módulo del deporte."""
-    from src.core.sports import get_supported_live_stat_leg_tipos as dispatch_get
+    from src.core.resolvers.sports import get_supported_live_stat_leg_tipos as dispatch_get
 
-    mod = importlib.import_module(f"src.core.sports.{sport}")
+    mod = importlib.import_module(f"src.core.resolvers.sports.{sport}")
     assert dispatch_get(sport) == mod.get_supported_live_stat_leg_tipos()
 
 
 @pytest.mark.parametrize("sport", SPORT_MODULES)
 def test_supports_live_stat_trigger_consistency(sport):
     """supports_live_stat_trigger es True sii el leg_tipo está en el set soportado."""
-    from src.core.sports import (
+    from src.core.resolvers.sports import (
         get_supported_live_stat_leg_tipos as dispatch_get,
         supports_live_stat_trigger,
     )

@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 import pytest
 
-from src.core.sports.tennis import (
+from src.core.resolvers.sports.tennis import (
     predict_tennis_match,
     _pset_from_pmatch_bo3,
     _p_set_from_pgame,
