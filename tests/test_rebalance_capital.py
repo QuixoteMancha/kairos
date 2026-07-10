@@ -20,7 +20,7 @@ from src.database.database import (
 )
 from src.core import state
 from src.core.orchestration import rebalance as reb
-from src.core.orchestration import cross_book as cb
+from src.core.orchestration import platform_fees as cb
 from src.core.orchestration import wallet as wmod
 
 _MODELS = [Platform, Wallet, WalletBet, WalletDeposit, WalletWithdraw, WalletLedger]
@@ -44,15 +44,15 @@ def rebalance_env():
         state.wallets.clear()
         state.rebalance_paused = False
         state._last_rebalance_ts = 0.0
-        _prev_metrics = dict(cb._cb_book_metrics)
-        cb._cb_book_metrics["polymarket"] = {"last_count": 5}
-        cb._cb_book_metrics["kalshi"] = {"last_count": 5}
+        _prev_metrics = dict(cb._platform_health_metrics)
+        cb._platform_health_metrics["polymarket"] = {"last_count": 5}
+        cb._platform_health_metrics["kalshi"] = {"last_count": 5}
 
         try:
             yield
         finally:
-            cb._cb_book_metrics.clear()
-            cb._cb_book_metrics.update(_prev_metrics)
+            cb._platform_health_metrics.clear()
+            cb._platform_health_metrics.update(_prev_metrics)
             state.wallets.clear()
             test_db.drop_tables(_MODELS)
 
@@ -128,7 +128,7 @@ def test_legacy_virtual_excluded_from_real_money_rebalance(rebalance_env):
     Platform.create(slug="legacy_virtual", name="Legacy Virtual", is_active=True)
     Wallet.create(platform="legacy_virtual", initial_balance=500.0, balance=500.0,
                   equity=500.0, deposits=0.0, withdrawals=0.0)
-    cb._cb_book_metrics["legacy_virtual"] = {"last_count": 5}
+    cb._platform_health_metrics["legacy_virtual"] = {"last_count": 5}
     state.wallets.clear()
 
     reb.run_rebalance()
@@ -149,7 +149,7 @@ def test_legacy_virtual_excluded_from_real_money_rebalance(rebalance_env):
 def test_legacy_virtual_excluded_from_idle_donor_pool(rebalance_env):
     """Regresión específica (2026-07-08, hallazgo de auditoría verificado por
     Sara): una plataforma virtual legacy SIN scraper activo (no en
-    cb._cb_book_metrics, por lo que nunca entra a `active_slugs`) con un
+    cb._platform_health_metrics, por lo que nunca entra a `active_slugs`) con un
     balance alto caía en el bucket de 'wallets ociosas' (`idle_balances`) del
     rebalanceo, porque ese loop solo excluía slugs ya presentes en `balances`
     -- sin filtrar por _CBPLAT ni por REAL_MONEY_PLATFORMS. Eso permitía que
@@ -161,7 +161,7 @@ def test_legacy_virtual_excluded_from_idle_donor_pool(rebalance_env):
     Platform.create(slug="legacy_virtual", name="Legacy Virtual", is_active=True)
     Wallet.create(platform="legacy_virtual", initial_balance=500.0, balance=500.0,
                   equity=500.0, deposits=0.0, withdrawals=0.0)
-    # Deliberadamente SIN entrada en cb._cb_book_metrics -> nunca entra a
+    # Deliberadamente SIN entrada en cb._platform_health_metrics -> nunca entra a
     # active_slugs, cae directo al loop de "wallets ociosas".
     state.wallets.clear()
 

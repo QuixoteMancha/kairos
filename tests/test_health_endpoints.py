@@ -37,7 +37,7 @@ def test_readyz_returns_components(client):
     assert "components" in data
     assert "db" in data["components"]
     assert "wallet" in data["components"]
-    assert "cross_book_pool" in data["components"]
+    assert "active_platforms_pool" in data["components"]
 
 
 

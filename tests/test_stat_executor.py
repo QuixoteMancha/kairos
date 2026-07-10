@@ -167,7 +167,7 @@ def test_fixture_surname_set_order_independent():
 # ── bookie match URL (link en historial) ─────────────────────────────────────
 
 def test_bookie_match_url_per_book():
-    from src.core.orchestration.cross_book import bookie_match_url
+    from src.core.orchestration.platform_fees import bookie_match_url
     # Kambi: {client}-{eventId} → URL de evento Unibet
     assert bookie_match_url("ubse", "ubse-1026591330") == \
         "https://www.unibet.com/betting/sports/event/1026591330"

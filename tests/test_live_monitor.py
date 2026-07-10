@@ -17,11 +17,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from src.core.orchestration.live_monitor import (
     HEDGE_FALLBACK_TICKS,
     HEDGE_IMPL_FALLBACK,
     HEDGE_IMPL_TARGET,
     _compute_live_hedge,
+    _hedge_stakes_for_lock,
 )
 
 
@@ -257,3 +260,56 @@ def test_stat_under_side_hedges_with_over_odd():
     assert info is not None
     assert info["hedge_odd"] == 1.90
     assert info["hedge_side"] == "p1"
+
+
+# ── _hedge_stakes_for_lock (moved here 2026-07-10 from test_cross_book.py when
+# orchestration/cross_book.py was decommissioned; the function now lives in
+# live_monitor.py alongside _compute_live_hedge) ────────────────────────────────
+
+def test_hedge_stakes_feasible():
+    """odd_a=2.0 + odd_b=2.1 → 1/2.0 + 1/2.1 = 0.976 < 1 → arb feasible."""
+    stake_b, profit, roi = _hedge_stakes_for_lock(odd_a=2.0, stake_a=10.0, odd_b=2.1)
+    assert stake_b > 0
+    assert profit > 0
+    assert roi > 0
+    # stake_b = 10 * 2.0 / 2.1 = 9.5238...
+    assert stake_b == pytest.approx(9.52, abs=0.01)
+
+
+def test_hedge_stakes_unfeasible():
+    """odd_a=2.0 + odd_b=1.9 → 1/2.0 + 1/1.9 = 1.026 > 1 → sin arb."""
+    stake_b, profit, roi = _hedge_stakes_for_lock(odd_a=2.0, stake_a=10.0, odd_b=1.9)
+    assert stake_b == 0.0
+    assert profit == 0.0
+    assert roi == 0.0
+
+
+def test_hedge_stakes_invalid_odds():
+    """Odds <= 1.0 → no es una cuota válida, retorna ceros."""
+    assert _hedge_stakes_for_lock(0.5, 10.0, 2.0) == (0.0, 0.0, 0.0)
+    assert _hedge_stakes_for_lock(2.0, 10.0, 1.0) == (0.0, 0.0, 0.0)
+
+
+def test_hedge_stakes_returns_equalized():
+    """Con par feasible, retorno final debe ser idéntico en ambos lados."""
+    odd_a, stake_a, odd_b = 2.5, 100.0, 1.85
+    stake_b, profit, roi = _hedge_stakes_for_lock(odd_a, stake_a, odd_b)
+    assert stake_b > 0   # sanity: feasible
+    return_a = stake_a * odd_a
+    return_b = stake_b * odd_b
+    assert return_a == pytest.approx(return_b, abs=0.05)
+    # Profit consistente con cualquier lado
+    total = stake_a + stake_b
+    assert profit == pytest.approx(return_a - total, abs=0.05)
+    assert roi == pytest.approx(profit / total, abs=0.001)
+
+
+def test_hedge_stakes_roi_matches_implicit_arb():
+    """
+    ROI calculado debe equivaler a `(1 / (1/odd_a + 1/odd_b)) - 1`,
+    que es la definición canónica de ROI de un arb 2-way.
+    """
+    odd_a, odd_b = 3.0, 1.6
+    stake_b, profit, roi = _hedge_stakes_for_lock(odd_a, 50.0, odd_b)
+    expected_roi = (1.0 / (1.0 / odd_a + 1.0 / odd_b)) - 1.0
+    assert roi == pytest.approx(expected_roi, abs=0.001)
