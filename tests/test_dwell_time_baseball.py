@@ -1,4 +1,4 @@
-from src.core.strategies.dwell_time.baseball_winexp import BaseballWinExpModel
+from src.core.strategies.event_volatility.baseball_winexp import BaseballWinExpModel
 
 
 def _top_band_fraction(bands, side):

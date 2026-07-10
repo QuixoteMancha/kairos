@@ -1,4 +1,4 @@
-from src.core.strategies.dwell_time.basketball_winprob import BasketballWinProbModel
+from src.core.strategies.event_volatility.basketball_winprob import BasketballWinProbModel
 
 
 def _top_band_fraction(bands, side):

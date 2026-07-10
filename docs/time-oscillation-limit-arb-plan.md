@@ -5,7 +5,7 @@ placement is designed or implied anywhere in this document.
 
 ## 1. What this is, and how it differs from dwell-time (Strategy 1)
 
-Dwell-time (Strategy 1, `src/core/strategies/dwell_time/` +
+Dwell-time (Strategy 1, `src/core/strategies/event_volatility/` +
 `limit_order_formation.py`) proposes two resting limit levels derived from a
 **category-specific probabilistic model** (tennis Markov, football
 Dixon-Coles/Poisson, basketball/baseball parametric win-prob, weather
@@ -43,7 +43,7 @@ dwell-time.** Reasons:
 
 | Piece | File | Reuse plan |
 |---|---|---|
-| `DwellBand` dataclass + `DwellTimeModel` protocol | `dwell_time/base.py` | Reuse the `DwellBand` shape (low, high, side, expected_time_fraction) as the output contract for the new volatility estimator, so it can be fed into a copy/adaptation of `propose_limit_levels`'s band-pairing logic without inventing a new shape. |
+| `DwellBand` dataclass + `DwellTimeModel` protocol | `event_volatility/base.py` | Reuse the `DwellBand` shape (low, high, side, expected_time_fraction) as the output contract for the new volatility estimator, so it can be fed into a copy/adaptation of `propose_limit_levels`'s band-pairing logic without inventing a new shape. |
 | `propose_limit_levels()` pairing/fee-netting logic | `limit_order_formation.py` | Reuse the "rank bands by expected_time_fraction, try combined pairs by rank-sum, gate on price_a+price_b<1.0, net fees via `platform_fees.leg_fee_pct`" algorithm — extract or duplicate as `propose_oscillation_levels()`. See Phase 2 — decide extract vs. duplicate. |
 | `simulate_limit_fill()` / `propose_and_check_fillable()` | `fill_simulator.py`, `limit_order_formation.py` | Reuse AS-IS. Fillability checking against real CLOB depth per capital tier is identical for this strategy — no new simulator code needed. |
 | `platform_fees.leg_fee_pct()` | `src/core/orchestration/platform_fees.py` | Reuse AS-IS for net-edge calculation. |

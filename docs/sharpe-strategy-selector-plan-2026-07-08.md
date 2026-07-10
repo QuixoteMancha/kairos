@@ -15,7 +15,7 @@ No hay ejecución real de órdenes propuesta en ningún punto de este documento
   "SETTLING IMMEDIATELY once both legs fill" (comentario línea 44) — es
   decir, varianza ≈0 una vez llenadas ambas patas, consistente con lo que Sara
   ya había confirmado.
-- `src/core/strategies/dwell_time/` (7 archivos: `base.py`, `registry.py`,
+- `src/core/strategies/event_volatility/` (7 archivos: `base.py`, `registry.py`,
   `tennis_markov.py`, `football_poisson.py`, `basketball_winprob.py`,
   `baseball_winexp.py`, `weather_climatology.py`): existen y tienen forma de
   modelo (`DwellBand`, `DwellTimeModel` protocol per `base.py`), pero no hay
@@ -130,7 +130,7 @@ lectura de código adicional a la ya hecha aquí y por Vesper.
   reusable/confiable hoy, modificar `src/core/orchestration/paper_trading_cycle.py`
   (`_run_strategy1_pass`, línea 613) para que, en lugar de decidir solo por
   cruces de precio, consulte el modelo aprobado de
-  `src/core/strategies/dwell_time/registry.py` para las categorías que ese
+  `src/core/strategies/event_volatility/registry.py` para las categorías que ese
   modelo cubre, y calcule un Sharpe real (retorno esperado del modelo vs. su
   propia varianza de acierto) por orden candidata de Strategy 1.
 - **Terminado cuando:** existe al menos una categoría (ej. tenis) donde
@@ -175,7 +175,7 @@ lectura de código adicional a la ya hecha aquí y por Vesper.
   es un frente nuevo, no una extensión de dwell-time — confirmar con Vesper
   si el patrón de `DwellBand`/`DwellTimeModel` (`base.py`) sirve como
   contrato de salida igual (misma lógica que Strategy 4 reusa el contrato de
-  `dwell_time/base.py`, ver `docs/time-oscillation-limit-arb-plan.md` sección
+  `event_volatility/base.py`, ver `docs/time-oscillation-limit-arb-plan.md` sección
   2), aunque la estimación interna sea 100% nueva.
 - **Terminado cuando:** existe un documento corto (no este) con la fuente de
   datos elegida, su costo/límites de rate, y una estimación de si el modelo

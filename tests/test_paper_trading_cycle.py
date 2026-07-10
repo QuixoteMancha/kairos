@@ -237,7 +237,7 @@ def test_estimate_strategy1_epsilon_uses_dwell_time_for_football():
     placement: a football/soccer candidate with a 'vs'-shaped title must use
     the dwell-time model's dispersion-derived epsilon, not the fixed
     EPSILON_INITIAL constant."""
-    from src.core.strategies.dwell_time.base import DwellBand
+    from src.core.strategies.event_volatility.base import DwellBand
     from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
 
     bands = [

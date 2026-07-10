@@ -1,7 +1,7 @@
 """Tests for the tennis Markov dwell-time model (Part 2 of the dwell-time framework)."""
 from __future__ import annotations
 
-from src.core.strategies.dwell_time.tennis_markov import (
+from src.core.strategies.event_volatility.tennis_markov import (
     TennisMarkovDwellTimeModel,
     calibrate_serve_pct_by_bucket,
     _bucket_for_rank,
@@ -148,7 +148,7 @@ def test_no_live_state_reproduces_prior_0_0_behavior_exactly():
 
     # Also matches direct simulate_dwell_bands() with no start_state, proving
     # the code path is unchanged (not merely reproducible with itself).
-    from src.core.strategies.dwell_time.tennis_markov import simulate_dwell_bands, _bucket_for_rank as _bfr
+    from src.core.strategies.event_volatility.tennis_markov import simulate_dwell_bands, _bucket_for_rank as _bfr
 
     pa = calibration.get(_bfr(20))
     pb = calibration.get(_bfr(70))
@@ -175,7 +175,7 @@ def test_incoherent_live_state_falls_back_to_0_0():
 
 def test_incremental_recalibrate_weights_recent_over_old(monkeypatch, tmp_path):
     import json
-    from src.core.strategies.dwell_time import tennis_markov as tm
+    from src.core.strategies.event_volatility import tennis_markov as tm
 
     store: dict[str, str] = {}
 
@@ -209,7 +209,7 @@ def test_incremental_recalibrate_weights_recent_over_old(monkeypatch, tmp_path):
 
 
 def test_incremental_recalibrate_discards_incomplete_observations(monkeypatch):
-    from src.core.strategies.dwell_time import tennis_markov as tm
+    from src.core.strategies.event_volatility import tennis_markov as tm
 
     store: dict[str, str] = {}
 

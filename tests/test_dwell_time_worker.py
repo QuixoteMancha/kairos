@@ -54,7 +54,7 @@ def test_run_once_persists_a_proposal_row(monkeypatch):
     # the modules they're imported from and run exactly one cycle (time.sleep
     # raises to break out of the while-True loop after the first iteration).
     with patch("src.core.orchestration.scanning._fetch_prediction_market_events", return_value=[event]), \
-         patch("src.core.strategies.dwell_time.get_model", return_value=object()), \
+         patch("src.core.strategies.event_volatility.get_model", return_value=object()), \
          patch("src.core.strategies.limit_order_formation.propose_and_check_fillable", return_value={
              "opportunity": True, "category": "football",
              "sides": {

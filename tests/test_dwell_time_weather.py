@@ -2,7 +2,7 @@
 from datetime import date
 from unittest.mock import patch
 
-from src.core.strategies.dwell_time.weather_climatology import WeatherClimatologyModel
+from src.core.strategies.event_volatility.weather_climatology import WeatherClimatologyModel
 
 
 def _mock_fetch_centered(center: float, spread: float = 1.0, n_years: int = 15):
@@ -16,7 +16,7 @@ def _mock_fetch_centered(center: float, spread: float = 1.0, n_years: int = 15):
 
 def test_bands_concentrate_around_historical_mean():
     with patch(
-        "src.core.strategies.dwell_time.weather_climatology._fetch_year_window",
+        "src.core.strategies.event_volatility.weather_climatology._fetch_year_window",
         side_effect=_mock_fetch_centered(20.0, spread=1.0),
     ):
         model = WeatherClimatologyModel()
@@ -33,7 +33,7 @@ def test_bands_concentrate_around_historical_mean():
 
 def test_probabilities_sum_to_one():
     with patch(
-        "src.core.strategies.dwell_time.weather_climatology._fetch_year_window",
+        "src.core.strategies.event_volatility.weather_climatology._fetch_year_window",
         side_effect=_mock_fetch_centered(15.0, spread=2.0),
     ):
         model = WeatherClimatologyModel()
@@ -49,7 +49,7 @@ def test_probabilities_sum_to_one():
 
 def test_uncertainty_narrows_with_shorter_lead_time():
     with patch(
-        "src.core.strategies.dwell_time.weather_climatology._fetch_year_window",
+        "src.core.strategies.event_volatility.weather_climatology._fetch_year_window",
         side_effect=_mock_fetch_centered(25.0, spread=3.0),
     ):
         model = WeatherClimatologyModel()
@@ -72,7 +72,7 @@ def test_uncertainty_narrows_with_shorter_lead_time():
 
 def test_empty_sample_returns_no_bands():
     with patch(
-        "src.core.strategies.dwell_time.weather_climatology._fetch_year_window",
+        "src.core.strategies.event_volatility.weather_climatology._fetch_year_window",
         return_value=[],
     ):
         model = WeatherClimatologyModel()

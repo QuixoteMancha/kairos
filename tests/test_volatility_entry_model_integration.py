@@ -3,7 +3,7 @@
 style already used in test_limit_order_formation.py for the same registry."""
 from unittest.mock import MagicMock, patch
 
-from src.core.strategies.dwell_time.base import DwellBand
+from src.core.strategies.event_volatility.base import DwellBand
 from src.core.strategies import volatility_entry as ve
 
 

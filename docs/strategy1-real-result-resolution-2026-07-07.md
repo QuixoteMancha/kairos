@@ -32,8 +32,8 @@ razonablemente regulares ("Will X win the match vs Y?", "X vs Y — moneyline",
 
 1. Un extractor por categoría (no genérico) con patrones regex explícitos por
    `category` (tenis, fútbol, basketball, baseball) — la misma partición que
-   ya existe en `dwell_time/` por categoría. Reusar, si existen, los patrones
-   de extracción de nombre que ya haya en `dwell_time/tennis/` o
+   ya existe en `event_volatility/` (renamed from `dwell_time/`) por categoría. Reusar, si existen, los patrones
+   de extracción de nombre que ya haya en `event_volatility/tennis_markov.py` o
    `cross_platform_matcher.py` (auditar antes de escribir uno nuevo — no
    duplicar lógica de parsing de título que ya exista y esté probada).
 2. Output: `(name_a, name_b)` candidatos, o `None` si el patrón no matchea

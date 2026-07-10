@@ -1,7 +1,7 @@
 """Tests for src.core.strategies.limit_order_formation (read-only, no order execution)."""
 from unittest.mock import MagicMock, patch
 
-from src.core.strategies.dwell_time.base import DwellBand
+from src.core.strategies.event_volatility.base import DwellBand
 from src.core.strategies.limit_order_formation import (
     propose_limit_levels,
     propose_and_check_fillable,

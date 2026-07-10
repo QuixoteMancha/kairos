@@ -1,4 +1,4 @@
-from src.core.strategies.dwell_time.football_poisson import FootballPoissonDwellTimeModel
+from src.core.strategies.event_volatility.football_poisson import FootballPoissonDwellTimeModel
 
 
 def _fraction_above(bands, side, threshold):
