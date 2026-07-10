@@ -64,5 +64,7 @@ def test_default_platforms_are_prediction_markets():
 # NOTE: `_fetch_book_fixtures` (and its tests here) was removed 2026-07-10 along
 # with the void-cancelled-fixture legacy concept (see settlement.py) — it was a
 # no-op whose only callers were the removed void/live-hedge STAT paths.
-# `_fetch_sport_raw_fixtures` (still live, used by run_cross_book_scan) is
-# covered by its own tests elsewhere.
+# `_fetch_sport_raw_fixtures` (and its `_record_book_fetch` metrics helper)
+# was also removed 2026-07-10 for the same reason (confirmed no-op, only
+# caller `run_cross_book_scan` invoked it every cycle for nothing); no test
+# coverage existed for it.
