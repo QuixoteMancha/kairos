@@ -27,13 +27,13 @@ def test_build_context_football_skips_non_matchup_title():
 
 
 def test_build_context_basketball_skips_without_team_rating():
-    with patch("src.scrapers.forgotten.team_data.common.get_team_rating", return_value=None):
+    with patch("src.scrapers.team_data.common.get_team_rating", return_value=None):
         ctx = wk._build_dwell_time_context({"category": "basketball", "title": "Lakers vs Celtics"})
     assert ctx is None
 
 
 def test_build_context_basketball_builds_with_ratings():
-    with patch("src.scrapers.forgotten.team_data.common.get_team_rating", side_effect=[1600.0, 1500.0]):
+    with patch("src.scrapers.team_data.common.get_team_rating", side_effect=[1600.0, 1500.0]):
         ctx = wk._build_dwell_time_context({"category": "basketball", "title": "Lakers vs Celtics"})
     assert ctx == {"team_a": "Lakers", "team_b": "Celtics", "team_a_rating": 1600.0, "team_b_rating": 1500.0}
 

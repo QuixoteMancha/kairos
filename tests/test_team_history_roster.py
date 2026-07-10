@@ -10,7 +10,7 @@ No hace red real: `SofascoreScraper.search_team_id` / `.get_team_last_matches`
 `.get_team_squad_fs` se monkeypatchean directamente.
 
 Nota: existe otro `tests/test_team_data.py` (legacy, skipped, sobre el
-módulo ARCHIVADO `src.scrapers.forgotten.team_data.common` de la era
+módulo ARCHIVADO `src.scrapers.team_data.common` de la era
 sports-bookies pre-pivote) -- este archivo es sobre el módulo NUEVO
 `src.core.orchestration.team_data`, sin relación.
 """
