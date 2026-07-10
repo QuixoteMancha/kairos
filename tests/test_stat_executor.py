@@ -50,9 +50,7 @@ def test_stat_bet_placed_with_sport_and_leg_tipo():
         "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.85, "stake_pct": 0.62}],
         "descripcion": "Stat p1 football (model p=0.62)", "hedgeable": True,
     }]
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets",
-                      return_value={_s._fixture_surname_set("Barcelona vs Getafe")}):
+    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]):
         res = _s._execute_stat_value_bets(vbs)
     assert any(r.get("accepted") for r in res)
     bet = wallets["pinnacle"].bets[0]
@@ -70,9 +68,7 @@ def test_stat_bet_dedup_skips_second_call():
         "roi": 3.0, "legs": [{"side": "p1", "book": "unibet", "odd": 1.9, "stake_pct": 0.55}],
         "descripcion": "Stat p1 basketball",
     }]
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets",
-                      return_value={_s._fixture_surname_set("Lakers ZZ vs Celtics QQ")}):
+    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]):
         r1 = _s._execute_stat_value_bets(vbs)
         assert any(x.get("accepted") for x in r1)
         # 2do intento: el dedup en memoria (pending_keys) no persiste entre llamadas,
@@ -94,8 +90,7 @@ def test_stat_bet_skips_unsupported_sport_leg():
         "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.9, "stake_pct": 0.5}],
         "descripcion": "Stat golf",
     }]
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets", return_value=set()):
+    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]):
         res = _s._execute_stat_value_bets(vbs)
     assert all(not r.get("accepted") for r in res)
     assert wallets["pinnacle"].bets == []
@@ -109,9 +104,7 @@ def test_stat_bet_skips_when_no_balance():
         "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.9, "stake_pct": 0.5}],
         "descripcion": "Stat p1 football",
     }]
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets",
-                      return_value={_s._fixture_surname_set("C vs D")}):
+    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]):
         res = _s._execute_stat_value_bets(vbs)
     assert all(not r.get("accepted") for r in res)
 
@@ -187,135 +180,16 @@ def test_bookie_match_url_per_book():
 
 
 # ── trackeability gate ────────────────────────────────────────────────────────
-
-def test_stat_bet_skips_untrackable_fixture():
-    """Si el fixture NO está en ningún feed observable → no se coloca (evita churn/void)."""
-    from src.core.orchestration import settlement as _s
-    wallets = {"pinnacle": _make_wallet(50.0)}
-    vbs = [{
-        "tipo": "stat", "sport": "ice_hockey", "fixture": "Obscure Team A vs Obscure Team B",
-        "roi": 12.0, "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.9}],
-        "descripcion": "Stat p1 ice_hockey",
-    }]
-    # feed activo contiene OTROS fixtures, no el nuestro
-    other = {_s._fixture_surname_set("Bruins vs Rangers")}
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets", return_value=other):
-        res = _s._execute_stat_value_bets(vbs)
-    assert all(not r.get("accepted") for r in res)
-    assert any("no trackable" in (r.get("reason") or "") for r in res)
-    assert wallets["pinnacle"].bets == []
-
-
-def test_stat_bet_trackable_fixture_passes_gate():
-    """Si el fixture SÍ está en el feed observable → se coloca normalmente."""
-    from src.core.orchestration import settlement as _s
-    wallets = {"pinnacle": _make_wallet(50.0)}
-    vbs = [{
-        "tipo": "stat", "sport": "ice_hockey", "fixture": "Carolina Hurricanes vs Vegas Golden Knights",
-        "roi": 20.0, "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.9}],
-        "descripcion": "Stat p1 ice_hockey",
-    }]
-    # feed activo lo trae con el orden INVERTIDO (como hace Pinnacle) → igual debe matchear
-    active = {_s._fixture_surname_set("Vegas Golden Knights vs Carolina Hurricanes")}
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets", return_value=active):
-        res = _s._execute_stat_value_bets(vbs)
-    assert any(r.get("accepted") for r in res)
-    assert wallets["pinnacle"].bets and wallets["pinnacle"].bets[0].sport == "ice_hockey"
-
-
-def test_stat_gate_disabled_when_feed_empty():
-    """Si el feed viene vacío (outage/fetch falló) el gate NO bloquea (set vacío = off)."""
-    from src.core.orchestration import settlement as _s
-    wallets = {"pinnacle": _make_wallet(50.0)}
-    vbs = [{
-        "tipo": "stat", "sport": "football", "fixture": "Sevilla vs Valencia",
-        "roi": 4.0, "legs": [{"side": "p1", "book": "pinnacle", "odd": 1.85}],
-        "descripcion": "Stat p1 football",
-    }]
-    with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]), \
-         patch.object(_s, "_active_fixture_surname_sets", return_value=set()):
-        res = _s._execute_stat_value_bets(vbs)
-    assert any(r.get("accepted") for r in res)   # gate off → se coloca
-
-
-# ── voider: no anular fixtures aún observables (anti falso positivo) ──────────
-
-def _make_pending_bet(fixture, hours_old=5.0):
-    from datetime import datetime, timedelta
-    ts = (datetime.now() - timedelta(hours=hours_old)).isoformat()
-    return MagicMock(
-        bet_id="vb_" + fixture[:4], arb_tipo="stat", bet_type="stat",
-        fixture_name=fixture, timestamp=ts, total_staked=2.0, status="pending", pnl=0.0,
-    )
-
-
-def test_void_skips_fixture_still_in_feed():
-    """Bet vieja cuyo fixture SIGUE en el feed (orden invertido) NO debe anularse."""
-    from src.core.orchestration import settlement as _s
-    from src.core.orchestration import wallet as _wmod
-    bet = _make_pending_bet("Chicago Wolves vs Toronto Marlies", hours_old=5.0)
-    fake = MagicMock(balance=40.0, pending_bets=[bet])
-
-    def _gw(slug):
-        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[])
-
-    active = {_s._fixture_surname_set("Toronto Marlies vs Chicago Wolves")}
-    with patch.object(_s, "_active_fixture_surname_sets", return_value=active), \
-         patch.object(_wmod, "get_wallet", side_effect=_gw), \
-         patch.object(_wmod, "save_wallet"), patch.object(_wmod, "write_ledger"):
-        voided = _s._void_cancelled_fixtures(min_hours_past=3.0)
-    assert bet.bet_id not in voided
-    assert bet.status == "pending"   # intacta
-
-
-def test_void_proceeds_when_fixture_absent():
-    """Bet vieja cuyo fixture YA NO está en ningún feed → se anula (devuelve stake)."""
-    from src.core.orchestration import settlement as _s
-    from src.core.orchestration import wallet as _wmod
-    bet = _make_pending_bet("Ghost Town A vs Ghost Town B", hours_old=5.0)
-    fake = MagicMock(balance=40.0, pending_bets=[bet])
-
-    def _gw(slug):
-        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[])
-
-    # feed activo NO contiene el fixture
-    active = {_s._fixture_surname_set("Real vs Barca")}
-    with patch.object(_s, "_active_fixture_surname_sets", return_value=active), \
-         patch.object(_s, "get_resolution_for_bet",
-                      return_value=(_s.RULE_VOID, None, "walkover/abandoned")), \
-         patch.object(_wmod, "get_wallet", side_effect=_gw), \
-         patch.object(_wmod, "save_wallet"), patch.object(_wmod, "write_ledger"):
-        voided = _s._void_cancelled_fixtures(min_hours_past=3.0)
-    assert bet.bet_id in voided
-    assert bet.status == "void"
-
-
-def test_void_default_is_16h():
-    """El default del voider es 16h (≥2 ciclos de settlement de 8h)."""
-    import inspect
-    from src.core.orchestration.settlement import _void_cancelled_fixtures
-    sig = inspect.signature(_void_cancelled_fixtures)
-    assert sig.parameters["min_hours_past"].default == 16.0
-
-
-def test_void_waits_when_bet_young_under_16h():
-    """Con el default (16h), una bet de 5h NO se anula aunque el fixture no esté en feed."""
-    from src.core.orchestration import settlement as _s
-    from src.core.orchestration import wallet as _wmod
-    bet = _make_pending_bet("Ghost A vs Ghost B", hours_old=5.0)
-    fake = MagicMock(balance=40.0, pending_bets=[bet])
-
-    def _gw(slug):
-        return fake if slug == "stake" else MagicMock(balance=0.0, pending_bets=[])
-
-    with patch.object(_s, "_active_fixture_surname_sets", return_value=set()), \
-         patch.object(_wmod, "get_wallet", side_effect=_gw), \
-         patch.object(_wmod, "save_wallet"), patch.object(_wmod, "write_ledger"):
-        voided = _s._void_cancelled_fixtures()   # default 16h
-    assert bet.bet_id not in voided
-    assert bet.status == "pending"
+# NOTE (2026-07-10): `_active_fixture_surname_sets()` and `_void_cancelled_fixtures()`
+# were retired along with the void-cancelled-fixture legacy concept (see
+# settlement.py docstring). The trackability gate in `_execute_stat_value_bets`
+# is now permanently fail-open (no cross-book feed to check against), and the
+# voider tests below tested a function that no longer exists. Both sets of
+# tests were removed here; `_execute_stat_value_bets` itself has zero live
+# callers today (see settlement.py), so this is dead-code-adjacent by design.
+# For Kalshi, the analogous "void" scenario (a limit order that never fills)
+# is handled by `_void_strategy1_position()`/`strategy1_indeterminate` in
+# paper_trading_cycle.py, which is untouched.
 
 
 # ── Flashscore multideporte por equipo ────────────────────────────────────────
