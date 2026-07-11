@@ -43,7 +43,7 @@ def _make_wallet(balance=50.0):
 
 def test_stat_bet_placed_with_sport_and_leg_tipo():
     from src.core.orchestration import settlement as _s
-    wallets = {"pinnacle": _make_wallet(50.0)}
+    wallets = {"kalshi": _make_wallet(50.0)}
     vbs = [{
         "tipo": "stat", "sport": "football", "fixture": "Barcelona vs Getafe",
         "roi": 4.5, "model_edge": 5.0,
@@ -53,16 +53,16 @@ def test_stat_bet_placed_with_sport_and_leg_tipo():
     with patch.object(_s, "get_wallet", side_effect=lambda p: wallets[p]):
         res = _s._execute_stat_value_bets(vbs)
     assert any(r.get("accepted") for r in res)
-    bet = wallets["pinnacle"].bets[0]
+    bet = wallets["kalshi"].bets[0]
     assert bet.bet_type == "stat"
     assert bet.sport == "football"
     assert bet.legs[0].tipo == "ganador"   # monitorable leg_tipo
-    assert wallets["pinnacle"].balance < 50.0   # debitado
+    assert wallets["kalshi"].balance < 50.0   # debitado
 
 
 def test_stat_bet_dedup_skips_second_call():
     from src.core.orchestration import settlement as _s
-    wallets = {"unibet": _make_wallet(50.0)}
+    wallets = {"kalshi": _make_wallet(50.0)}
     vbs = [{
         "tipo": "stat", "sport": "basketball", "fixture": "Lakers ZZ vs Celtics QQ",
         "roi": 3.0, "legs": [{"side": "p1", "book": "unibet", "odd": 1.9, "stake_pct": 0.55}],
