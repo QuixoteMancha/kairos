@@ -46,3 +46,13 @@ def test_bands_sum_to_one_per_side():
     for side in ("team_a", "team_b"):
         total = sum(b.expected_time_fraction for b in bands if b.side == side)
         assert abs(total - 1.0) < 1e-6
+
+
+def test_pre_game_win_prob_matches_elo_win_prob_directly():
+    from src.core.strategies.event_volatility.basketball_winprob import (
+        pre_game_win_prob,
+        _elo_win_prob,
+    )
+
+    assert pre_game_win_prob(1800.0, 1500.0) == _elo_win_prob(1800.0, 1500.0)
+    assert pre_game_win_prob(1500.0, 1500.0) == _elo_win_prob(1500.0, 1500.0)

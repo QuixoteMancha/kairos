@@ -81,3 +81,32 @@ def test_incoherent_live_score_falls_back_to_kickoff():
         "current_score_home": 1, "current_score_away": 0,
     })
     assert bands  # produced valid bands via fallback, no crash
+
+
+def test_pre_match_win_prob_equal_elo_home_advantage():
+    from src.core.strategies.event_volatility.football_poisson import pre_match_win_prob
+
+    p_home, p_away = pre_match_win_prob(elo_home=1700.0, elo_away=1700.0)
+    # _match_lambdas bakes home advantage into lam_home via _HOME_ADV_ELO, so
+    # even equal Elo ratings yield P(home) > P(away).
+    assert p_home > p_away
+    assert p_home + p_away <= 1.0
+
+
+def test_pre_match_win_prob_big_favorite_dominates():
+    from src.core.strategies.event_volatility.football_poisson import pre_match_win_prob
+
+    p_home, p_away = pre_match_win_prob(elo_home=2200.0, elo_away=1400.0)
+    assert p_home > 0.6
+    assert p_home > p_away
+    assert p_home + p_away <= 1.0
+
+
+def test_pre_match_win_prob_invalid_elo_raises():
+    from src.core.strategies.event_volatility.football_poisson import pre_match_win_prob
+    import pytest
+
+    with pytest.raises((ValueError, TypeError)):
+        pre_match_win_prob(elo_home=float("nan"), elo_away=1500.0)
+    with pytest.raises((ValueError, TypeError)):
+        pre_match_win_prob(elo_home="bad", elo_away=1500.0)

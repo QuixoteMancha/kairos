@@ -82,3 +82,39 @@ def test_empty_sample_returns_no_bands():
         })
 
     assert bands == []
+
+
+def test_fair_prob_for_strike_partial_and_full_bins():
+    from src.core.strategies.event_volatility.weather_climatology import fair_prob_for_strike
+    from src.core.strategies.event_volatility.base import DwellBand
+
+    bands = [
+        DwellBand(low=18.0, high=19.0, side="18.0-19.0", expected_time_fraction=0.3),
+        DwellBand(low=19.0, high=20.0, side="19.0-20.0", expected_time_fraction=0.2),
+        DwellBand(low=20.0, high=21.0, side="20.0-21.0", expected_time_fraction=0.5),
+    ]
+    # Strike covers the first two bins fully (18.0-20.0), the third not at all.
+    result = fair_prob_for_strike(bands, strike_low=18.0, strike_high=20.0)
+    assert abs(result - 0.5) < 1e-9
+
+    # Strike covers all three bins.
+    result_all = fair_prob_for_strike(bands, strike_low=18.0, strike_high=21.0)
+    assert abs(result_all - 1.0) < 1e-9
+
+
+def test_fair_prob_for_strike_empty_bands_raises():
+    from src.core.strategies.event_volatility.weather_climatology import fair_prob_for_strike
+    import pytest
+
+    with pytest.raises(ValueError):
+        fair_prob_for_strike([], strike_low=18.0, strike_high=20.0)
+
+
+def test_fair_prob_for_strike_invalid_range_raises():
+    from src.core.strategies.event_volatility.weather_climatology import fair_prob_for_strike
+    from src.core.strategies.event_volatility.base import DwellBand
+    import pytest
+
+    bands = [DwellBand(low=18.0, high=19.0, side="x", expected_time_fraction=1.0)]
+    with pytest.raises(ValueError):
+        fair_prob_for_strike(bands, strike_low=20.0, strike_high=18.0)

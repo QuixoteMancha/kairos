@@ -231,3 +231,41 @@ def test_incremental_recalibrate_discards_incomplete_observations(monkeypatch):
     # Nothing should have moved -- no real data to justify a change.
     for b in tm._RANK_BUCKETS:
         assert merged[b] == 0.60
+
+
+def test_pre_match_win_prob_big_favorite_high_but_not_certain():
+    from src.core.strategies.event_volatility.tennis_markov import (
+        pre_match_win_prob,
+        _RANK_BUCKETS,
+    )
+
+    # Synthetic serve-pct calibration (avoids depending on network access to
+    # Sackmann data in this test): a clear top-10 vs bottom-bucket gap.
+    serve_pct_by_bucket = {b: 0.60 for b in _RANK_BUCKETS}
+    serve_pct_by_bucket[_RANK_BUCKETS[0]] = 0.70
+    serve_pct_by_bucket[_RANK_BUCKETS[-1]] = 0.50
+
+    p = pre_match_win_prob(
+        rank_a=1, rank_b=500, best_of=3, serve_pct_by_bucket=serve_pct_by_bucket
+    )
+    assert p > 0.7
+    assert p < 0.999
+
+
+def test_pre_match_win_prob_invalid_rank_raises():
+    from src.core.strategies.event_volatility.tennis_markov import pre_match_win_prob
+
+    for bad_rank in (0, -5):
+        try:
+            pre_match_win_prob(rank_a=bad_rank, rank_b=10)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for rank_a={bad_rank}")
+
+
+def test_pre_match_win_prob_invalid_best_of_raises():
+    from src.core.strategies.event_volatility.tennis_markov import pre_match_win_prob
+    import pytest
+
+    with pytest.raises(ValueError):
+        pre_match_win_prob(rank_a=1, rank_b=2, best_of=4)
