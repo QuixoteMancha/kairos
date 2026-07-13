@@ -146,6 +146,46 @@ def test_normalize_market_treats_zero_last_price_as_no_trade_yet():
     assert event["no_price"] == 0.71
 
 
+def test_normalize_market_avg_volume_prefers_volume_fp_over_open_interest():
+    """Gap 3 (2026-07-12): `volume_fp` (public, confirmed live per Kalshi's
+    /markets docs, https://docs.kalshi.com/api-reference/market/get-markets)
+    is the preferred liquidity proxy for
+    `overvaluation_gap.max_order_size_from_liquidity()`, not the deprecated
+    always-zero `liquidity`/`liquidity_dollars` fields."""
+    raw = {
+        "ticker": "KXTEST-26JUL01AAA-A", "title": "Test vs Test2", "status": "active",
+        "close_time": _close_time(12),
+        "yes_bid_dollars": "0.4000", "yes_ask_dollars": "0.5000",
+        "volume_fp": "1234.00", "open_interest_fp": "999.00",
+        "liquidity": 0, "liquidity_dollars": 0,
+    }
+    event = normalize_market(raw)
+    assert event["volume_fp"] == 1234.0
+    assert event["open_interest_fp"] == 999.0
+    assert event["avg_volume"] == 1234.0
+
+
+def test_normalize_market_avg_volume_falls_back_to_open_interest_when_no_volume():
+    raw = {
+        "ticker": "KXTEST-26JUL01BBB-B", "title": "Test vs Test2", "status": "active",
+        "close_time": _close_time(12),
+        "yes_bid_dollars": "0.4000", "yes_ask_dollars": "0.5000",
+        "volume_fp": "0.00", "open_interest_fp": "500.00",
+    }
+    event = normalize_market(raw)
+    assert event["avg_volume"] == 500.0
+
+
+def test_normalize_market_avg_volume_none_when_neither_field_present():
+    raw = {
+        "ticker": "KXTEST-26JUL01CCC-C", "title": "Test vs Test2", "status": "active",
+        "close_time": _close_time(12),
+        "yes_bid_dollars": "0.4000", "yes_ask_dollars": "0.5000",
+    }
+    event = normalize_market(raw)
+    assert event["avg_volume"] is None
+
+
 def test_normalize_market_handles_missing_close_time():
     event = normalize_market(_raw_market(close_time=None))
 

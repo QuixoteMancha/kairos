@@ -170,6 +170,87 @@ def test_cycle_gate_off_by_default_never_opens_overvaluation_position():
     ).count() == 0
 
 
+# ── Gap 1 (2026-07-12): football 3-way (HOME/AWAY/TIE) real context ────────
+
+def _kalshi_3way_group(home_ticker="KXTEST-26JUL01AAABBB-AAA", away_ticker="KXTEST-26JUL01AAABBB-BBB",
+                        tie_ticker="KXTEST-26JUL01AAABBB-TIE",
+                        home_label="Team A", away_label="Team B",
+                        title="Team A vs Team B"):
+    def _mk(ticker, sub_title, yes_price):
+        return {
+            "external_id": f"kalshi:{ticker}", "platform": "kalshi", "category": "sports",
+            "title": title, "yes_price": yes_price, "no_price": round(1 - yes_price, 4),
+            "event_ticker": "KXTEST-26JUL01AAABBB", "avg_volume": 3000.0,
+            "raw": {"yes_sub_title": sub_title, "ticker": ticker},
+        }
+    return {
+        "event_ticker": "KXTEST-26JUL01AAABBB", "event_title": title,
+        "markets": [
+            _mk(home_ticker, home_label, 0.55),
+            _mk(away_ticker, away_label, 0.30),
+            _mk(tie_ticker, "Tie", 0.20),
+        ],
+    }
+
+
+def test_football_3way_skips_group_without_two_sided_title(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
+    group = _kalshi_3way_group(title="World Cup Winner Prop")
+    group["event_title"] = "World Cup Winner Prop"
+    assert cycle._build_football_3way_overvaluation_events([group]) == []
+
+
+def test_football_3way_skips_group_with_unknown_elo(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {})
+    group = _kalshi_3way_group()
+    assert cycle._build_football_3way_overvaluation_events([group]) == []
+
+
+def test_football_3way_never_builds_a_candidate_for_the_tie_leg(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
+    group = _kalshi_3way_group()
+    events = cycle._build_football_3way_overvaluation_events([group])
+    assert len(events) == 2
+    tie_ticker = "KXTEST-26JUL01AAABBB-TIE"
+    assert all(tie_ticker not in (e.get("external_id") or "") for e in events)
+
+
+def test_football_3way_builds_independent_home_and_away_candidates_with_real_avg_volume(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
+    group = _kalshi_3way_group()
+    events = cycle._build_football_3way_overvaluation_events([group])
+    assert len(events) == 2
+    ext_ids = {e["external_id"] for e in events}
+    assert ext_ids == {"kalshi:KXTEST-26JUL01AAABBB-AAA", "kalshi:KXTEST-26JUL01AAABBB-BBB"}
+    for e in events:
+        assert e["category"] == "football"
+        assert e["avg_volume"] == 3000.0
+        assert e["favorite_price"] is not None and e["underdog_price"] is not None
+        assert 0.0 <= e["fair_prob"] <= 1.0
+
+
+def test_route_overvaluation_events_wires_football_3way_groups(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
+    group = _kalshi_3way_group()
+    monkeypatch.setattr(
+        "src.core.orchestration.scanning._fetch_kalshi_3way_football_events",
+        lambda: [group],
+    )
+    wallet = _make_wallet(label="t-overvaluation-football-3way")
+    stats = cycle.route_overvaluation_events(wallet, [], threshold=0.10)
+    # Both legs are real binary Kalshi markets in [0.20, 0.80] with real
+    # avg_volume -> both gates pass -> both legs proposed.
+    assert stats["overvaluation_new_market_filled"] == 2
+    assert SimulatedBet.select().where(
+        SimulatedBet.status == "overvaluation_market_leg_filled_awaiting_hedge"
+    ).count() == 2
+
+
 def test_cycle_gate_on_opens_overvaluation_position_when_forced(monkeypatch):
     monkeypatch.setattr(cycle, "OVERVALUATION_MODEL_ENABLED", True)
     wallet = _make_wallet(label="t-overvaluation-fase4-gate-on")
