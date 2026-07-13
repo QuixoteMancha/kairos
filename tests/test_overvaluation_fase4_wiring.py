@@ -233,6 +233,129 @@ def test_football_3way_builds_independent_home_and_away_candidates_with_real_avg
         assert 0.0 <= e["fair_prob"] <= 1.0
 
 
+# ── epsilon_context wiring fix (2026-07-13): every builder must populate
+# `epsilon_context` so `weight_gap_by_category_volatility`/
+# `estimate_dynamic_epsilon` stop always falling back to the fixed generic
+# epsilon. ──────────────────────────────────────────────────────────────────
+
+def test_football_3way_events_carry_real_epsilon_context(monkeypatch):
+    import src.scrapers.team_data.clubelo as clubelo_mod
+    monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
+    group = _kalshi_3way_group()
+    events = cycle._build_football_3way_overvaluation_events([group])
+    assert len(events) == 2
+    for e in events:
+        ectx = e["epsilon_context"]
+        assert ectx["team_a"] == "Team A"
+        assert ectx["team_b"] == "Team B"
+        assert ectx["team_a_elo"] == 1700.0
+        assert ectx["team_b_elo"] == 1500.0
+        assert ectx["league"] == "default"
+
+
+def test_football_3way_epsilon_context_feeds_real_dwell_time_model_not_fallback():
+    from src.core.strategies.limit_order_formation import estimate_dynamic_epsilon
+
+    context = {
+        "team_a": "Team A", "team_b": "Team B",
+        "team_a_elo": 1700.0, "team_b_elo": 1500.0, "league": "default",
+    }
+    epsilon, source = estimate_dynamic_epsilon("football", context, fallback=0.05)
+    assert source.startswith("dwell_time:")
+    assert not source.startswith("fallback_generic")
+
+
+def test_context_builds_basketball_epsilon_context_from_real_ratings(monkeypatch):
+    import src.scrapers.team_data.common as common_mod
+    monkeypatch.setattr(
+        common_mod, "get_team_rating",
+        lambda sport, name: 1700.0 if name == "Team A" else 1500.0,
+    )
+    event = {
+        "category": "basketball", "title": "Team A vs Team B",
+        "yes_price": 0.7, "no_price": 0.3,
+    }
+    ctx = cycle._build_overvaluation_context(event)
+    assert ctx is not None
+    ectx = ctx["epsilon_context"]
+    assert ectx == {
+        "team_a": "Team A", "team_b": "Team B",
+        "team_a_rating": 1700.0, "team_b_rating": 1500.0,
+    }
+
+    from src.core.strategies.limit_order_formation import estimate_dynamic_epsilon
+    epsilon, source = estimate_dynamic_epsilon("basketball", ectx, fallback=0.05)
+    assert source.startswith("dwell_time:")
+
+
+def test_context_builds_tennis_epsilon_context_from_real_rank(monkeypatch):
+    import src.core.math.elo.helpers as helpers_mod
+    monkeypatch.setattr(
+        helpers_mod, "get_player_elo_by_name",
+        lambda name, surface="Overall": 1900.0 if name == "Player A" else 1500.0,
+    )
+    monkeypatch.setattr(
+        helpers_mod, "get_player_rank_by_name",
+        lambda name: 5 if name == "Player A" else 80,
+    )
+    event = {
+        "category": "tennis", "title": "Player A vs Player B",
+        "yes_price": 0.7, "no_price": 0.3,
+    }
+    ctx = cycle._build_overvaluation_context(event)
+    assert ctx is not None
+    assert ctx["epsilon_context"] == {"player_a_rank": 5, "player_b_rank": 80}
+
+    from src.core.strategies.limit_order_formation import estimate_dynamic_epsilon
+    epsilon, source = estimate_dynamic_epsilon("tennis", ctx["epsilon_context"], fallback=0.05)
+    assert source.startswith("dwell_time:")
+
+
+def test_context_tennis_epsilon_context_empty_when_rank_missing_but_event_still_proceeds(monkeypatch):
+    import src.core.math.elo.helpers as helpers_mod
+    monkeypatch.setattr(
+        helpers_mod, "get_player_elo_by_name",
+        lambda name, surface="Overall": 1900.0 if name == "Player A" else 1500.0,
+    )
+    monkeypatch.setattr(helpers_mod, "get_player_rank_by_name", lambda name: None)
+    event = {
+        "category": "tennis", "title": "Player A vs Player B",
+        "yes_price": 0.7, "no_price": 0.3,
+    }
+    ctx = cycle._build_overvaluation_context(event)
+    # fail-closed at the wiring level only -- missing rank must NOT block
+    # the whole event, just the dynamic-epsilon weighting.
+    assert ctx is not None
+    assert ctx["epsilon_context"] == {}
+
+
+def test_get_player_rank_by_name_no_row_returns_none(monkeypatch):
+    from src.core.math.elo.helpers import get_player_rank_by_name
+    from src.database.database import Player
+
+    Player.get_or_create(nombre="Zzz Unranked Test Player")
+    assert get_player_rank_by_name("Zzz Unranked Test Player") is None
+    assert get_player_rank_by_name("") is None
+    assert get_player_rank_by_name("Totally Unknown Player Xyz") is None
+
+
+def test_get_player_rank_by_name_returns_most_recent_ranking():
+    from datetime import date, timedelta
+    from src.core.math.elo.helpers import get_player_rank_by_name
+    from src.database.database import Player, RankingHistory
+
+    player, _ = Player.get_or_create(nombre="Rank Test Player One")
+    RankingHistory.get_or_create(
+        player=player, fecha=date.today() - timedelta(days=7),
+        defaults={"ranking": 50, "ranking_type": "ATP"},
+    )
+    RankingHistory.get_or_create(
+        player=player, fecha=date.today(),
+        defaults={"ranking": 42, "ranking_type": "ATP"},
+    )
+    assert get_player_rank_by_name("Rank Test Player One") == 42
+
+
 def test_route_overvaluation_events_wires_football_3way_groups(monkeypatch):
     import src.scrapers.team_data.clubelo as clubelo_mod
     monkeypatch.setattr(clubelo_mod, "clubelo_snapshot", lambda d: {"team a": 1700.0, "team b": 1500.0})
