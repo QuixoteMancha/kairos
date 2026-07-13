@@ -79,7 +79,7 @@ def test_bets_endpoint_pagination(client):
     for i in range(25):
         SimulatedBet.create(
             bet_id=f"bet-{i:03d}", wallet=w, strategy="strategy_1_universal",
-            status="strategy1_observing", opened_at=f"2026-07-0{1 + i % 9}T00:00:{i:02d}",
+            status="strategy1_awaiting_hedge", opened_at=f"2026-07-0{1 + i % 9}T00:00:{i:02d}",
         )
 
     r1 = client.get("/api/paper/bets?limit=10&page=1")
@@ -104,6 +104,43 @@ def test_bets_endpoint_pagination(client):
     d3 = r3.get_json()
     assert d3["offset"] == 5
     assert len(d3["bets"]) == 10
+
+
+def test_bets_endpoint_excludes_no_leg_filled_statuses_by_default(client):
+    """strategy1_observing / crypto15m_A_leg1_pending have NO leg executed yet
+    (total_staked=0.0) and should not clutter the default history — but must
+    stay retrievable via ?include_observing=true for debugging, and must not
+    be deleted from the DB."""
+    from src.core.orchestration.paper_trading_cycle import get_or_create_wallet
+
+    w = get_or_create_wallet()
+    SimulatedBet.create(
+        bet_id="obs-1", wallet=w, strategy="strategy_1_universal",
+        status="strategy1_observing", total_staked=0.0, opened_at="2026-07-01T00:00:00",
+    )
+    SimulatedBet.create(
+        bet_id="pend-1", wallet=w, strategy="crypto_15m",
+        status="crypto15m_A_leg1_pending", total_staked=0.0, opened_at="2026-07-01T00:00:01",
+    )
+    SimulatedBet.create(
+        bet_id="live-1", wallet=w, strategy="strategy_1_universal",
+        status="strategy1_awaiting_hedge", total_staked=10.0, opened_at="2026-07-01T00:00:02",
+    )
+
+    r = client.get("/api/paper/bets")
+    data = r.get_json()
+    ids = {b["bet_id"] for b in data["bets"]}
+    assert ids == {"live-1"}
+    assert data["total_count"] == 1
+
+    r2 = client.get("/api/paper/bets?include_observing=true")
+    data2 = r2.get_json()
+    ids2 = {b["bet_id"] for b in data2["bets"]}
+    assert ids2 == {"obs-1", "pend-1", "live-1"}
+    assert data2["total_count"] == 3
+
+    # never deleted from the DB
+    assert SimulatedBet.select().where(SimulatedBet.bet_id == "obs-1").count() == 1
 
 
 def test_bets_endpoint_returns_resolution_meta_and_fill_json(client):
