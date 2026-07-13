@@ -103,6 +103,36 @@ def test_context_skips_basketball_event_with_no_rating_on_file(monkeypatch):
     assert cycle._build_overvaluation_context(event) is None
 
 
+def test_context_skips_ice_hockey_event_with_no_rating_on_file(monkeypatch):
+    import src.scrapers.team_data.common as common_mod
+    monkeypatch.setattr(common_mod, "get_team_rating", lambda sport, name: None)
+    event = {
+        "category": "ice_hockey", "title": "Made Up Team A vs Made Up Team B",
+        "yes_price": 0.5, "no_price": 0.5,
+    }
+    assert cycle._build_overvaluation_context(event) is None
+
+
+def test_context_builds_ice_hockey_favorite_underdog_from_real_ratings(monkeypatch):
+    import src.scrapers.team_data.common as common_mod
+    monkeypatch.setattr(
+        common_mod, "get_team_rating",
+        lambda sport, name: 1700.0 if name == "Team A" else 1500.0,
+    )
+    event = {
+        "category": "ice_hockey", "title": "Team A vs Team B",
+        "yes_price": 0.7, "no_price": 0.3,
+    }
+    ctx = cycle._build_overvaluation_context(event)
+    assert ctx is not None
+    # Team A (higher rating) is the model's favorite -> "yes" (team_a) side
+    # maps to favorite_price per this function's documented assumption.
+    assert ctx["favorite_price"] == 0.7
+    assert ctx["underdog_price"] == 0.3
+    assert 0.5 < ctx["fair_prob"] < 1.0
+    assert ctx["epsilon_context"]["team_a_rating"] == 1700.0
+
+
 def test_context_builds_favorite_underdog_from_ratings(monkeypatch):
     import src.scrapers.team_data.common as common_mod
     monkeypatch.setattr(
