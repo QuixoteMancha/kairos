@@ -311,3 +311,44 @@ def test_b_event_disappears_resolves_directional():
     w2 = cycle.SimulatedWallet.get_by_id(w.id)
     stats = cycle._run_strategy1_crypto15m_b_pass(w2, [])
     assert stats["crypto15m_b_resolved_directional"] == 1
+
+
+# ── Wallet-reserve fail-closed guards (real bug 2026-07-16, see
+# _available_capital_for_new_stake docstring in paper_trading_cycle.py) ────
+
+def test_crypto15m_a_new_candidate_not_admitted_when_reserve_leaves_zero_available():
+    w = SimulatedWallet.create(
+        label="crypto15m-a-reserve-1", platform="paper", initial_balance=200.0,
+        balance=15.0, equity=200.0, started_at=cycle._now_iso(),
+        strategy_scope="all", reset_count=0, is_active=True,
+    )
+    stats = cycle._run_strategy1_crypto15m_a_pass(
+        w, [_event("evt-reserve", 0.50, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    assert stats["crypto15m_a_new_pending"] == 0
+    assert SimulatedBet.select().count() == 0
+
+
+def test_crypto15m_a_leg1_fill_rejected_fail_closed_when_balance_drained_in_interim():
+    w = cycle.get_or_create_wallet("crypto15m-a-reserve-2")
+    cycle._run_strategy1_crypto15m_a_pass(
+        w, [_event("evt-drain", 0.50, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-crypto15mA-evt-drain")
+    meta = json.loads(bet.resolution_meta)
+    stake_usd = meta["stake_usd"]
+    assert stake_usd > 0
+
+    w2 = cycle.SimulatedWallet.get_by_id(w.id)
+    drained_balance = stake_usd / 2.0
+    w2.balance = drained_balance
+    w2.save()
+
+    stats = cycle._run_strategy1_crypto15m_a_pass(
+        w2, [_event("evt-drain", 0.60, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    assert stats["skipped_insufficient_capital"] == 1
+    bet_after = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-crypto15mA-evt-drain")
+    assert bet_after.status == "crypto15m_A_insufficient_capital"
+    w3 = cycle.SimulatedWallet.get_by_id(w.id)
+    assert w3.balance == pytest.approx(drained_balance)

@@ -454,3 +454,61 @@ def test_cascade_waits_for_real_result_timeout_before_degrading(monkeypatch):
     final_meta = json.loads(bet.resolution_meta)
     assert final_meta["resolved_via"] == "price_heuristic_win_unverified"
     assert stats["strategy1_directional_resolved"] == 1
+
+
+# ── Wallet-reserve fail-closed guards (real bug 2026-07-16: paper engine
+# balance went negative, -$20.04, because no sizing/write path ever applied
+# the 10% equity reserve or re-verified live balance before debiting) ──────
+
+def test_new_candidate_not_admitted_when_reserve_leaves_zero_available():
+    # equity=200, balance=15 -> reserve floor = 200*0.10 = 20 > balance,
+    # so `_available_capital_for_new_stake` clamps to 0.0 and no stake can
+    # be sized, even though raw balance (15) is nominally positive.
+    w = SimulatedWallet.create(
+        label="s1-wallet-reserve-1", platform="paper", initial_balance=200.0,
+        balance=15.0, equity=200.0, started_at=cycle._now_iso(),
+        strategy_scope="all", reset_count=0, is_active=True,
+    )
+    stats = cycle._run_strategy1_pass(w, [_event("evt-reserve", 0.50)])
+    assert stats["strategy1_new_observing"] == 0
+    assert SimulatedBet.select().count() == 0
+
+
+def test_new_candidate_admitted_when_available_capital_positive():
+    # Control: same wallet shape but balance comfortably above the reserve
+    # floor -- candidate IS admitted.
+    w = SimulatedWallet.create(
+        label="s1-wallet-reserve-2", platform="paper", initial_balance=200.0,
+        balance=200.0, equity=200.0, started_at=cycle._now_iso(),
+        strategy_scope="all", reset_count=0, is_active=True,
+    )
+    stats = cycle._run_strategy1_pass(w, [_event("evt-reserve-2", 0.50)])
+    assert stats["strategy1_new_observing"] == 1
+
+
+def test_leg1_fill_rejected_fail_closed_when_balance_drained_in_interim():
+    # Candidate opens normally (stake sized off a healthy balance), but by
+    # the time the leg1 fill cycle runs, some OTHER candidate/strategy has
+    # drained the wallet below what this one needs -- must NOT go negative;
+    # the fill is discarded entirely (no partial fill), bet is marked
+    # `strategy1_insufficient_capital`, and the ledger balance is untouched.
+    w = cycle.get_or_create_wallet("s1-wallet-reserve-3")
+    cycle._run_strategy1_pass(w, [_event("evt-drain", 0.50)])
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-drain")
+    meta = json.loads(bet.resolution_meta)
+    stake_usd = meta["stake_usd"]
+    assert stake_usd > 0
+
+    # Simulate other strategies having consumed capital in the interim.
+    w2 = SimulatedWallet.get_by_id(w.id)
+    drained_balance = stake_usd / 2.0  # deliberately below what this fill needs
+    w2.balance = drained_balance
+    w2.save()
+
+    stats = cycle._run_strategy1_pass(w2, [_event("evt-drain", 0.60)])  # crosses level -> would fill leg1
+    assert stats["skipped_insufficient_capital"] == 1
+    bet.wallet = w2  # refresh handle via same table row
+    bet_after = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-drain")
+    assert bet_after.status == "strategy1_insufficient_capital"
+    w3 = SimulatedWallet.get_by_id(w.id)
+    assert w3.balance == pytest.approx(drained_balance)  # untouched, no negative fill happened

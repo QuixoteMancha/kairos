@@ -64,13 +64,16 @@ def test_run_cycle_opens_and_settles_fillable_opp_compounding_balance():
     assert result["opened"] == 1
     assert result["settled_win"] == 1
     assert result["unfillable"] == 0
-    # stake = 200*0.05=10, pnl = 10*0.064=0.64 -> balance/equity = 200.64
-    assert result["balance"] == pytest.approx(200.64, abs=0.01)
-    assert result["equity"] == pytest.approx(200.64, abs=0.01)
+    # BUG REAL 2026-07-16 fix: sizing now uses `_available_capital_for_new_stake`
+    # (reserves 10% of equity before sizing new stakes), not raw balance.
+    # available = 200 - 200*0.10 = 180; stake = 180*0.05=9, pnl = 9*0.064=0.576
+    # -> balance/equity = 200.576
+    assert result["balance"] == pytest.approx(200.576, abs=0.01)
+    assert result["equity"] == pytest.approx(200.576, abs=0.01)
 
     bet = SimulatedBet.get(SimulatedBet.strategy == "strategy_3_same_market")
     assert bet.status == "settled_win"
-    assert bet.pnl == pytest.approx(0.64, abs=0.01)
+    assert bet.pnl == pytest.approx(0.576, abs=0.01)
 
 
 def test_last_cycle_summary_persisted_even_with_zero_opportunities():
