@@ -132,6 +132,134 @@ class TestModelProbs:
         assert 0.0 <= probs.p_home_win <= 1.0
         assert probs.p_home_win > 0.5
 
+    def test_american_football_expected_total_none_without_real_points(self):
+        # Fail-closed: sin points_for_pg/points_against_pg reales de AMBOS
+        # equipos, expected_total debe ser None -- nunca una constante fabricada.
+        probs = american_football.compute_basic_probs(1600.0, 1500.0)
+        assert probs.expected_total is None
+        assert probs.sigma_total is None
+
+        # Falta solo uno de los 4 -> sigue siendo None (no basta parcial).
+        probs_partial = american_football.compute_basic_probs(
+            1600.0, 1500.0, home_pts_for_pg=24.0, home_pts_against_pg=20.0,
+            away_pts_for_pg=22.0,
+        )
+        assert probs_partial.expected_total is None
+
+    def test_american_football_expected_total_depends_on_all_four_inputs(self):
+        # Dos pares de equipos con estadísticas distintas -> expected_total
+        # distinto (no una constante de liga disfrazada de nuevo).
+        low = american_football.compute_basic_probs(
+            1600.0, 1500.0,
+            home_pts_for_pg=15.0, home_pts_against_pg=15.0,
+            away_pts_for_pg=15.0, away_pts_against_pg=15.0,
+        )
+        high = american_football.compute_basic_probs(
+            1600.0, 1500.0,
+            home_pts_for_pg=30.0, home_pts_against_pg=30.0,
+            away_pts_for_pg=30.0, away_pts_against_pg=30.0,
+        )
+        assert low.expected_total is not None and high.expected_total is not None
+        assert low.expected_total != high.expected_total
+        assert high.expected_total > low.expected_total
+
+        # Cambiar SOLO la defensa del rival (away_pts_against_pg) debe mover
+        # expected_total en la dirección esperada (equipo local anota más
+        # contra una defensa floja) -- prueba que depende realmente de los 4
+        # números, no solo de un promedio superficial de ataque.
+        weak_away_defense = american_football.compute_basic_probs(
+            1600.0, 1500.0,
+            home_pts_for_pg=20.0, home_pts_against_pg=20.0,
+            away_pts_for_pg=20.0, away_pts_against_pg=35.0,
+        )
+        strong_away_defense = american_football.compute_basic_probs(
+            1600.0, 1500.0,
+            home_pts_for_pg=20.0, home_pts_against_pg=20.0,
+            away_pts_for_pg=20.0, away_pts_against_pg=10.0,
+        )
+        assert weak_away_defense.expected_total > strong_away_defense.expected_total
+
+    def test_american_football_total_restored_in_supported_leg_tipos(self):
+        supported = american_football.get_supported_live_stat_leg_tipos()
+        assert "total" in supported
+        assert "total_points" in supported
+
+    def test_ice_hockey_expected_total_none_without_team_names(self):
+        # Fail-closed: sin home_team/away_team no hay forma de resolver goles
+        # reales por equipo -> expected_total debe ser None, nunca fabricado.
+        probs = ice_hockey.compute_match_probs(1600.0, 1500.0)
+        assert probs.expected_total is None
+
+    def test_ice_hockey_expected_total_none_when_real_data_missing(self, monkeypatch):
+        # Team names presentes pero sin datos reales en TeamRating -> None.
+        import src.core.resolvers.sports.ice_hockey as ih_mod
+
+        def _fake_extra(sport, name):
+            return None
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra
+        )
+        probs = ih_mod.compute_match_probs(
+            1600.0, 1500.0, home_team="Colorado Avalanche", away_team="Dallas Stars"
+        )
+        assert probs.expected_total is None
+
+    def test_ice_hockey_expected_total_none_when_only_one_team_has_data(self, monkeypatch):
+        def _fake_extra(sport, name):
+            if name == "Colorado Avalanche":
+                return {"goals_for_pg": 3.7, "goals_against_pg": 2.5}
+            return None
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra
+        )
+        probs = ice_hockey.compute_match_probs(
+            1600.0, 1500.0, home_team="Colorado Avalanche", away_team="Dallas Stars"
+        )
+        assert probs.expected_total is None
+
+    def test_ice_hockey_expected_total_depends_on_real_goals_data(self, monkeypatch):
+        # Dos pares de equipos con estadísticas de goles distintas -> expected_total
+        # distinto (no una constante de liga disfrazada de nuevo).
+        low_data = {
+            "Team A": {"goals_for_pg": 2.0, "goals_against_pg": 2.0},
+            "Team B": {"goals_for_pg": 2.0, "goals_against_pg": 2.0},
+        }
+        high_data = {
+            "Team C": {"goals_for_pg": 4.0, "goals_against_pg": 4.0},
+            "Team D": {"goals_for_pg": 4.0, "goals_against_pg": 4.0},
+        }
+
+        def _fake_extra_low(sport, name):
+            return low_data.get(name)
+
+        def _fake_extra_high(sport, name):
+            return high_data.get(name)
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra_low
+        )
+        low = ice_hockey.compute_match_probs(
+            1600.0, 1500.0, home_team="Team A", away_team="Team B"
+        )
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra_high
+        )
+        high = ice_hockey.compute_match_probs(
+            1600.0, 1500.0, home_team="Team C", away_team="Team D"
+        )
+
+        assert low.expected_total is not None and high.expected_total is not None
+        assert low.expected_total != high.expected_total
+        assert high.expected_total > low.expected_total
+
+    def test_ice_hockey_total_restored_in_supported_leg_tipos(self):
+        supported = ice_hockey.get_supported_live_stat_leg_tipos()
+        assert "total" in supported
+        assert "total_goals" in supported
+
 
 # ── get_live_stat_danger: triggers por deporte ────────────────────────────────
 
