@@ -276,6 +276,65 @@ def test_estimate_strategy1_epsilon_falls_back_for_unwired_category():
     assert "tennis" in source
 
 
+def test_estimate_strategy1_epsilon_uses_dwell_time_for_basketball_with_real_ratings():
+    """Basketball is not in `_NO_DYNAMIC_EPSILON_CATEGORIES` — with real
+    ratings for both teams (get_team_rating hit), the real dwell-time model
+    must be used, not the generic fallback."""
+    from src.core.strategies.event_volatility.base import DwellBand
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    bands = [
+        DwellBand(low=0.40, high=0.60, side="Team A", expected_time_fraction=1.0),
+        DwellBand(low=0.40, high=0.60, side="Team B", expected_time_fraction=1.0),
+    ]
+    fake_model = MagicMock()
+    fake_model.estimate.return_value = bands
+    event = {"category": "basketball", "title": "Team A vs Team B"}
+    with patch("src.core.strategies.limit_order_formation.get_model", return_value=fake_model), \
+         patch("src.scrapers.team_data.common.get_team_rating", side_effect=[1600.0, 1500.0]):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert source == "dwell_time:basketball"
+    assert eps != EPSILON_INITIAL
+
+
+def test_estimate_strategy1_epsilon_falls_back_for_basketball_without_rating():
+    """No real rating on file for one/both teams -> fail-closed to the
+    generic fallback, never a fabricated rating."""
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    event = {"category": "basketball", "title": "Team A vs Team B"}
+    with patch("src.scrapers.team_data.common.get_team_rating", side_effect=[1600.0, None]):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert source == "fallback_generic:no_context_source(basketball)"
+
+
+def test_estimate_strategy1_epsilon_baseball_builds_real_context_but_stays_fallback():
+    """Baseball's dwell-time model is explicitly excluded from producing a
+    non-fallback epsilon (limit_order_formation._NO_DYNAMIC_EPSILON_CATEGORIES,
+    uncalibrated model) even though real context (team ratings) is now built
+    for it here — the resulting epsilon must still equal EPSILON_INITIAL, and
+    the fallback reason must reflect the calibration exclusion, not a missing
+    context source."""
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    event = {"category": "baseball", "title": "Team A vs Team B"}
+    with patch("src.scrapers.team_data.common.get_team_rating", side_effect=[1600.0, 1500.0]):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert source == "fallback_generic:category_not_calibrated(baseball)"
+
+
+def test_estimate_strategy1_epsilon_falls_back_for_baseball_without_rating():
+    from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
+
+    event = {"category": "baseball", "title": "Team A vs Team B"}
+    with patch("src.scrapers.team_data.common.get_team_rating", side_effect=[None, None]):
+        eps, source = cycle._estimate_strategy1_epsilon(event)
+    assert eps == EPSILON_INITIAL
+    assert source == "fallback_generic:no_context_source(baseball)"
+
+
 def test_estimate_strategy1_epsilon_never_raises_on_model_error():
     from src.core.strategies.universal_limit_arb import EPSILON_INITIAL
 
