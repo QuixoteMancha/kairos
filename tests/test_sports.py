@@ -261,6 +261,83 @@ class TestModelProbs:
         assert "total_goals" in supported
 
 
+class TestBaseballExpectedTotalRuns:
+    """expected_total_runs debe ser real (derivado de runs_for_pg/
+    runs_against_pg de TeamRating.extra), nunca una constante de liga
+    fabricada (bug eliminado 2026-07-17)."""
+
+    def test_baseball_expected_total_runs_none_without_team_names(self):
+        probs = baseball.compute_match_probs(1600.0, 1500.0)
+        assert probs.expected_total_runs is None
+
+    def test_baseball_expected_total_runs_none_when_real_data_missing(self, monkeypatch):
+        def _fake_extra(sport, name):
+            return None
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra
+        )
+        probs = baseball.compute_match_probs(
+            1600.0, 1500.0, home_team="New York Yankees", away_team="Boston Red Sox"
+        )
+        assert probs.expected_total_runs is None
+
+    def test_baseball_expected_total_runs_none_when_only_one_team_has_data(self, monkeypatch):
+        def _fake_extra(sport, name):
+            if name == "New York Yankees":
+                return {"runs_for_pg": 4.8, "runs_against_pg": 3.9}
+            return None
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra
+        )
+        probs = baseball.compute_match_probs(
+            1600.0, 1500.0, home_team="New York Yankees", away_team="Boston Red Sox"
+        )
+        assert probs.expected_total_runs is None
+
+    def test_baseball_expected_total_runs_depends_on_real_runs_data(self, monkeypatch):
+        # Dos pares de equipos con estadísticas de carreras distintas ->
+        # expected_total_runs distinto (no una constante de liga disfrazada).
+        low_data = {
+            "Team A": {"runs_for_pg": 3.0, "runs_against_pg": 3.0},
+            "Team B": {"runs_for_pg": 3.0, "runs_against_pg": 3.0},
+        }
+        high_data = {
+            "Team C": {"runs_for_pg": 6.0, "runs_against_pg": 6.0},
+            "Team D": {"runs_for_pg": 6.0, "runs_against_pg": 6.0},
+        }
+
+        def _fake_extra_low(sport, name):
+            return low_data.get(name)
+
+        def _fake_extra_high(sport, name):
+            return high_data.get(name)
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra_low
+        )
+        low = baseball.compute_match_probs(
+            1600.0, 1500.0, home_team="Team A", away_team="Team B"
+        )
+
+        monkeypatch.setattr(
+            "src.scrapers.team_data.common.get_team_rating_extra", _fake_extra_high
+        )
+        high = baseball.compute_match_probs(
+            1600.0, 1500.0, home_team="Team C", away_team="Team D"
+        )
+
+        assert low.expected_total_runs is not None and high.expected_total_runs is not None
+        assert low.expected_total_runs != high.expected_total_runs
+        assert high.expected_total_runs > low.expected_total_runs
+
+    def test_baseball_total_runs_restored_in_supported_leg_tipos(self):
+        supported = baseball.get_supported_live_stat_leg_tipos()
+        assert "total" in supported
+        assert "total_runs" in supported
+
+
 # ── get_live_stat_danger: triggers por deporte ────────────────────────────────
 
 class TestLiveStatDanger:
