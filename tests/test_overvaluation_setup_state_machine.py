@@ -99,8 +99,14 @@ def test_favorite_overvalued_admits_underdog_market_leg(wallet):
 
 
 def test_market_justified_admits_favorite_market_leg(wallet):
-    # gap = 0.55 - 0.53 = 0.02 <= threshold 0.10 -> market_justified
-    ev = _football_event(favorite_price=0.55, underdog_price=0.42, fair_prob=0.53)
+    # gap = 0.55 - 0.60 = -0.05 <= threshold 0.10 -> market_justified, AND
+    # fair_prob(0.60) > favorite_price(0.55) so the market leg (favorite) has
+    # a real positive Kelly edge (2026-07-17, see
+    # `_overvaluation_kelly_cap_fraction`) -- with fair_prob=0.53 < 0.55 the
+    # favorite would be slightly overvalued even here, a negative-EV buy
+    # that Kelly correctly caps to $0 (not a bug in Kelly, the old fixture
+    # just didn't encode a real edge).
+    ev = _football_event(favorite_price=0.55, underdog_price=0.42, fair_prob=0.60)
     stats = cycle._run_strategy1_overvaluation_pass(wallet, [ev], threshold=0.10)
     assert stats["overvaluation_new_market_filled"] == 1
     bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-overvaluation-football-1")

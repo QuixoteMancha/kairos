@@ -37,7 +37,16 @@ def _make_wallet(balance=200.0, label="t-overvaluation-fase4"):
     )
 
 
-def _pre_built_event(category, ext_id, favorite_price=0.65, underdog_price=0.35, fair_prob=0.60):
+def _pre_built_event(category, ext_id, favorite_price=0.65, underdog_price=0.35, fair_prob=0.70):
+    # fair_prob=0.70 > favorite_price=0.65 (favorite UNDERvalued, gap=-0.05)
+    # so the "market_justified" branch (buy favorite at market) has a real,
+    # positive Kelly edge (2026-07-17, see paper_trading_cycle.py's
+    # `_overvaluation_kelly_cap_fraction`): with the previous default
+    # (fair_prob=0.60 < favorite_price=0.65) the favorite was actually
+    # slightly OVERvalued even in the "market_justified" branch (gap=0.05,
+    # under threshold but still positive), which is a genuinely negative-EV
+    # buy for the market leg -- Kelly correctly caps that to $0, which is
+    # why this fixture needed updating, not a change in Kelly's own logic.
     """A raw event that ALREADY carries favorite_price/underdog_price/
     fair_prob -- i.e. bypasses `_build_overvaluation_context` entirely, the
     same way a real caller-supplied context would. Used to exercise
