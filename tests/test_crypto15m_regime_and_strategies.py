@@ -352,3 +352,132 @@ def test_crypto15m_a_leg1_fill_rejected_fail_closed_when_balance_drained_in_inte
     assert bet_after.status == "crypto15m_A_insufficient_capital"
     w3 = cycle.SimulatedWallet.get_by_id(w.id)
     assert w3.balance == pytest.approx(drained_balance)
+
+
+# ── Dedicated crypto_15m CLUSTER cap (Vesper audit, 2026-07-17, see
+# CRYPTO15M_CLUSTER_CAP_PCT / _crypto15m_cluster_available_capital docstrings
+# in paper_trading_cycle.py) -- second, independent cap on TOP of the generic
+# 10% reserve, shared across Sub-A + Sub-B together. ─────────────────────────
+
+def test_cluster_empty_sizes_normally_respecting_reserve():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-empty")
+    # equity=200 -> reserve floor 20 -> available 180 -> stake_fraction 0.05
+    # -> 9.0, well under the 12% cluster cap (24.0) -> unaffected by the cap.
+    stats = cycle._run_strategy1_crypto15m_a_pass(
+        w, [_event("evt-empty", 0.50, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    assert stats["crypto15m_a_new_pending"] == 1
+    assert stats["skipped_cluster_cap"] == 0
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-crypto15mA-evt-empty")
+    meta = json.loads(bet.resolution_meta)
+    assert meta["stake_usd"] == pytest.approx(9.0)
+
+
+def test_cluster_near_cap_reduces_new_stake():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-near-cap")
+    # Pre-existing crypto_15m exposure of 20.0 (Sub-B position, awaiting hedge)
+    # against a 24.0 cluster cap (12% of 200 equity) leaves only 4.0 headroom
+    # -- well below the 9.0 the reserve/Kelly ceiling alone would allow.
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mB-preexisting",
+        wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]),
+        opened_at=cycle._now_iso(), total_staked=20.0, expected_roi_pct=0.0,
+        simulated_fill_json="", actual_filled_pct=50.0,
+        status="crypto15m_B_awaiting_asymmetric_hedge",
+        resolution_meta=json.dumps({"external_id": "preexisting"}),
+    )
+    stats = cycle._run_strategy1_crypto15m_a_pass(
+        w, [_event("evt-near-cap", 0.50, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    assert stats["crypto15m_a_new_pending"] == 1
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-crypto15mA-evt-near-cap")
+    meta = json.loads(bet.resolution_meta)
+    assert meta["stake_usd"] == pytest.approx(4.0)
+
+
+def test_cluster_at_cap_skips_new_candidate_cleanly():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-at-cap")
+    # Pre-existing exposure already >= the 24.0 cluster cap -> no headroom.
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mB-full",
+        wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]),
+        opened_at=cycle._now_iso(), total_staked=24.0, expected_roi_pct=0.0,
+        simulated_fill_json="", actual_filled_pct=50.0,
+        status="crypto15m_B_awaiting_asymmetric_hedge",
+        resolution_meta=json.dumps({"external_id": "full"}),
+    )
+    stats = cycle._run_strategy1_crypto15m_a_pass(
+        w, [_event("evt-at-cap", 0.50, indicators=_LATERAL_IND)], tick_provider=lambda t: []
+    )
+    assert stats["crypto15m_a_new_pending"] == 0
+    assert stats["skipped_cluster_cap"] == 1
+    assert SimulatedBet.select().where(SimulatedBet.bet_id == "paper-strategy1-crypto15mA-evt-at-cap").count() == 0
+
+
+def test_cluster_exposure_sums_subA_and_subB_on_one_shared_cap():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-shared")
+    # 12.0 already committed via Sub-A (leg1 filled) + 12.0 via Sub-B
+    # (awaiting hedge) = 24.0 total -- the FULL cap, even though neither
+    # sub-strategy alone would be "at cap" if each had its own ceiling.
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mA-shared", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]), opened_at=cycle._now_iso(),
+        total_staked=12.0, expected_roi_pct=0.0, simulated_fill_json="",
+        actual_filled_pct=0.0, status="crypto15m_A_leg1_filled_awaiting_remontada",
+        resolution_meta=json.dumps({"external_id": "shared-a"}),
+    )
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mB-shared", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]), opened_at=cycle._now_iso(),
+        total_staked=12.0, expected_roi_pct=0.0, simulated_fill_json="",
+        actual_filled_pct=50.0, status="crypto15m_B_awaiting_asymmetric_hedge",
+        resolution_meta=json.dumps({"external_id": "shared-b"}),
+    )
+    assert cycle._crypto15m_cluster_exposure(w) == pytest.approx(24.0)
+    assert cycle._crypto15m_cluster_available_capital(w) == pytest.approx(0.0)
+
+
+def test_cluster_exposure_ignores_terminal_statuses():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-terminal")
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mA-terminal", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]), opened_at=cycle._now_iso(),
+        total_staked=24.0, expected_roi_pct=0.0, simulated_fill_json="",
+        actual_filled_pct=100.0, status="crypto15m_A_resolved_arb",
+        resolution_meta=json.dumps({"external_id": "terminal"}),
+    )
+    # Fully resolved -- no longer "at risk" -- must not count toward the cap.
+    assert cycle._crypto15m_cluster_exposure(w) == pytest.approx(0.0)
+    assert cycle._crypto15m_cluster_available_capital(w) == pytest.approx(24.0)
+
+
+def test_cluster_cap_fail_closed_on_exposure_error(monkeypatch):
+    w = cycle.get_or_create_wallet("crypto15m-cluster-failclosed")
+
+    def _boom(_wallet):
+        raise RuntimeError("simulated DB error")
+
+    monkeypatch.setattr(cycle, "_crypto15m_cluster_exposure", _boom)
+    # Fail-closed: an error computing exposure must assume the cluster is
+    # FULL (0.0 available), never that it is empty.
+    assert cycle._crypto15m_cluster_available_capital(w) == pytest.approx(0.0)
+
+
+def test_generic_strategy1_unaffected_by_crypto15m_cluster_cap():
+    w = cycle.get_or_create_wallet("crypto15m-cluster-generic-unaffected")
+    # Fill the crypto_15m cluster completely...
+    SimulatedBet.create(
+        bet_id="paper-strategy1-crypto15mB-blocker", wallet=w, strategy=cycle._S1_STRATEGY_NAME,
+        platform_legs=json.dumps(["kalshi"]), opened_at=cycle._now_iso(),
+        total_staked=24.0, expected_roi_pct=0.0, simulated_fill_json="",
+        actual_filled_pct=50.0, status="crypto15m_B_awaiting_asymmetric_hedge",
+        resolution_meta=json.dumps({"external_id": "blocker"}),
+    )
+    assert cycle._crypto15m_cluster_available_capital(w) == pytest.approx(0.0)
+    # ... generic Strategy 1 sizing must be entirely unaffected: it never
+    # calls `_crypto15m_cluster_available_capital`, so the reserve-only
+    # ceiling still applies unchanged.
+    stake_usd = round(cycle._available_capital_for_new_stake(w) * cycle.DEFAULT_STAKE_FRACTION, 2)
+    assert stake_usd == pytest.approx(9.0)
