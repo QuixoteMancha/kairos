@@ -168,3 +168,130 @@ def test_bets_endpoint_returns_resolution_meta_and_fill_json(client):
     fill = json.loads(bet["simulated_fill_json"])
     assert len(fill["legs"]) == 2
     assert fill["legs"][0]["platform"] == "kalshi"
+
+
+# ---------------------------------------------------------------------------
+# /api/paper/strategy1/loss-analysis (2026-07-17): confirmed real-production
+# finding that Strategy 1 "directional" resolutions are unhedged legs of
+# failed arb pairs (hedge/limit leg never filled), not a deliberate
+# directional strategy. See paper_trading_bp.py endpoint docstring.
+# ---------------------------------------------------------------------------
+
+def test_loss_analysis_groups_by_category_and_computes_leg_volatility(client):
+    import json
+    from src.core.orchestration.paper_trading_cycle import get_or_create_wallet, _S1_STRATEGY_NAME
+
+    w = get_or_create_wallet()
+
+    # Genuine arb, both legs filled -- baseline/comparison bucket.
+    SimulatedBet.create(
+        bet_id="s1-arb-1", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_arb", opened_at="2026-07-17T00:00:00",
+        total_staked=10.0, pnl=0.5,
+        resolution_meta=json.dumps({
+            "category": "tennis", "l1_price": 0.95, "epsilon": 0.03,
+            "hedge_price": 0.04, "resolved_via": "hedge_filled",
+        }),
+    )
+    # Directional win: hedge never filled, leader ended up winning anyway.
+    SimulatedBet.create(
+        bet_id="s1-win-1", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_directional_win", opened_at="2026-07-17T00:00:00",
+        total_staked=5.0, pnl=0.15,
+        resolution_meta=json.dumps({
+            "category": "tennis", "l1_price": 0.97, "epsilon": 0.03,
+            "hedge_price": 0.02, "hedge_proposed_at_cycle_price": 0.05,
+            "resolved_via": "price_heuristic_win_unverified",
+        }),
+    )
+    # Directional loss: hedge never filled, leader lost -- full stake wipeout.
+    SimulatedBet.create(
+        bet_id="s1-loss-1", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_directional_loss", opened_at="2026-07-17T00:00:00",
+        total_staked=6.5, pnl=-6.5,
+        resolution_meta=json.dumps({
+            "category": "tennis", "l1_price": 0.96, "epsilon": 0.03,
+            "hedge_price": 0.03, "hedge_proposed_at_cycle_price": 0.08,
+            "resolved_via": "price_heuristic_loss_unverified",
+            "title": "Will Player A win the match?",
+        }),
+    )
+    # Different category, to verify per-category grouping (not global mixing).
+    SimulatedBet.create(
+        bet_id="s1-loss-2", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_directional_loss", opened_at="2026-07-17T00:00:00",
+        total_staked=3.0, pnl=-3.0,
+        resolution_meta=json.dumps({
+            "category": "weather", "l1_price": 0.9, "epsilon": 0.05,
+            "resolved_via": "real_result_flashscore",
+            "title": "Will it rain?",
+        }),
+    )
+    # A non-strategy_1 bet must be excluded entirely (different schema).
+    SimulatedBet.create(
+        bet_id="other-strategy", wallet=w, strategy="strategy_3_same_market",
+        status="strategy1_resolved_directional_loss", opened_at="2026-07-17T00:00:00",
+        total_staked=100.0, pnl=-100.0,
+        resolution_meta=json.dumps({"category": "tennis"}),
+    )
+
+    resp = client.get("/api/paper/strategy1/loss-analysis")
+    assert resp.status_code == 200
+    data = resp.get_json()
+
+    assert set(data["categories"].keys()) == {"tennis", "weather"}
+    # Excluded strategy must not leak into overall totals.
+    assert data["overall"]["resolved_directional_loss"]["n"] == 2
+    assert data["overall"]["resolved_directional_loss"]["total_pnl"] == pytest.approx(-9.5)
+
+    tennis = data["categories"]["tennis"]
+    assert tennis["resolved_arb"]["n"] == 1
+    assert tennis["resolved_directional_win"]["n"] == 1
+    assert tennis["resolved_directional_loss"]["n"] == 1
+    assert tennis["resolved_directional_loss"]["roi_pct"] == pytest.approx(-100.0)
+    # market leg: avg |l1_price - 0.5| across all 3 tennis bets (0.45, 0.47, 0.46)
+    assert tennis["market_leg"]["avg_fill_dispersion_from_mid"] == pytest.approx(0.46, abs=0.01)
+    assert tennis["market_leg"]["avg_epsilon"] == pytest.approx(0.03)
+    # limit leg: gap data available for win (|0.02-0.05|=0.03) and loss (|0.03-0.08|=0.05)
+    assert tennis["limit_leg"]["n_samples_with_gap_data"] == 2
+    assert tennis["limit_leg"]["avg_gap_to_fill"] == pytest.approx(0.04, abs=0.001)
+
+    weather = data["categories"]["weather"]
+    assert weather["resolved_directional_loss"]["n"] == 1
+    assert weather["limit_leg"]["n_samples_with_gap_data"] == 0
+    assert weather["limit_leg"]["n_gap_unavailable"] == 1  # no hedge_price/closest at all
+    # loss_bets drill-down present with the real title
+    assert weather["loss_bets"][0]["title"] == "Will it rain?"
+
+    # Worst-category-first ordering (most negative resolved_directional_loss pnl first)
+    assert list(data["categories"].keys())[0] == "tennis"  # -6.5 < -3.0
+
+
+def test_loss_analysis_category_filter(client):
+    import json
+    from src.core.orchestration.paper_trading_cycle import get_or_create_wallet, _S1_STRATEGY_NAME
+
+    w = get_or_create_wallet()
+    SimulatedBet.create(
+        bet_id="s1-loss-filter", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_directional_loss", opened_at="2026-07-17T00:00:00",
+        total_staked=4.0, pnl=-4.0,
+        resolution_meta=json.dumps({"category": "basketball"}),
+    )
+    SimulatedBet.create(
+        bet_id="s1-loss-other", wallet=w, strategy=_S1_STRATEGY_NAME,
+        status="strategy1_resolved_directional_loss", opened_at="2026-07-17T00:00:00",
+        total_staked=2.0, pnl=-2.0,
+        resolution_meta=json.dumps({"category": "tennis"}),
+    )
+    resp = client.get("/api/paper/strategy1/loss-analysis?category=basketball")
+    data = resp.get_json()
+    assert set(data["categories"].keys()) == {"basketball"}
+
+
+def test_loss_analysis_empty_wallet_returns_empty_shape(client):
+    resp = client.get("/api/paper/strategy1/loss-analysis?label=nonexistent-label")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["categories"] == {}
+    assert data["overall"] is None
