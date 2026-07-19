@@ -167,6 +167,7 @@ def test_run_paper_trading_cycle_concatenates_both_fetches_deduped():
     with patch("src.core.orchestration.scanning._fetch_prediction_market_events", return_value=[generic_event]), \
          patch("src.core.orchestration.scanning._fetch_kalshi_sport_matchup_events",
                return_value=[duplicate_sport_event, unique_sport_event]), \
+         patch("src.core.orchestration.scanning._fetch_kalshi_3way_football_events", return_value=[]), \
          patch("src.core.orchestration.scanning._scan_prediction_market_arbs", return_value=[]), \
          patch("src.core.orchestration.paper_trading_cycle._run_strategy1_pass", side_effect=_fake_run_strategy1_pass):
         paper_trading_cycle.run_paper_trading_cycle(wallet_label="test_sport_matchup_dedup")
@@ -176,3 +177,40 @@ def test_run_paper_trading_cycle_concatenates_both_fetches_deduped():
     assert ids.count("kalshi:GENERIC-1") == 1  # duplicate not added twice
     assert "kalshi:KXNFLGAME-1" in ids
     assert len(events) == 2
+
+
+def test_run_paper_trading_cycle_includes_football_binary_events():
+    """2026-07-19 wiring: football's 3-way groups get reduced to a synthetic
+    binary YES(favorite)/NO(draw+underdog) event and concatenated into
+    Strategy 1's raw_events, same as sport-matchup events, deduped by
+    `external_id`."""
+    football_group = {
+        "event_ticker": "KXUCLGAME-EVT1",
+        "event_title": "Real Madrid vs Barcelona",
+        "markets": [
+            {"yes_ask": 0.55, "title": "Real Madrid vs Barcelona", "raw": {}},
+            {"yes_ask": 0.25, "title": "Real Madrid vs Barcelona", "raw": {}},
+            {"yes_ask": 0.15, "title": "Real Madrid vs Barcelona", "raw": {}},
+        ],
+    }
+
+    captured_raw_events = {}
+
+    def _fake_run_strategy1_pass(wallet, raw_events, **kw):
+        captured_raw_events["events"] = list(raw_events)
+        return {}
+
+    with patch("src.core.orchestration.scanning._fetch_prediction_market_events", return_value=[]), \
+         patch("src.core.orchestration.scanning._fetch_kalshi_sport_matchup_events", return_value=[]), \
+         patch("src.core.orchestration.scanning._fetch_kalshi_3way_football_events", return_value=[football_group]), \
+         patch("src.core.orchestration.scanning._scan_prediction_market_arbs", return_value=[]), \
+         patch("src.core.orchestration.paper_trading_cycle._run_strategy1_pass", side_effect=_fake_run_strategy1_pass):
+        paper_trading_cycle.run_paper_trading_cycle(wallet_label="test_football_binary_wiring")
+
+    events = captured_raw_events["events"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["external_id"] == "kalshi-football-binary:KXUCLGAME-EVT1"
+    assert ev["category"] == "football"
+    assert ev["yes_price"] == pytest.approx(0.15)  # favorite = lowest ask
+    assert ev["best_bid"] == pytest.approx(0.20)   # 1 - (0.55 + 0.25)

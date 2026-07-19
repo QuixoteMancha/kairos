@@ -5,9 +5,16 @@ markets grouped under the same event_ticker. Polymarket was removed from
 this project 2026-07-09 (unfillable limit orders / apparent bot-driven
 queue-jumping on their book) — Kalshi is the only platform scanned.
 """
+import pytest
+
+from src.database.database import init_db
+init_db()
+
 from src.core.orchestration.football_3way_arb import (
     scan_kalshi_3way_football_fast,
+    binary_favorite_events,
 )
+from src.core.orchestration.paper_trading_cycle import _yes_no_ask
 
 
 def _kalshi_market(ticker, event_ticker, title, yes_ask):
@@ -84,3 +91,47 @@ def test_kalshi_missing_ask_leg_discarded():
         _kalshi_market("C", "EVT", "Away", 0.25),
     ])
     assert scan_kalshi_3way_football_fast([group]) == []
+
+
+# ── binary favorite-reduction (2026-07-19 user design decision) ────────────
+
+def test_binary_favorite_events_reduces_3way_to_yes_no():
+    group = _kalshi_group(event_ticker="EVT-BIN", title="Real Madrid vs Barcelona", markets=[
+        _kalshi_market("A", "EVT-BIN", "Real Madrid to win", 0.55),
+        _kalshi_market("B", "EVT-BIN", "Draw", 0.25),
+        _kalshi_market("C", "EVT-BIN", "Barcelona to win", 0.15),  # favorite = lowest ask = highest implied prob
+    ])
+    events = binary_favorite_events([group])
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["category"] == "football"
+    assert ev["external_id"] == "kalshi-football-binary:EVT-BIN"
+    assert ev["title"] == "Real Madrid vs Barcelona"
+    # favorite = lowest ask among the 3 (highest implied prob) = Barcelona at 0.15
+    assert ev["yes_price"] == pytest.approx(0.15)
+    assert ev["best_ask"] == pytest.approx(0.15)
+    # no_ask = draw + home = 0.25 + 0.55 = 0.80 -> best_bid = 1 - 0.80 = 0.20
+    assert ev["best_bid"] == pytest.approx(0.20)
+
+
+def test_binary_favorite_events_yes_no_ask_roundtrip():
+    """The synthetic best_bid/best_ask must round-trip through
+    paper_trading_cycle._yes_no_ask() to recover (favorite_ask, no_ask)
+    exactly -- not the naive 1-yes_price complement."""
+    group = _kalshi_group(markets=[
+        _kalshi_market("A", "EVT-RT", "Home", 0.50),
+        _kalshi_market("B", "EVT-RT", "Draw", 0.28),
+        _kalshi_market("C", "EVT-RT", "Away", 0.12),
+    ])
+    ev = binary_favorite_events([group])[0]
+    yes_ask, no_ask = _yes_no_ask(ev)
+    assert yes_ask == pytest.approx(0.12)
+    assert no_ask == pytest.approx(0.78)  # 0.50 + 0.28, NOT 1 - 0.12 = 0.88
+
+
+def test_binary_favorite_events_skips_non_three_leg_group():
+    group = _kalshi_group(markets=[
+        _kalshi_market("A", "EVT", "Home", 0.40),
+        _kalshi_market("B", "EVT", "Draw", 0.30),
+    ])
+    assert binary_favorite_events([group]) == []
