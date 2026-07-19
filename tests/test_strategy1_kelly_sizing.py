@@ -55,10 +55,16 @@ def _clean_paper_tables():
 
 def _event(ext_id, yes_price=0.50, category="tennis", best_bid=None, best_ask=None,
            platform="kalshi", indicators=None, resolution_date=None):
+    # title/ranks default to a real (non generic-fallback) tennis epsilon
+    # context so candidates in this file (which tests Kelly sizing, not
+    # epsilon calibration) aren't gated by the 2026-07-19 fail-closed
+    # exclusion of `fallback_generic:` epsilon sources at admission.
     return {
         "external_id": ext_id, "yes_price": yes_price, "platform": platform,
         "category": category, "resolution_date": resolution_date,
-        "best_bid": best_bid, "best_ask": best_ask, "title": None,
+        "best_bid": best_bid, "best_ask": best_ask,
+        "title": "Player One vs Player Two",
+        "player_a_rank": 10, "player_b_rank": 20,
         "indicators": indicators or {},
     }
 

@@ -42,17 +42,31 @@ def _clean_paper_tables():
 
 
 def _event(ext_id="evt-1", yes_price=0.50, platform="polymarket", resolution_date=None, category="tennis",
-           best_bid=None, best_ask=None, title=None):
+           best_bid=None, best_ask=None, title=None, player_a_rank=10, player_b_rank=20):
     """NOTE: for platform="polymarket" with no best_bid/best_ask given, the
     naive yes_price/(1-yes_price) complement is used (same fallback the real
     code uses for Kalshi/legacy archived platforms) — this is mathematically INCAPABLE of ever
     producing a viable hedge (imp is always exactly 1.0 at any snapshot), so
     any test that needs a genuinely fillable hedge scenario MUST pass
-    best_bid/best_ask explicitly to reflect a real (non-complementary) spread."""
+    best_bid/best_ask explicitly to reflect a real (non-complementary) spread.
+
+    Defaults `title`/`player_a_rank`/`player_b_rank` so that, for the default
+    category="tennis", `_estimate_strategy1_epsilon` builds a REAL (non
+    generic-fallback) epsilon context by default -- since 2026-07-19,
+    candidates admitted with `epsilon_source` starting "fallback_generic:"
+    are rejected outright at admission (see paper_trading_cycle.py's
+    `_run_strategy1_pass`, root-caused to 100% of Strategy 1's real
+    directional losses). This file exercises state-machine mechanics
+    orthogonal to epsilon calibration, so it must not be silently gated by
+    that fail-closed exclusion. Any test that explicitly needs the generic
+    fallback path (e.g. to exercise the exclusion itself) should pass
+    title=None and/or player_a_rank=None explicitly."""
     return {
         "external_id": ext_id, "yes_price": yes_price, "platform": platform,
         "category": category, "resolution_date": resolution_date,
-        "best_bid": best_bid, "best_ask": best_ask, "title": title,
+        "best_bid": best_bid, "best_ask": best_ask,
+        "title": title if title is not None else "Player One vs Player Two",
+        "player_a_rank": player_a_rank, "player_b_rank": player_b_rank,
     }
 
 
@@ -66,6 +80,27 @@ def test_candidate_admitted_only_within_band():
     assert SimulatedBet.select().where(SimulatedBet.bet_id == "paper-strategy1-out-of-band").count() == 0
 
 
+def test_generic_fallback_epsilon_candidate_rejected_at_admission():
+    """FAIL-CLOSED EXCLUSION added 2026-07-19: 100% of Strategy 1's real
+    production directional losses (29/29) traced to candidates admitted
+    with a generic-fallback epsilon (no real per-event volatility signal).
+    A candidate with no title/ranks (forces `fallback_generic:no_context_source`)
+    must be rejected outright at admission -- no SimulatedBet created at all --
+    while a candidate with real tennis context (title+ranks, the default
+    _event()) is admitted normally in the same cycle."""
+    w = cycle.get_or_create_wallet("s1-wallet-fallback-gate")
+    events = [
+        _event("evt-fallback", 0.52, title=None, player_a_rank=None, player_b_rank=None),
+        _event("evt-calibrated", 0.52),
+    ]
+    stats = cycle._run_strategy1_pass(w, events)
+    assert stats["strategy1_new_observing"] == 1
+    assert SimulatedBet.select().where(SimulatedBet.bet_id == "paper-strategy1-evt-fallback").count() == 0
+    bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-calibrated")
+    meta = json.loads(bet.resolution_meta)
+    assert not meta["epsilon_source"].startswith("fallback_generic:")
+
+
 def test_respects_max_new_per_cycle_cap():
     w = cycle.get_or_create_wallet("s1-wallet-2")
     events = [_event(f"evt-{i}", 0.50 + i * 0.001) for i in range(30)]
@@ -75,11 +110,17 @@ def test_respects_max_new_per_cycle_cap():
 
 def test_single_leg_fill_deducts_capital_and_moves_to_awaiting_hedge():
     w = cycle.get_or_create_wallet("s1-wallet-3")
-    # Cycle 1: admit candidate at 0.50 -> level_a = 0.53, level_b = 0.53 (epsilon 0.03)
+    # Cycle 1: admit candidate at 0.50. Since 2026-07-19 the default _event()
+    # carries a real tennis dwell-time context (title+ranks), so epsilon
+    # comes from the real calibrated model rather than the generic 0.03
+    # fallback -- assert against the real computed epsilon rather than a
+    # hardcoded value, since what matters here is level_a/b mechanics, not
+    # the exact epsilon magnitude.
     cycle._run_strategy1_pass(w, [_event("evt-fill", 0.50)])
     bet = SimulatedBet.get(SimulatedBet.bet_id == "paper-strategy1-evt-fill")
     meta = json.loads(bet.resolution_meta)
-    assert meta["level_a"] == pytest.approx(0.53)
+    assert not meta["epsilon_source"].startswith("fallback_generic:")
+    assert meta["level_a"] == pytest.approx(0.50 + meta["epsilon"])
 
     # Cycle 2: yes_price jumps to 0.60 -> crosses level_a (0.53), no_price=0.40 doesn't cross level_b
     balance_before = w.balance
