@@ -4,6 +4,30 @@
 # The goal is to take advantage of the difference between the two prices to make a profit.
 # Also the LimitArb strategy can have the market order executed in-event to get a better current price which maximize the profit.
 # The LimitArb can be formed with yes/no pair and also with option a/option b pair (Player A/Player B, Team A/Team B, etc).
+#
+# Lógica de dos patas (NO es un detector de edge puro): en Kalshi las dos
+# patas de un mercado binario son complementarias, current_a_price +
+# current_b_price == 1 (menos spread). Se identifica la "favorita" (la
+# pata con precio actual más alto) y se compara contra su fair price:
+#
+#   Caso 1 — favorita SOBREVALORADA (fav_price > fav_fair):
+#     se espera que la favorita CAIGA hacia su fair price, y por
+#     complementariedad la no-favorita SUBA. Entonces:
+#       - MARKET order en la no-favorita, ahora, mientras está barata.
+#       - LIMIT order en la favorita, al precio actual menos la
+#         volatilidad promedio esperada (se espera capturarla en la caída).
+#
+#   Caso 2 — favorita INFRAVALORADA (fav_price < fav_fair):
+#     se espera que la favorita SUBA hacia su fair price, y la
+#     no-favorita CAIGA. Entonces:
+#       - MARKET order en la favorita, ahora, mientras está barata.
+#       - LIMIT order en la no-favorita, al precio actual menos la
+#         volatilidad promedio esperada (se espera capturarla en la caída).
+#
+# El edge (|fav_price - fav_fair|) sigue siendo el filtro de umbral mínimo
+# (MIN_RETURN_OPPORTUNITY) y avg_volatility sigue siendo el filtro mínimo de
+# que valga la pena montar una pata límite (MIN_VOLATILITY) — pero el
+# resultado que importa para operar es el plan de dos patas, no el edge.
 
 from APIs.kalshi import KalshiAPI
 from models.basemodel import Model
@@ -27,22 +51,32 @@ class LimitArb:
         self.opportunities = []
         for market in self.markets:
             avg_volatility = self.model.calculate_average_volatility(market)
-            return_opportunity = self._arbitrate(market, avg_volatility)
+            plan = self._build_order_plan(market, avg_volatility)
 
-            if avg_volatility > MIN_VOLATILITY and return_opportunity >= MIN_RETURN_OPPORTUNITY:
+            if plan is None:
+                continue
+
+            if avg_volatility > MIN_VOLATILITY and plan['return_opportunity'] >= MIN_RETURN_OPPORTUNITY:
                 self.opportunities.append({
                     'market_id': market['id'],
                     'avg_volatility': avg_volatility,
-                    'return_opportunity': return_opportunity,
+                    'return_opportunity': plan['return_opportunity'],
+                    'case': plan['case'],
+                    'market_leg': plan['market_leg'],
+                    'limit_leg': plan['limit_leg'],
                 })
 
         return self.opportunities
 
-    def _arbitrate(self, market, avg_volatility):
-        """Compara el precio de mercado contra el fair price del modelo.
-        Fail-closed: si el modelo no tiene edge (fair == market, caso por
-        defecto de Model.calculate_fair_price sin modelo de categoría),
-        devuelve 0 — ninguna oportunidad fantasma."""
+    def _build_order_plan(self, market, avg_volatility):
+        """Identifica la favorita (mayor precio actual) vs la no-favorita,
+        compara contra el fair price del modelo, y arma el plan de las dos
+        patas (market + limit) según el caso.
+
+        Fail-closed: si falta cualquier dato necesario, o el modelo no
+        reporta edge (fair == market, caso por defecto de
+        Model.calculate_fair_price sin modelo de categoría), no hay plan
+        (None) — nunca se inventa una oportunidad por ausencia de datos."""
         fair_price = self.model.calculate_fair_price(market)
 
         current_a = market.get('current_a_price')
@@ -51,20 +85,45 @@ class LimitArb:
         fair_b = fair_price.get('fair_b_price')
 
         if None in (current_a, current_b, fair_a, fair_b):
-            return 0
+            return None
 
-        if current_a > fair_a:
-            # el mercado sobrevalora la pata A: comprar B es la oportunidad
-            return (1 - current_a - avg_volatility) + fair_b
-        elif current_b > fair_b:
-            return (1 - current_b - avg_volatility) + fair_a
+        if current_a >= current_b:
+            fav_side, fav_price, fav_fair = 'a', current_a, fair_a
+            dog_side, dog_price, dog_fair = 'b', current_b, fair_b
         else:
-            return 0
+            fav_side, fav_price, fav_fair = 'b', current_b, fair_b
+            dog_side, dog_price, dog_fair = 'a', current_a, fair_a
+
+        if fav_price == fav_fair:
+            # sin edge, sin plan
+            return None
+
+        limit_price = max(0.0, min(1.0, round(fav_price - avg_volatility, 4))) \
+            if fav_price > fav_fair else \
+            max(0.0, min(1.0, round(dog_price - avg_volatility, 4)))
+
+        if fav_price > fav_fair:
+            # Caso 1: favorita sobrevalorada -> se espera que caiga
+            case = 'favorite_overvalued'
+            market_leg = {'side': dog_side, 'action': 'market', 'price': dog_price}
+            limit_leg = {'side': fav_side, 'action': 'limit', 'price': limit_price}
+        else:
+            # Caso 2: favorita infravalorada -> se espera que suba
+            case = 'favorite_undervalued'
+            market_leg = {'side': fav_side, 'action': 'market', 'price': fav_price}
+            limit_leg = {'side': dog_side, 'action': 'limit', 'price': limit_price}
+
+        return {
+            'case': case,
+            'market_leg': market_leg,
+            'limit_leg': limit_leg,
+            'return_opportunity': round(abs(fav_price - fav_fair), 4),
+        }
 
     def execute_order_placement(self):
         """NO ejecuta órdenes reales todavía — Kairos no tiene wiring de
         auth/firma para colocación de órdenes (línea roja del proyecto,
         requiere autorización explícita del usuario paso a paso). Por ahora
         esto es un worker de solo lectura/propuesta: reporta las
-        oportunidades encontradas."""
+        oportunidades encontradas (incluyendo el plan de las dos patas)."""
         return self.opportunities
