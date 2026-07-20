@@ -2,6 +2,7 @@ from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
 from APIs.kalshi import KalshiAPI
 from APIs.kalshi_tennis_markets import build_tennis_markets
+from APIs.tennis_match_history import prefetch_player_histories
 
 # Kalshi series tickers for ATP/WTA singles matches, fetched separately
 # because each match is TWO per-player legs under one event_ticker (see
@@ -31,6 +32,22 @@ class Kairos:
         for series in _TENNIS_SERIES:
             tennis_legs.extend(kalshi_api.get_markets(series_ticker=series))
         tennis_markets = build_tennis_markets(tennis_legs)
+
+        # Parallel prefetch (thread pool, see APIs/tennis_match_history.py):
+        # TennisFModel needs Flashscore recent-form/head-to-head data per
+        # player, and Flashscore has no bulk endpoint (one proxied request
+        # per player). Fetching sequentially inside LimitArb's per-market
+        # loop below took several minutes for a full scan; warming the
+        # cache for every tennis player CONCURRENTLY here first means the
+        # per-market fair-price calls that follow hit an already-warm
+        # cache instead of blocking on live fetches one at a time.
+        tennis_player_names = [
+            name
+            for market in tennis_markets
+            for name in (market.get('player_a_name'), market.get('player_b_name'))
+            if name
+        ]
+        prefetch_player_histories(tennis_player_names)
 
         # LimitArb needs the paired player-A-vs-player-B tennis markets
         # for the fair-price/volatility model comparison.
