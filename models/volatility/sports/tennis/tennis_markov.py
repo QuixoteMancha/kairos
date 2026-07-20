@@ -43,12 +43,13 @@ _RANK_BUCKETS: list[tuple[int, int]] = [
     (1, 10), (11, 20), (21, 50), (51, 100), (101, 200), (201, 100_000),
 ]
 
-# TODO: placeholder based on general tour knowledge, NOT calibrated with
-# real data — replace when a real tennis data feed is connected to Kairos
-# (the old calibration pipeline read Jeff Sackmann's ATP/WTA CSVs via a
-# scraper that no longer exists in this repo). Values are approximate
-# service-points-won fractions, decreasing as ranking gets worse (weaker
-# servers on average further down the rankings).
+# FALLBACK ONLY as of 2026-07-20: used when real calibration (see below)
+# fails outright, or for a specific bucket that real calibration couldn't
+# fill (too few charted matches / no ranked players found in that bucket).
+# Values are approximate service-points-won fractions from general tour
+# knowledge, decreasing as ranking gets worse (weaker servers on average
+# further down the rankings). No longer the primary source when a tour is
+# known and live calibration succeeds — see `_get_calibrated_table`.
 _BUCKET_P_SERVE: dict[tuple[int, int], float] = {
     (1, 10): 0.65,      # top 10: dominant serve
     (11, 20): 0.64,
@@ -58,7 +59,7 @@ _BUCKET_P_SERVE: dict[tuple[int, int], float] = {
     (201, 100_000): 0.60,
 }
 
-_DEFAULT_P_SERVE = 0.62  # fallback if a bucket is somehow missing from the table above.
+_DEFAULT_P_SERVE = 0.62  # fallback if a bucket is somehow missing from every table.
 
 
 def _bucket_for_rank(rank: int) -> tuple[int, int]:
@@ -68,9 +69,63 @@ def _bucket_for_rank(rank: int) -> tuple[int, int]:
     return _RANK_BUCKETS[-1] if rank > _RANK_BUCKETS[-1][1] else _RANK_BUCKETS[0]
 
 
-def p_serve_for_rank(rank: int) -> float:
-    """Look up the placeholder p_serve for a given ranking."""
-    return _BUCKET_P_SERVE.get(_bucket_for_rank(rank), _DEFAULT_P_SERVE)
+# ── Real calibration (Match Charting Project x live rankings) ─────────────
+#
+# `APIs/tennis_serve_stats.py` calibrates real p_serve-by-bucket from Jeff
+# Sackmann's Match Charting Project (per-match serve stats, both tours)
+# cross-referenced against current ATP/WTA rankings (`APIs/tennis_rankings.py`).
+# Cached at module level here since it's an expensive multi-request live
+# calibration (~10s), not something to redo on every model call.
+
+_CALIBRATED_CACHE: dict[str, dict[tuple[int, int], float]] = {}
+
+
+def _get_calibrated_table(tour: str) -> dict[tuple[int, int], float]:
+    """Real p_serve-by-bucket for one tour ("ATP"/"WTA"), blended with the
+    static placeholder as a per-bucket fallback.
+
+    Fail-closed at every layer: a network/scraper failure (exception,
+    empty result) falls back ENTIRELY to the static placeholder table; a
+    specific bucket missing from the real calibration (too few charted
+    matches) falls back to the static placeholder for JUST that bucket,
+    never fabricated/interpolated from neighboring buckets.
+    """
+    if tour in _CALIBRATED_CACHE:
+        return _CALIBRATED_CACHE[tour]
+
+    table = dict(_BUCKET_P_SERVE)  # start from the static placeholder for every bucket
+    try:
+        from APIs import tennis_serve_stats
+
+        real = tennis_serve_stats.calibrate_serve_pct_by_bucket(tour)
+        for bucket, data in real.items():
+            table[bucket] = data["p_serve"]
+    except Exception:
+        # Any failure (network, parsing, unexpected shape) -> stick with
+        # the static placeholder for every bucket, never raise up to the
+        # volatility model.
+        pass
+
+    _CALIBRATED_CACHE[tour] = table
+    return table
+
+
+def p_serve_for_rank(rank: int, tour: str | None = None) -> float:
+    """Look up p_serve for a given ranking.
+
+    If `tour` is "ATP" or "WTA", uses the real calibrated table for that
+    tour (falling back per-bucket to the static placeholder, see
+    `_get_calibrated_table`). If `tour` is None/unrecognized, uses the
+    static placeholder directly WITHOUT attempting live calibration —
+    fail-closed: guessing which tour's curve to use (mixing ATP/WTA, which
+    have measurably different real p_serve, see memory) would be worse
+    than honestly falling back to the generic placeholder.
+    """
+    bucket = _bucket_for_rank(rank)
+    if tour in ("ATP", "WTA"):
+        table = _get_calibrated_table(tour)
+        return table.get(bucket, _DEFAULT_P_SERVE)
+    return _BUCKET_P_SERVE.get(bucket, _DEFAULT_P_SERVE)
 
 
 # ── Point -> game -> set -> match Markov chain (analytic, memoized) ────────

@@ -36,7 +36,13 @@ class TennisVModel:
         if best_of not in (3, 5):
             return 0.0
 
-        pa_serve = p_serve_for_rank(rank_a)
-        pb_serve = p_serve_for_rank(rank_b)
+        # Optional: "ATP" or "WTA" selects the real-calibrated p_serve
+        # table for that tour (see tennis_markov.py); missing/unrecognized
+        # falls back to the generic static placeholder rather than
+        # guessing which tour's curve applies.
+        tour = market.get("tour")
+
+        pa_serve = p_serve_for_rank(rank_a, tour=tour)
+        pb_serve = p_serve_for_rank(rank_b, tour=tour)
         volatility = simulate_win_prob_volatility(pa_serve, pb_serve, best_of=best_of)
         return clamp01(volatility)
