@@ -1,6 +1,16 @@
 from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
 from APIs.kalshi import KalshiAPI
+from APIs.kalshi_tennis_markets import build_tennis_markets
+
+# Kalshi series tickers for ATP/WTA singles matches, fetched separately
+# because each match is TWO per-player legs under one event_ticker (see
+# APIs/kalshi_tennis_markets.py) — they need pairing before LimitArb's
+# fair-price/volatility models (which compare player A vs player B) can
+# use them. The generic /markets scan below still picks up each leg as
+# its own single-ticket yes/no market for MarketArb (same-ticket arb is
+# valid on each leg independently, no pairing needed there).
+_TENNIS_SERIES = ("KXATPMATCH", "KXWTAMATCH")
 
 
 class Kairos:
@@ -13,7 +23,17 @@ class Kairos:
         kalshi_api.initialize()
         markets = kalshi_api.get_markets()
 
-        larb = LimitArb(api=kalshi_api, markets=markets)
+        tennis_legs = []
+        for series in _TENNIS_SERIES:
+            tennis_legs.extend(kalshi_api.get_markets(series_ticker=series))
+        tennis_markets = build_tennis_markets(tennis_legs)
+
+        # LimitArb needs the paired player-A-vs-player-B tennis markets
+        # (for the fair-price/volatility model comparison) in addition to
+        # the generic scan; MarketArb intentionally does NOT get
+        # tennis_markets — its same-ticket arb logic is only valid on a
+        # single market's own yes/no book, not the synthetic pairing.
+        larb = LimitArb(api=kalshi_api, markets=markets + tennis_markets)
         larb.evaluate_risk_and_return_opportunities()
         larb.execute_order_placement()
 
