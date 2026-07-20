@@ -1,8 +1,9 @@
-# Fair-price models for traditional sports markets on Kalshi.
+# Shared fair-price logic for all sport fair-price models on Kalshi.
 #
 # Heuristic: simple ranking/rating differential -> logistic win probability,
 # blended toward head-to-head record when available. This is a deliberately
-# simplified rebuild (NOT the old Dixon-Coles/Markov architecture).
+# simplified rebuild (NOT the old Dixon-Coles/Markov architecture, except
+# TennisFModel which has its own dedicated file — see tennisfmodel.py).
 #
 # Expected `market` keys (all optional beyond the base ones; TODO'd below):
 #   id, type, current_a_price, current_b_price   (base, always required)
@@ -12,8 +13,6 @@
 # TODO: no live data source is wired for ratings/h2h yet (that lives outside
 # fairprice/, e.g. APIs/). Until that's wired, every call here hits the
 # fail-closed fallback and reports zero edge.
-
-import math
 
 from models.fairprice._common import market_fallback, clamp01
 
@@ -58,23 +57,3 @@ class _SportFModel:
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
-
-
-class TennisFModel(_SportFModel):
-    pass
-
-
-class SoccerFModel(_SportFModel):
-    pass
-
-
-class BasketballFModel(_SportFModel):
-    pass
-
-
-class BaseballFModel(_SportFModel):
-    pass
-
-
-class HockeyFModel(_SportFModel):
-    pass
