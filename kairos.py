@@ -1,4 +1,5 @@
-from APIs.kalshi import KalshiAPI
 from engine import Kairos
 
-engine = Kairos.run_service()
+if __name__ == "__main__":
+    result = Kairos.run_service()
+    print(result)
