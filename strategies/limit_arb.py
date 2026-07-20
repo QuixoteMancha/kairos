@@ -24,12 +24,14 @@
 #       - LIMIT order en la no-favorita, al precio actual menos la
 #         volatilidad promedio esperada (se espera capturarla en la caída).
 #
-# El edge (|fav_price - fav_fair|) sigue siendo el filtro de umbral mínimo
+# El edge (|fav_price - fav_fair|) neto de fees reales de Kalshi (ambas
+# patas, ver APIs/kalshi_fees.py) es el filtro de umbral mínimo
 # (MIN_RETURN_OPPORTUNITY) y avg_volatility sigue siendo el filtro mínimo de
 # que valga la pena montar una pata límite (MIN_VOLATILITY) — pero el
 # resultado que importa para operar es el plan de dos patas, no el edge.
 
 from APIs.kalshi import KalshiAPI
+from APIs.kalshi_fees import order_fee
 from models.basemodel import Model
 
 MIN_VOLATILITY = 0.10
@@ -102,6 +104,8 @@ class LimitArb:
             if fav_price > fav_fair else \
             max(0.0, min(1.0, round(dog_price - avg_volatility, 4)))
 
+        category = market.get('type')
+
         if fav_price > fav_fair:
             # Caso 1: favorita sobrevalorada -> se espera que caiga
             case = 'favorite_overvalued'
@@ -113,11 +117,23 @@ class LimitArb:
             market_leg = {'side': fav_side, 'action': 'market', 'price': fav_price}
             limit_leg = {'side': dog_side, 'action': 'limit', 'price': limit_price}
 
+        # Fees reales de Kalshi sobre ambas patas. La pata límite se cobra
+        # al mismo nivel que una taker (fail-closed: no hay cifra confiable
+        # de descuento maker por serie, ver APIs/kalshi_fees.py) usando su
+        # precio de ejecución esperado (limit_price), no el precio actual.
+        market_fee = order_fee(market_leg['price'], category=category)
+        limit_fee = order_fee(limit_leg['price'], category=category)
+        if market_fee is None or limit_fee is None:
+            return None
+
+        raw_edge = abs(fav_price - fav_fair)
+        net_return_opportunity = round(max(0.0, raw_edge - market_fee - limit_fee), 4)
+
         return {
             'case': case,
             'market_leg': market_leg,
             'limit_leg': limit_leg,
-            'return_opportunity': round(abs(fav_price - fav_fair), 4),
+            'return_opportunity': net_return_opportunity,
         }
 
     def execute_order_placement(self):

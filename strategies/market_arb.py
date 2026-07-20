@@ -18,13 +18,9 @@
 # reporta el plan de dos patas market, no las coloca.
 
 from APIs.kalshi import KalshiAPI
+from APIs.kalshi_fees import order_fee
 
 MIN_RETURN_OPPORTUNITY = 0.01
-# Fee estimada por lado (Kalshi cobra fee por trade, no es 0). Se aplica un
-# valor conservador por defecto hasta tener el cálculo real de
-# platform_fees para Kalshi; fail-closed: sobreestimar fee subestima
-# oportunidades en vez de inflar retorno falso.
-ASSUMED_FEE_PER_LEG = 0.01
 
 
 class MarketArb:
@@ -50,16 +46,24 @@ class MarketArb:
         """Fail-closed: precios ausentes o fuera de [0,1] -> None (no
         oportunidad), nunca se asume un precio por defecto. `price_a`/
         `price_b` son genéricos: side 'a' es yes u option-A según el
-        mercado, side 'b' es no u option-B."""
+        mercado, side 'b' es no u option-B. Fees reales de Kalshi (ver
+        APIs/kalshi_fees.py) para ambas patas, ambas market/taker."""
         price_a = market.get('current_a_price')
         price_b = market.get('current_b_price')
+        category = market.get('type')
 
         if price_a is None or price_b is None:
             return None
         if not (0.0 <= price_a <= 1.0) or not (0.0 <= price_b <= 1.0):
             return None
 
-        total_cost = price_a + price_b + (2 * ASSUMED_FEE_PER_LEG)
+        fee_a = order_fee(price_a, category=category)
+        fee_b = order_fee(price_b, category=category)
+        if fee_a is None or fee_b is None:
+            # fail-closed: sin dato de fee confiable, no hay oportunidad
+            return None
+
+        total_cost = price_a + price_b + fee_a + fee_b
         if total_cost >= 1.0:
             return None
 
