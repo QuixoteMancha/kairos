@@ -14,28 +14,59 @@
 #     se espera que la favorita CAIGA hacia su fair price, y por
 #     complementariedad la no-favorita SUBA. Entonces:
 #       - MARKET order en la no-favorita, ahora, mientras está barata.
-#       - LIMIT order en la favorita, al precio actual menos la
-#         volatilidad promedio esperada (se espera capturarla en la caída).
+#       - LIMIT order en la favorita, al precio actual menos el ajuste
+#         de precio calculado (ver más abajo).
 #
 #   Caso 2 — favorita INFRAVALORADA (fav_price < fav_fair):
 #     se espera que la favorita SUBA hacia su fair price, y la
 #     no-favorita CAIGA. Entonces:
 #       - MARKET order en la favorita, ahora, mientras está barata.
-#       - LIMIT order en la no-favorita, al precio actual menos la
-#         volatilidad promedio esperada (se espera capturarla en la caída).
+#       - LIMIT order en la no-favorita, al precio actual menos el ajuste
+#         de precio calculado (ver más abajo).
 #
-# El edge (|fav_price - fav_fair|) neto de fees reales de Kalshi (ambas
-# patas, ver APIs/kalshi_fees.py) es el filtro de umbral mínimo
-# (MIN_RETURN_OPPORTUNITY) y avg_volatility sigue siendo el filtro mínimo de
-# que valga la pena montar una pata límite (MIN_VOLATILITY) — pero el
-# resultado que importa para operar es el plan de dos patas, no el edge.
+# GUARDRAIL DE PLAUSIBILIDAD (2026-07-20, ver memoria
+# kairos-limitarb-plausibility-guardrail): el `return_opportunity` (profit)
+# YA NO se calcula desde el edge crudo del fair-price model
+# (|fav_price - fav_fair|), que resultó no tener techo — un modelo de
+# fair-price con información incompleta (ej. tenis sin datos de
+# lesión/forma) puede reportar un edge de 40 puntos porcentuales que casi
+# seguro es error de modelo, no una oportunidad real. En cambio, el ajuste
+# de precio de la pata límite (`price_adjustment`, cuánto se aleja del
+# precio actual) se calcula con una regresión lineal:
+#
+#     price_adjustment = W_EDGE * raw_edge + W_VOLATILITY * (avg_volatility / 2)
+#
+# - El término de volatilidad usa la MITAD de avg_volatility (no el 100%):
+#   avg_volatility es un promedio esperado de la simulación Monte Carlo,
+#   no una garantía para este partido puntual — usar la mitad es el ajuste
+#   conservador sustentado en datos que evita sobreconfiar en el promedio.
+# - raw_edge sigue pesando (40% inicial) porque es señal real del modelo
+#   de fair-price, pero ya NO determina el profit por sí solo sin límite.
+# - W_EDGE=0.4 / W_VOLATILITY=0.6 son pesos INICIALES, no calibrados
+#   todavía con datos reales — están pensados para recalibrarse más
+#   adelante contra resultados reales observados (requiere loggear cada
+#   señal + el movimiento de precio real posterior, ver
+#   database/limit_arb_signals.py). Hasta que exista ese loop de
+#   entrenamiento, son un punto de partida razonado, no una cifra final.
+# - `return_opportunity` (el profit reportado) se deriva del costo real de
+#   armar ambas patas al `price_adjustment` calculado, no del edge crudo
+#   — esto lo acota estructuralmente en vez de necesitar un chequeo
+#   posterior "si supera tal techo, rechazar" (que nunca se activaría
+#   correctamente si el número ya viene sin relación con la volatilidad).
 
 from APIs.kalshi import KalshiAPI
 from APIs.kalshi_fees import order_fee
 from models.basemodel import Model
+from database.limit_arb_signals import log_signal
 
 MIN_VOLATILITY = 0.10
 MIN_RETURN_OPPORTUNITY = 0.02
+
+# Pesos iniciales de la regresión lineal del ajuste de precio de la pata
+# límite. Ver nota de diseño arriba — no calibrados todavía con datos
+# reales, son el punto de partida acordado.
+W_EDGE = 0.4
+W_VOLATILITY = 0.6
 
 
 class LimitArb:
@@ -59,14 +90,27 @@ class LimitArb:
                 continue
 
             if avg_volatility > MIN_VOLATILITY and plan['return_opportunity'] >= MIN_RETURN_OPPORTUNITY:
-                self.opportunities.append({
+                opportunity = {
                     'market_id': market['id'],
                     'avg_volatility': avg_volatility,
                     'return_opportunity': plan['return_opportunity'],
                     'case': plan['case'],
                     'market_leg': plan['market_leg'],
                     'limit_leg': plan['limit_leg'],
-                })
+                    'price_adjustment': plan['price_adjustment'],
+                    'raw_edge': plan['raw_edge'],
+                }
+                self.opportunities.append(opportunity)
+                # Loggeado para poder entrenar W_EDGE/W_VOLATILITY contra
+                # resultados reales más adelante (ver database/limit_arb_signals.py).
+                # Fail-closed: un fallo de log nunca debe tumbar el scan.
+                try:
+                    log_signal(market_id=market['id'], avg_volatility=avg_volatility,
+                               raw_edge=plan['raw_edge'], price_adjustment=plan['price_adjustment'],
+                               w_edge=W_EDGE, w_volatility=W_VOLATILITY,
+                               case=plan['case'], return_opportunity=plan['return_opportunity'])
+                except Exception:
+                    pass
 
         return self.opportunities
 
@@ -100,9 +144,16 @@ class LimitArb:
             # sin edge, sin plan
             return None
 
-        limit_price = max(0.0, min(1.0, round(fav_price - avg_volatility, 4))) \
+        raw_edge = abs(fav_price - fav_fair)
+
+        # Ajuste de precio vía regresión lineal (ver nota de diseño al
+        # inicio del archivo). Acota estructuralmente el profit reportado
+        # más abajo, en vez de depender de un techo chequeado a posteriori.
+        price_adjustment = round(W_EDGE * raw_edge + W_VOLATILITY * (avg_volatility / 2.0), 4)
+
+        limit_price = max(0.0, min(1.0, round(fav_price - price_adjustment, 4))) \
             if fav_price > fav_fair else \
-            max(0.0, min(1.0, round(dog_price - avg_volatility, 4)))
+            max(0.0, min(1.0, round(dog_price - price_adjustment, 4)))
 
         category = market.get('type')
 
@@ -126,14 +177,21 @@ class LimitArb:
         if market_fee is None or limit_fee is None:
             return None
 
-        raw_edge = abs(fav_price - fav_fair)
-        net_return_opportunity = round(max(0.0, raw_edge - market_fee - limit_fee), 4)
+        # Profit real si ambas patas llegan a llenarse a estos precios:
+        # costo total de armar las dos patas complementarias vs el payout
+        # garantizado de $1. Acotado estructuralmente por price_adjustment
+        # (no puede superarlo salvo por redondeo/fees), no por un chequeo
+        # posterior contra un techo separado.
+        total_cost = market_leg['price'] + limit_leg['price'] + market_fee + limit_fee
+        net_return_opportunity = round(max(0.0, 1.0 - total_cost), 4)
 
         return {
             'case': case,
             'market_leg': market_leg,
             'limit_leg': limit_leg,
             'return_opportunity': net_return_opportunity,
+            'price_adjustment': price_adjustment,
+            'raw_edge': raw_edge,
         }
 
     def execute_order_placement(self):
