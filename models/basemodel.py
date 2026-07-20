@@ -1,14 +1,14 @@
 
-from volatility.sports import TennisVModel, SoccerVModel, BasketballVModel, BaseballVModel, HockeyVModel
-from volatility.weather import TemperatureVModel
-from volatility.economics import InflationVModel, UnemploymentVModel, GDPVModel
-from volatility.crypto import BTCVModel, ETHVModel, SOLVModel, XRPVModel, DOGEVModel, BNBVModel
-from fairprice.sports import TennisFModel, SoccerFModel, BasketballFModel, BaseballFModel, HockeyFModel
-from fairprice.weather import TemperatureFModel
-from fairprice.economics import InflationFModel, UnemploymentFModel, GDPFModel
-from fairprice.crypto import BTCFModel, ETHFModel, SOLFModel, XRPFModel, DOGEFModel, BNBFModel
-from volatility.financialmarkets import SP500VModel, NASDAQVModel, DOWJVModel
-from fairprice.financialmarkets import SP500FModel, NASDAQFModel, DOWJFModel
+from models.volatility.sports import TennisVModel, SoccerVModel, BasketballVModel, BaseballVModel, HockeyVModel
+from models.volatility.weather import TemperatureVModel
+from models.volatility.economics import InflationVModel, UnemploymentVModel, GDPVModel
+from models.volatility.crypto import BTCVModel, ETHVModel, SOLVModel, XRPVModel, DOGEVModel, BNBVModel
+from models.fairprice.sports import TennisFModel, SoccerFModel, BasketballFModel, BaseballFModel, HockeyFModel
+from models.fairprice.weather import TemperatureFModel
+from models.fairprice.economics import InflationFModel, UnemploymentFModel, GDPFModel
+from models.fairprice.crypto import BTCFModel, ETHFModel, SOLFModel, XRPFModel, DOGEFModel, BNBFModel
+from models.volatility.financialmarkets import SP500VModel, NASDAQVModel, DOWJVModel
+from models.fairprice.financialmarkets import SP500FModel, NASDAQFModel, DOWJFModel
 
 class Model:
 

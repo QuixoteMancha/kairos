@@ -16,7 +16,7 @@
 
 import math
 
-from fairprice._common import market_fallback, clamp01
+from models.fairprice._common import market_fallback, clamp01
 
 
 def _normal_cdf(x: float, mean: float, std: float) -> float:

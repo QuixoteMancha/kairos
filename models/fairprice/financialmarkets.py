@@ -16,7 +16,7 @@
 # to market price by design (efficient-market assumption), not just missing
 # data.
 
-from fairprice._common import market_fallback
+from models.fairprice._common import market_fallback
 
 
 class _FinancialMarketFModel:

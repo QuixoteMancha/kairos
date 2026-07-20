@@ -19,7 +19,7 @@
 
 import math
 
-from fairprice._common import market_fallback, clamp01
+from models.fairprice._common import market_fallback, clamp01
 
 # Used only if consensus_std is missing: a generic uncertainty band as a
 # fraction of the consensus estimate's magnitude. Deliberately crude.

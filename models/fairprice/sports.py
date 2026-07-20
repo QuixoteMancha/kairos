@@ -15,7 +15,7 @@
 
 import math
 
-from fairprice._common import market_fallback, clamp01
+from models.fairprice._common import market_fallback, clamp01
 
 # Logistic scale for rating differential -> win probability. Larger = rating
 # gaps matter more. 400 mirrors the common Elo convention.
