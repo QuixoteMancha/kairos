@@ -1,5 +1,5 @@
 from strategies.limit_arb import LimitArb
-from strategies.market_arb import YNArb
+from strategies.market_arb import MarketArb
 from APIs.kalshi import KalshiAPI
 
 
@@ -17,11 +17,11 @@ class Kairos:
         larb.evaluate_risk_and_return_opportunities()
         larb.execute_order_placement()
 
-        yn_arb = YNArb(api=kalshi_api, markets=markets)
-        yn_arb.evaluate_risk_and_return_opportunities()
-        yn_arb.execute_order_placement()
+        market_arb = MarketArb(api=kalshi_api, markets=markets)
+        market_arb.evaluate_risk_and_return_opportunities()
+        market_arb.execute_order_placement()
 
         return {
             'limit_arb_opportunities': larb.opportunities,
-            'yn_arb_opportunities': yn_arb.opportunities,
+            'market_arb_opportunities': market_arb.opportunities,
         }

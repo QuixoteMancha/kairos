@@ -1,12 +1,21 @@
-# This module contains the YNArb class which controls the logic of the Yes/No Arbitrage strategy.
+# This module contains the MarketArb class which controls the logic of the Yes/No and Option A/Option B Arbitrage strategy.
 # It evaluates the risk and return opportunities for each market and executes order placements based on the evaluation of the market current prices
 # It looks for the difference between the current prices and if the sum is less than 1 for the two options in a binary market.
 #
 # A diferencia de LimitArb, esta estrategia NO depende de un modelo de fair
 # price/volatilidad por categoría: es un arb "same-market" puro, basado
-# solo en los precios yes/no actuales del mismo mercado. Si yes_price +
-# no_price < 1 (menos fees), comprar ambas patas garantiza profit sin
-# importar el resultado.
+# solo en los precios actuales del mismo mercado (aplica tanto a mercados
+# yes/no como a option-A/option-B). Si el costo de armar ambas patas
+# (precio_a + precio_b + fees) es menor a 1, comprar AMBAS patas con
+# MARKET ORDER garantiza profit sin importar el resultado.
+#
+# Ambas patas se ejecutan como market order, en el mismo instante, no hay
+# pata límite (a diferencia de LimitArb). El riesgo real de esta estrategia
+# es de TIMING: el edge solo es capturable si el sistema alcanza a colocar
+# las dos órdenes antes de que el book se mueva (latencia/slippage entre
+# la lectura del precio y la ejecución real). Todavía no hay wiring de
+# ejecución real de órdenes (línea roja del proyecto) — por ahora esto
+# reporta el plan de dos patas market, no las coloca.
 
 from APIs.kalshi import KalshiAPI
 
@@ -18,7 +27,7 @@ MIN_RETURN_OPPORTUNITY = 0.01
 ASSUMED_FEE_PER_LEG = 0.01
 
 
-class YNArb:
+class MarketArb:
     def __init__(self, api: KalshiAPI, markets):
         self.api = api
         self.markets = markets
@@ -27,32 +36,41 @@ class YNArb:
     def evaluate_risk_and_return_opportunities(self):
         self.opportunities = []
         for market in self.markets:
-            return_opportunity = self._arbitrate(market)
-            if return_opportunity is not None and return_opportunity >= MIN_RETURN_OPPORTUNITY:
+            plan = self._build_order_plan(market)
+            if plan is not None and plan['return_opportunity'] >= MIN_RETURN_OPPORTUNITY:
                 self.opportunities.append({
                     'market_id': market['id'],
-                    'return_opportunity': return_opportunity,
+                    'return_opportunity': plan['return_opportunity'],
+                    'market_leg_a': plan['market_leg_a'],
+                    'market_leg_b': plan['market_leg_b'],
                 })
         return self.opportunities
 
-    def _arbitrate(self, market):
+    def _build_order_plan(self, market):
         """Fail-closed: precios ausentes o fuera de [0,1] -> None (no
-        oportunidad), nunca se asume un precio por defecto."""
-        yes_price = market.get('current_a_price')
-        no_price = market.get('current_b_price')
+        oportunidad), nunca se asume un precio por defecto. `price_a`/
+        `price_b` son genéricos: side 'a' es yes u option-A según el
+        mercado, side 'b' es no u option-B."""
+        price_a = market.get('current_a_price')
+        price_b = market.get('current_b_price')
 
-        if yes_price is None or no_price is None:
+        if price_a is None or price_b is None:
             return None
-        if not (0.0 <= yes_price <= 1.0) or not (0.0 <= no_price <= 1.0):
+        if not (0.0 <= price_a <= 1.0) or not (0.0 <= price_b <= 1.0):
             return None
 
-        total_cost = yes_price + no_price + (2 * ASSUMED_FEE_PER_LEG)
+        total_cost = price_a + price_b + (2 * ASSUMED_FEE_PER_LEG)
         if total_cost >= 1.0:
             return None
 
         # payout garantizado de 1.0 sin importar el outcome, menos lo que
-        # costó armar ambas patas (ya con fees incluidas)
-        return round(1.0 - total_cost, 4)
+        # costó armar ambas patas (ya con fees incluidas). Ambas patas se
+        # ejecutan como market order en el mismo instante.
+        return {
+            'return_opportunity': round(1.0 - total_cost, 4),
+            'market_leg_a': {'side': 'a', 'action': 'market', 'price': price_a},
+            'market_leg_b': {'side': 'b', 'action': 'market', 'price': price_b},
+        }
 
     def execute_order_placement(self):
         """NO ejecuta órdenes reales todavía — mismo red-line que LimitArb.
