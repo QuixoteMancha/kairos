@@ -16,6 +16,27 @@
 # la lectura del precio y la ejecución real). Todavía no hay wiring de
 # ejecución real de órdenes (línea roja del proyecto) — por ahora esto
 # reporta el plan de dos patas market, no las coloca.
+#
+# Dos variantes del mismo arb, ambas cubiertas por esta clase sin lógica
+# adicional (mismo shape de market dict: current_a_price/current_b_price):
+#
+#   1. SAME-TICKET: un solo ticker de Kalshi cuyo yes/no son complementarios
+#      dentro del mismo mercado (ej. la mayoría de mercados binarios). Acá
+#      ambas patas se colocan en el MISMO ticker (yes y no).
+#
+#   2. CROSS-TICKET: dos tickers DISTINTOS de Kalshi que son complementarios
+#      entre sí porque describen el mismo evento desde lados opuestos —
+#      hallazgo real verificado en tenis: cada partido ATP/WTA en Kalshi son
+#      DOS mercados separados ("¿Gana el jugador A?" / "¿Gana el jugador B?"),
+#      no un solo ticker A/B (ver APIs/kalshi_tennis_markets.py). Si
+#      precio_yes_A + precio_yes_B + fees < 1, comprar "yes" en AMBOS
+#      tickers garantiza cobrar $1 sin importar quién gane — mismo arb,
+#      dos tickers distintos. Acá cada pata se coloca en su propio ticker
+#      (`ticker_a`/`ticker_b` en el market dict, ver `_build_order_plan`).
+#
+# El market dict distingue el caso vía `ticker_a`/`ticker_b` (si están
+# presentes, cross-ticket; si no, ambas patas caen en `market['id']`, el
+# ticker del propio mercado — same-ticket, comportamiento histórico).
 
 from APIs.kalshi import KalshiAPI
 from APIs.kalshi_fees import order_fee
@@ -47,7 +68,14 @@ class MarketArb:
         oportunidad), nunca se asume un precio por defecto. `price_a`/
         `price_b` son genéricos: side 'a' es yes u option-A según el
         mercado, side 'b' es no u option-B. Fees reales de Kalshi (ver
-        APIs/kalshi_fees.py) para ambas patas, ambas market/taker."""
+        APIs/kalshi_fees.py) para ambas patas, ambas market/taker.
+
+        `ticker_a`/`ticker_b`: opcionales en el market dict. Si están
+        presentes (caso cross-ticket, ej. tenis: dos tickers distintos de
+        Kalshi complementarios entre sí) cada pata lleva su propio ticker
+        de ejecución. Si no están (caso same-ticket, comportamiento
+        histórico) ambas patas caen en `market['id']`, el ticker del
+        propio mercado."""
         price_a = market.get('current_a_price')
         price_b = market.get('current_b_price')
         category = market.get('type')
@@ -67,13 +95,16 @@ class MarketArb:
         if total_cost >= 1.0:
             return None
 
+        ticker_a = market.get('ticker_a', market.get('id'))
+        ticker_b = market.get('ticker_b', market.get('id'))
+
         # payout garantizado de 1.0 sin importar el outcome, menos lo que
         # costó armar ambas patas (ya con fees incluidas). Ambas patas se
         # ejecutan como market order en el mismo instante.
         return {
             'return_opportunity': round(1.0 - total_cost, 4),
-            'market_leg_a': {'side': 'a', 'action': 'market', 'price': price_a},
-            'market_leg_b': {'side': 'b', 'action': 'market', 'price': price_b},
+            'market_leg_a': {'ticker': ticker_a, 'side': 'a', 'action': 'market', 'price': price_a},
+            'market_leg_b': {'ticker': ticker_b, 'side': 'b', 'action': 'market', 'price': price_b},
         }
 
     def execute_order_placement(self):
