@@ -1,0 +1,27 @@
+services:
+  kairos:
+    image: kairos:latest
+    container_name: kairos
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Sin esto, kairos.py corre una vez y termina -- en producción
+      # queremos loop indefinido (ver kairos.py). 300s = 5 min entre scans;
+      # un scan de tenis en vivo ya toma ~1-2 min (fetch de mercados +
+      # prefetch paralelo de historial Flashscore), así que un intervalo
+      # más corto encolaría scans sin necesidad.
+      KAIROS_SCAN_INTERVAL_SECONDS: "300"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data:/data
+
+networks:
+  kairos_net:
+    name: kairos_kairos_net
+
+volumes:
+  kairos_data:
+    name: kairos_kairos_data
