@@ -1,4 +1,4 @@
-from ._base import _SportVModelBase
+from .._base import _SportVModelBase
 
 
 class BasketballVModel(_SportVModelBase):

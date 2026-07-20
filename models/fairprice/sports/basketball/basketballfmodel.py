@@ -1,4 +1,4 @@
-from ._base import _SportFModel
+from .._base import _SportFModel
 
 
 class BasketballFModel(_SportFModel):

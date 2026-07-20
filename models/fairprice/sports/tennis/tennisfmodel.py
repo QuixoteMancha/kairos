@@ -4,7 +4,7 @@
 # models/volatility/sports/tennis_markov.py, which already derives a real
 # win probability from rankings via the Markov engine. Not implemented yet.
 
-from ._base import _SportFModel
+from .._base import _SportFModel
 
 
 class TennisFModel(_SportFModel):
