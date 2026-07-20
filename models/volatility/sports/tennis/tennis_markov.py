@@ -366,14 +366,41 @@ def _p_win_match_from_sets(sets_a: int, sets_b: int, best_of: int) -> float:
     return total
 
 
-def pre_match_win_prob(rank_a: int, rank_b: int, best_of: int = 3) -> float:
+def pre_match_win_prob(rank_a: int, rank_b: int, best_of: int = 3, tour: str | None = None) -> float:
     """P(player A wins the match) BEFORE the match starts, from rankings alone.
 
-    Evaluates `instantaneous_match_win_prob` at the fixed pre-match state
-    (0-0 sets/games/points, player A serving first).
+    `tour`: "ATP"/"WTA" uses the real calibrated p_serve table for that
+    tour (see `p_serve_for_rank`); None/unrecognized uses the static
+    placeholder rather than guessing which tour's curve applies.
 
     Raises `ValueError` if `rank_a`/`rank_b` are not positive integers, or if
     `best_of` is not 3 or 5.
+
+    IMPLEMENTATION NOTE (bug found and worked around 2026-07-20, see
+    memory kairos-tennis-markov-set-transition-bug): this deliberately
+    does NOT call `instantaneous_match_win_prob` at the 0-0 state, even
+    though that would look like the natural way to ask "what's the
+    pre-match win probability". `instantaneous_match_win_prob`'s
+    set-transition logic (for going from "just won/lost the current set"
+    to "match outcome") routes through `_p_win_match_from_sets`, which
+    assumes every REMAINING set is a fair 50/50 coin flip regardless of
+    the players' actual skill gap (see that function's own docstring —
+    documented as "an approximation" when it was rescued, but empirically
+    verified during this rebuild to matter A LOT: rank 5 vs 200 came out
+    as 56.9% via that path, vs the mathematically consistent 70.1% via
+    the method used here). That approximation is defensible for a LIVE
+    mid-match dwell-time simulation (`simulate_win_prob_volatility`, where
+    most of the signal is in the current score, not hypothetical future
+    sets) but is NOT acceptable for a pre-match fair-price estimate, which
+    is exactly "what does the skill gap imply before any points are
+    played" — the case where the flawed approximation dominates the
+    result instead of being a minor tail correction.
+
+    Correct approach used here: compute the real single-set win
+    probability analytically (`_p_win_set`, using the point-level p_serve
+    for the 6-6 tiebreak specifically), then use the closed-form
+    best-of-N formula (`_p_win_match_from_set_prob`) that correctly
+    assumes i.i.d. sets at the REAL p_set — not a fair coin.
     """
     if not isinstance(rank_a, int) or isinstance(rank_a, bool) or rank_a <= 0:
         raise ValueError(f"rank_a must be a positive integer, got {rank_a!r}")
@@ -382,14 +409,14 @@ def pre_match_win_prob(rank_a: int, rank_b: int, best_of: int = 3) -> float:
     if best_of not in (3, 5):
         raise ValueError(f"best_of must be 3 or 5, got {best_of!r}")
 
-    pa_serve = p_serve_for_rank(rank_a)
-    pb_serve = p_serve_for_rank(rank_b)
+    pa_serve = p_serve_for_rank(rank_a, tour=tour)
+    pb_serve = p_serve_for_rank(rank_b, tour=tour)
 
-    return instantaneous_match_win_prob(
-        pa_serve, pb_serve,
-        sets_a=0, sets_b=0, games_a=0, games_b=0, points_a=0, points_b=0,
-        a_serving=True, best_of=best_of,
-    )
+    pa_game = _p_win_game(pa_serve)
+    pb_game = _p_win_game(pb_serve)
+    p_set = _p_win_set(pa_game, pb_game, a_serves_first=True, pa_serve=pa_serve, pb_serve=pb_serve)
+
+    return _p_win_match_from_set_prob(p_set, best_of=best_of)
 
 
 # ── Monte Carlo volatility simulation ──────────────────────────────────────
