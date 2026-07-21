@@ -12,11 +12,23 @@ services:
       # prefetch paralelo de historial Flashscore), así que un intervalo
       # más corto encolaría scans sin necesidad.
       KAIROS_SCAN_INTERVAL_SECONDS: "300"
+      # Segunda DB, solo referencia/histórico (ver database/db.py y
+      # memoria kairos-two-volume-db-scheme-2026-07-21) -- separada de
+      # DB_PATH (contabilidad, /data/kairos.db, volumen "definitivo").
+      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
     restart: unless-stopped
     networks:
       - kairos_net
     volumes:
+      # Volumen "definitivo": contabilidad operativa (LimitArbSignal hoy,
+      # órdenes/fills/PnL más adelante).
       - kairos_data:/data
+      # Volumen viejo rescatado: datos de referencia/histórica para
+      # calibrar modelos (KalshiMarketTick/CryptoPriceSnapshot/TeamRating
+      # reales, ver database/models_historical.py). Nadie escribe acá
+      # todavía (sin collector/worker wireado) -- montado para que el
+      # schema/conexión ya estén listos cuando se construya esa pieza.
+      - kairos_data_historical:/data_historical
 
 networks:
   kairos_net:
@@ -24,4 +36,6 @@ networks:
 
 volumes:
   kairos_data:
+    name: kairos_data_v2
+  kairos_data_historical:
     name: kairos_kairos_data
