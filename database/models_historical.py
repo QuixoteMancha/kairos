@@ -73,11 +73,17 @@ class CryptoPriceSnapshot(HistoricalBaseModel):
 
 
 class TeamRating(HistoricalBaseModel):
-    """Real football/soccer team Elo ratings (source: ClubElo), 788 real
-    rows already in the rescued volume, multi-league. Reference for a
-    future soccer fair-price model (queued, not built yet — see
-    kairos-tennis-real-calibration-both-tours session for the tennis
-    equivalent pattern this would follow).
+    """Real team Elo-style ratings. MULTI-SPORT (the `sport` column is
+    real, not decorative) -- currently only populated with 788 real
+    football/soccer rows (source: ClubElo, multi-league) from the
+    rescued volume, but the schema is generic and ready for
+    basketball/baseball/hockey ratings once a live source is wired for
+    each (see database/models_historical_team_sports.py docstring for
+    what was investigated 2026-07-21: ClubElo has a genuine documented
+    public API for football; NBA/MLB/NHL do NOT have an equivalent
+    ready-to-consume free Elo API, would need scraping a specific site
+    or computing Elo ourselves from free official raw-game-result APIs
+    -- not built yet, this is schema-only groundwork).
 
     Column names/types verified against the real DDL on the mini-pc
     (`PRAGMA`/`sqlite_master.sql`, 2026-07-21) — NOT guessed from a

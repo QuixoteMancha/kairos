@@ -88,9 +88,11 @@ def init_db_historical() -> None:
     from database.models_historical_tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
     )
+    from database.models_historical_team_sports import TeamMatchHistory, TeamHeadToHead
 
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+        TeamMatchHistory, TeamHeadToHead,
     ], safe=True)
