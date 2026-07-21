@@ -49,7 +49,9 @@ def find_team_rating(sport: str, short_name: str) -> float | None:
         return None
 
 
-def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str, float]:
+def compute_and_persist_elo(
+    sport: str, games: list[dict[str, Any]], rating_source: str = "kairos_elo_engine"
+) -> dict[str, float]:
     """Computes Elo chronologically over `games` (sorted here, caller
     doesn't need to pre-sort) starting from each team's CURRENT rating in
     TeamRating (default `elo_engine.DEFAULT_RATING` for a team never seen
@@ -81,6 +83,7 @@ def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str
         existing = {}
 
     ratings = dict(existing)
+    touched: set[str] = set()  # only teams actually appearing in THIS batch of games get persisted
     match_rows: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
 
@@ -92,6 +95,8 @@ def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str
         new_a, new_b = elo_engine.update_ratings(rating_a, rating_b, a_won)
         ratings[team_a] = new_a
         ratings[team_b] = new_b
+        touched.add(team_a)
+        touched.add(team_b)
 
         match_rows.append({
             "team_name": team_a, "sport": sport, "opponent_name": team_b,
@@ -105,7 +110,16 @@ def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str
         })
 
     try:
-        _persist_ratings(sport, ratings, now)
+        # Only teams touched by THIS batch of games get written -- persisting
+        # the whole `ratings` dict (which includes pre-existing rows pulled in
+        # only to seed starting Elo, e.g. ClubElo rows sharing the
+        # sport="football" bucket with MLS) would blanket-overwrite their
+        # `source` column with `rating_source`, corrupting unrelated data.
+        # Found + fixed 2026-07-21 building the MLS ratings source: an
+        # earlier version of this function did exactly that to ~600 real
+        # ClubElo rows on first run.
+        touched_ratings = {name: ratings[name] for name in touched}
+        _persist_ratings(sport, touched_ratings, now, source=rating_source)
         _persist_match_history(match_rows)
     except Exception:
         pass
@@ -113,7 +127,9 @@ def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str
     return ratings
 
 
-def _persist_ratings(sport: str, ratings: dict[str, float], now: datetime) -> None:
+def _persist_ratings(
+    sport: str, ratings: dict[str, float], now: datetime, source: str = "kairos_elo_engine"
+) -> None:
     rows = [
         {
             "created_at": now,
@@ -123,7 +139,7 @@ def _persist_ratings(sport: str, ratings: dict[str, float], now: datetime) -> No
             "league": sport,
             "elo": elo,
             "n_games": 0,  # not tracked by this simple engine yet (TODO if needed later)
-            "source": "kairos_elo_engine",
+            "source": source,
             "updated_at": now.isoformat(),
             "extra_json": "{}",
         }
