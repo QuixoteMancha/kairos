@@ -108,7 +108,10 @@ class LimitArb:
                     log_signal(market_id=market['id'], avg_volatility=avg_volatility,
                                raw_edge=plan['raw_edge'], price_adjustment=plan['price_adjustment'],
                                w_edge=W_EDGE, w_volatility=W_VOLATILITY,
-                               case=plan['case'], return_opportunity=plan['return_opportunity'])
+                               case=plan['case'], return_opportunity=plan['return_opportunity'],
+                               fav_side=plan['fav_side'], fav_price_at_signal=plan['fav_price_at_signal'],
+                               limit_leg_side=plan['limit_leg']['side'],
+                               limit_leg_price=plan['limit_leg']['price'])
                 except Exception:
                     pass
 
@@ -192,6 +195,8 @@ class LimitArb:
             'return_opportunity': net_return_opportunity,
             'price_adjustment': price_adjustment,
             'raw_edge': raw_edge,
+            'fav_side': fav_side,
+            'fav_price_at_signal': fav_price,
         }
 
     def execute_order_placement(self):

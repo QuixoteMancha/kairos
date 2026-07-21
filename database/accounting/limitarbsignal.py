@@ -50,9 +50,28 @@ class LimitArbSignal(BaseModel):
 
     created_at = DateTimeField(default=datetime.utcnow, index=True)
 
+    # Snapshot columns added 2026-07-21 (see workers/outcome_observer_worker.py)
+    # to make outcome observation possible. The original schema only
+    # logged the computed price_adjustment/case, not the raw favorite/
+    # limit-leg prices at signal time -- without those there is nothing
+    # to diff against later. All nullable: rows written before this
+    # change simply won't have them (see backfill note below), and
+    # `LimitArbSignal.create()` calls that don't pass them still work
+    # (Peewee doesn't require every field).
+    fav_side = CharField(null=True)  # 'a' | 'b' -- which side was the favorite at signal time
+    fav_price_at_signal = FloatField(null=True)  # favorite leg's current_*_price at signal time
+    limit_leg_side = CharField(null=True)  # 'a' | 'b' -- side the limit order was planned on
+    limit_leg_price = FloatField(null=True)  # planned limit price for that leg
+
     # Outcome columns -- NULL until a follow-up mechanism exists to
-    # observe them (not built yet, see class docstring). Never populate
-    # with a guessed/default value.
+    # observe them. Populated by workers/outcome_observer_worker.py.
+    # Fail-closed: never populate with a guessed/default value -- if the
+    # snapshot columns above are missing (pre-2026-07-21 row) or the
+    # market can't be refetched, leave observed_price_move NULL rather
+    # than fabricate a number, and record why in limit_leg_filled.
     outcome_observed_at = DateTimeField(null=True)
     observed_price_move = FloatField(null=True)  # actual |price change| observed for the favorite side
-    limit_leg_filled = CharField(null=True)  # 'yes' | 'no' | None (unknown/not checked)
+    # 'yes' | 'no' | 'unknown_legacy_row' (pre-snapshot-columns row, can't
+    # be inferred) | 'market_gone' (ticker no longer returned by Kalshi --
+    # settled/removed) | None (not yet observed)
+    limit_leg_filled = CharField(null=True)

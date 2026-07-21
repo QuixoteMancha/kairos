@@ -83,11 +83,34 @@ db_historical = SqliteDatabase(DB_HISTORICAL_PATH, pragmas=_PRAGMAS, check_same_
 def init_db() -> None:
     """Crea las tablas que falten en la DB de contabilidad (idempotente,
     no destruye datos existentes — Peewee's create_tables usa
-    CREATE TABLE IF NOT EXISTS)."""
+    CREATE TABLE IF NOT EXISTS).
+
+    Además aplica un migration-lite para LimitArbSignal: Peewee NO hace
+    ALTER TABLE automático cuando se agregan columnas a un modelo ya
+    existente (create_tables con safe=True no toca tablas que ya
+    existen). Las columnas de snapshot agregadas 2026-07-21
+    (fav_side/fav_price_at_signal/limit_leg_side/limit_leg_price, ver
+    database/accounting/limitarbsignal.py) necesitan un ALTER TABLE
+    explícito en DBs que ya tenían la tabla vieja. Se revisa
+    `PRAGMA table_info` y se agregan solo las columnas que falten —
+    idempotente, no destruye filas existentes (quedan con NULL en las
+    columnas nuevas, comportamiento esperado y documentado en el
+    modelo)."""
     from database.accounting.limitarbsignal import LimitArbSignal
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
+
+    existing_cols = {row[1] for row in db.execute_sql("PRAGMA table_info(limitarbsignal)").fetchall()}
+    _new_cols = {
+        "fav_side": "VARCHAR(255)",
+        "fav_price_at_signal": "REAL",
+        "limit_leg_side": "VARCHAR(255)",
+        "limit_leg_price": "REAL",
+    }
+    for col, sql_type in _new_cols.items():
+        if col not in existing_cols:
+            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
 
 
 def init_db_historical() -> None:
