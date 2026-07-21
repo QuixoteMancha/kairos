@@ -79,10 +79,18 @@ def init_db() -> None:
 
 def init_db_historical() -> None:
     """Crea las tablas que falten en la DB histórica/de referencia
-    (idempotente). Si esto corre contra el volumen viejo rescatado
-    (kairos_kairos_data en la mini-pc), las tablas YA existen con datos
-    reales — create_tables con safe=True no las toca ni las recrea."""
+    (idempotente). Las tablas rescatadas (KalshiMarketTick/
+    CryptoPriceSnapshot/TeamRating) YA existen con datos reales en el
+    volumen viejo — create_tables con safe=True no las toca ni las
+    recrea. Las tablas de tenis (models_historical_tennis.py) son NUEVAS,
+    se crean vacías la primera vez que corre esto."""
     from database.models_historical import KalshiMarketTick, CryptoPriceSnapshot, TeamRating
+    from database.models_historical_tennis import (
+        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+    )
 
     db_historical.connect(reuse_if_open=True)
-    db_historical.create_tables([KalshiMarketTick, CryptoPriceSnapshot, TeamRating], safe=True)
+    db_historical.create_tables([
+        KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
+        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+    ], safe=True)
