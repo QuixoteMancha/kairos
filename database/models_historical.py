@@ -88,10 +88,22 @@ class TeamRating(HistoricalBaseModel):
     Column names/types verified against the real DDL on the mini-pc
     (`PRAGMA`/`sqlite_master.sql`, 2026-07-21) — NOT guessed from a
     sample row (a first attempt at this model got `league`/`elo`/`name`
-    wrong by guessing from row values; corrected before use)."""
+    wrong by guessing from row values; corrected before use).
+
+    IMPORTANT semantics, found the hard way (2026-07-21): this is a
+    CURRENT-STATE table, one row per (sport, name_norm), NOT a time
+    series — the real schema has
+    `CREATE UNIQUE INDEX teamrating_sport_name_norm ON
+    teamrating(sport, name_norm)` (only discovered by inspecting indexes
+    on `sqlite_master`, not just the table's own CREATE TABLE sql — a
+    first attempt at APIs/football_ratings.py assumed this was a time
+    series like TennisPlayerRanking and got IntegrityError on every
+    write in production). Writers MUST upsert (insert-or-update on
+    conflict), never blind-insert."""
 
     class Meta:
         table_name = "teamrating"
+        indexes = ((("sport", "name_norm"), True),)  # True = UNIQUE, matches the real schema
 
     created_at = DateTimeField()
     sport = CharField()
