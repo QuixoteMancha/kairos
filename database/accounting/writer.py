@@ -1,12 +1,12 @@
 """
 Call surface for logging/reading LimitArb signals (see
-database/models.py::LimitArbSignal for the schema and why it exists —
+database/accounting/limitarbsignal.py for the schema and why it exists —
 this is the groundwork for eventually recalibrating the price_adjustment
 regression weights against real outcomes, not a finished training loop).
 """
 
 from database.db import db, init_db
-from database.models import LimitArbSignal
+from database.accounting.limitarbsignal import LimitArbSignal
 
 
 def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,

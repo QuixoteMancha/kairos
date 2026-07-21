@@ -57,7 +57,7 @@
 from APIs.kalshi import KalshiAPI
 from APIs.kalshi_fees import order_fee
 from models.basemodel import Model
-from database.limit_arb_signals import log_signal
+from database.accounting.writer import log_signal
 
 MIN_VOLATILITY = 0.10
 MIN_RETURN_OPPORTUNITY = 0.02

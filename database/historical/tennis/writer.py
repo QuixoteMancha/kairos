@@ -1,6 +1,6 @@
 """
 Persists real tennis data (already fetched by APIs/tennis_*.py) into the
-historical DB (database/models_historical_tennis.py) — called from those
+historical DB (database/historical/tennis/ models) — called from those
 facades on a FRESH fetch only (not on every in-process cache hit, to
 avoid flooding the DB with redundant snapshots of unchanged data).
 
@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from database.db import init_db_historical
-from database.models_historical_tennis import (
-    TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
-)
+from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
+from database.historical.tennis.tennisservecalibration import TennisServeCalibration
+from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 
 
 def _now():

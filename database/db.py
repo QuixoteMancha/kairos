@@ -11,7 +11,20 @@ kairos-two-volume-db-scheme-2026-07-21):
     modelos (ticks de Kalshi, velas de cripto, ratings de equipos, etc.).
     Vive en el volumen viejo (`kairos_kairos_data` en la mini-pc,
     rescatado de la arquitectura pre-"extreme makeover" — ver
-    database/models_historical.py).
+    database/historical/).
+
+Estructura del paquete `database/` (carpetas por tema, mismo patrón que
+`models/volatility/sports/` y `models/fairprice/sports/` — un archivo por
+modelo, un `writer.py` por tema cuando aplica):
+    database/
+    ├── db.py                       (este archivo — conexiones + init)
+    ├── accounting/                 (db, DB_PATH — operativo)
+    │   ├── limitarbsignal.py
+    │   └── writer.py
+    └── historical/                 (db_historical, DB_HISTORICAL_PATH — referencia)
+        ├── market_data/            (KalshiMarketTick, CryptoPriceSnapshot — rescatadas)
+        ├── team_sports/            (TeamRating, TeamMatchHistory, TeamHeadToHead + writer.py)
+        └── tennis/                 (Tennis* x4 + writer.py)
 
 Rescatado (patrón, no el código completo) de la arquitectura pre-"extreme
 makeover" (`src/database/database.py`, borrado en `02d7f35`): mismo motor
@@ -19,8 +32,8 @@ makeover" (`src/database/database.py`, borrado en `02d7f35`): mismo motor
 env var. El resto del schema viejo (Player/Wallet/BetMarket/Event/... —
 decenas de modelos Peewee de la arquitectura multi-plataforma con paper
 trading que ya no existe) NO se rescata salvo las tablas con datos reales
-(ver database/models_historical.py) — el resto estaban vacías, confirmado
-por inspección directa.
+(ver database/historical/market_data/ y team_sports/teamrating.py) — el
+resto estaban vacías, confirmado por inspección directa.
 
 IMPORTANTE: esto deja el schema y la conexión listos, pero NO hay todavía
 ningún worker/collector que escriba datos nuevos en `db_historical` — la
@@ -71,7 +84,7 @@ def init_db() -> None:
     """Crea las tablas que falten en la DB de contabilidad (idempotente,
     no destruye datos existentes — Peewee's create_tables usa
     CREATE TABLE IF NOT EXISTS)."""
-    from database.models import LimitArbSignal
+    from database.accounting.limitarbsignal import LimitArbSignal
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
@@ -82,13 +95,13 @@ def init_db_historical() -> None:
     (idempotente). Las tablas rescatadas (KalshiMarketTick/
     CryptoPriceSnapshot/TeamRating) YA existen con datos reales en el
     volumen viejo — create_tables con safe=True no las toca ni las
-    recrea. Las tablas de tenis (models_historical_tennis.py) son NUEVAS,
-    se crean vacías la primera vez que corre esto."""
-    from database.models_historical import KalshiMarketTick, CryptoPriceSnapshot, TeamRating
-    from database.models_historical_tennis import (
+    recrea. Las tablas de tenis/team_sports nuevas se crean vacías la
+    primera vez que corre esto."""
+    from database.historical.market_data import KalshiMarketTick, CryptoPriceSnapshot
+    from database.historical.team_sports import TeamRating, TeamMatchHistory, TeamHeadToHead
+    from database.historical.tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
     )
-    from database.models_historical_team_sports import TeamMatchHistory, TeamHeadToHead
 
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([

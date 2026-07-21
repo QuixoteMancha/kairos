@@ -1,15 +1,13 @@
 """
-Peewee models for Kairos.
-
-Starts minimal (see database/db.py docstring for why the old multi-table
-schema wasn't rescued). Grows as real features need persistence.
+Peewee model for Kairos operational/accounting data (LimitArb signals
+today, future orders/fills/PnL — see database/db.py docstring for the
+two-database split: this lives in `db`/`DB_PATH`, the "definitive"
+volume, not `db_historical`).
 """
 
 from datetime import datetime
 
-from peewee import (
-    CharField, DateTimeField, FloatField, Model,
-)
+from peewee import CharField, DateTimeField, FloatField, Model
 
 from database.db import db
 

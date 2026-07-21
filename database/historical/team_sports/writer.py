@@ -15,8 +15,8 @@ from peewee import EXCLUDED
 
 from APIs import elo_engine
 from database.db import init_db_historical
-from database.models_historical import TeamRating
-from database.models_historical_team_sports import TeamMatchHistory
+from database.historical.team_sports.teamrating import TeamRating
+from database.historical.team_sports.teammatchhistory import TeamMatchHistory
 
 
 def find_team_rating(sport: str, short_name: str) -> float | None:
