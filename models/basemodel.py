@@ -1,9 +1,9 @@
 
-from models.volatility.sports import TennisVModel, SoccerVModel, BasketballVModel, BaseballVModel, HockeyVModel
+from models.volatility.sports import TennisVModel, SoccerVModel, BasketballVModel, BaseballVModel, HockeyVModel, AmericanFootballVModel
 from models.volatility.weather import TemperatureVModel
 from models.volatility.economics import InflationVModel, UnemploymentVModel, GDPVModel
 from models.volatility.crypto import BTCVModel, ETHVModel, SOLVModel, XRPVModel, DOGEVModel, BNBVModel
-from models.fairprice.sports import TennisFModel, SoccerFModel, BasketballFModel, BaseballFModel, HockeyFModel
+from models.fairprice.sports import TennisFModel, SoccerFModel, BasketballFModel, BaseballFModel, HockeyFModel, AmericanFootballFModel
 from models.fairprice.weather import TemperatureFModel
 from models.fairprice.economics import InflationFModel, UnemploymentFModel, GDPFModel
 from models.fairprice.crypto import BTCFModel, ETHFModel, SOLFModel, XRPFModel, DOGEFModel, BNBFModel
@@ -20,6 +20,7 @@ class Model:
             'basketball': BasketballVModel(),
             'baseball': BaseballVModel(),
             'hockey': HockeyVModel(),
+            'american_football': AmericanFootballVModel(),
             'temperature': TemperatureVModel(),
             'inflation': InflationVModel(),
             'unemployment': UnemploymentVModel(),
@@ -41,6 +42,7 @@ class Model:
             'basketball': BasketballFModel(),
             'baseball': BaseballFModel(),
             'hockey': HockeyFModel(),
+            'american_football': AmericanFootballFModel(),
             'temperature': TemperatureFModel(),
             'inflation': InflationFModel(),
             'unemployment': UnemploymentFModel(),

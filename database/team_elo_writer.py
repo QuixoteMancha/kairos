@@ -19,6 +19,36 @@ from database.models_historical import TeamRating
 from database.models_historical_team_sports import TeamMatchHistory
 
 
+def find_team_rating(sport: str, short_name: str) -> float | None:
+    """Looks up a team's Elo rating by a possibly-SHORT/partial name (e.g.
+    Kalshi's `yes_sub_title` gives "Milwaukee", "Kansas City", "Los
+    Angeles R" -- not the full stored names like "Milwaukee Brewers",
+    "Kansas City Royals"/"Kansas City Chiefs", "Los Angeles Rams", found
+    live 2026-07-21 verifying MLB/NFL market pairing).
+
+    Matches by PREFIX (`name.startswith(short_name)`) within the given
+    sport, case-insensitive. Fail-closed: requires EXACTLY ONE match --
+    zero matches (unknown team) or more than one (genuinely ambiguous
+    short name) both return None rather than guessing. This is safe
+    because Kalshi's short names are consistently disambiguating prefixes
+    in practice (e.g. "Los Angeles R" only prefix-matches "Los Angeles
+    Rams", not "Los Angeles Chargers") -- if that assumption ever breaks
+    for a specific league, this fails closed instead of picking wrong.
+    """
+    try:
+        init_db_historical()
+        target = short_name.strip().lower()
+        candidates = [
+            r for r in TeamRating.select(TeamRating.name, TeamRating.elo).where(TeamRating.sport == sport)
+            if r.name.strip().lower().startswith(target)
+        ]
+        if len(candidates) == 1:
+            return candidates[0].elo
+        return None
+    except Exception:
+        return None
+
+
 def compute_and_persist_elo(sport: str, games: list[dict[str, Any]]) -> dict[str, float]:
     """Computes Elo chronologically over `games` (sorted here, caller
     doesn't need to pre-sort) starting from each team's CURRENT rating in

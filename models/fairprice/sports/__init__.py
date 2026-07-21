@@ -12,6 +12,7 @@ from .soccer.soccerfmodel import SoccerFModel
 from .basketball.basketballfmodel import BasketballFModel
 from .baseball.baseballfmodel import BaseballFModel
 from .hockey.hockeyfmodel import HockeyFModel
+from .american_football.americanfootballfmodel import AmericanFootballFModel
 
 __all__ = [
     "TennisFModel",
@@ -19,4 +20,5 @@ __all__ = [
     "BasketballFModel",
     "BaseballFModel",
     "HockeyFModel",
+    "AmericanFootballFModel",
 ]

@@ -17,6 +17,7 @@ from .soccer.soccervmodel import SoccerVModel
 from .basketball.basketballvmodel import BasketballVModel
 from .baseball.baseballvmodel import BaseballVModel
 from .hockey.hockeyvmodel import HockeyVModel
+from .american_football.americanfootballvmodel import AmericanFootballVModel
 
 __all__ = [
     "TennisVModel",
@@ -24,4 +25,5 @@ __all__ = [
     "BasketballVModel",
     "BaseballVModel",
     "HockeyVModel",
+    "AmericanFootballVModel",
 ]
