@@ -49,6 +49,7 @@ Rutas de las DBs:
 import os
 from pathlib import Path
 
+import peewee
 from peewee import SqliteDatabase
 
 try:
@@ -78,6 +79,39 @@ _PRAGMAS = {
 
 db = SqliteDatabase(DB_PATH, pragmas=_PRAGMAS, check_same_thread=False)
 db_historical = SqliteDatabase(DB_HISTORICAL_PATH, pragmas=_PRAGMAS, check_same_thread=False)
+
+
+def _add_column_if_missing(database: SqliteDatabase, table: str, col: str, sql_type: str) -> None:
+    """ALTER TABLE ADD COLUMN idempotente y a prueba de carrera.
+
+    Bug real encontrado en producción 2026-07-23: varios contenedores
+    (kairos/outcome_observer_worker/limitarb_monitor_worker) comparten la
+    misma DB de contabilidad y todos llaman a init_db() al arrancar. Si
+    arrancan casi simultáneamente (ej. tras un `docker compose up -d
+    --force-recreate` que recrea los 5 a la vez), hay una carrera TOCTOU
+    real entre el `PRAGMA table_info` (lectura, "falta la columna") de
+    cada proceso y el `ALTER TABLE` (escritura) del primero que gana --
+    el segundo revienta con "duplicate column name" porque su chequeo de
+    `existing_cols` ya estaba desactualizado cuando llegó a ejecutar el
+    ALTER. WAL mode serializa escrituras pero no protege este
+    read-then-write entre procesos distintos.
+
+    Fix: intentar el ALTER directamente y tragar específicamente el error
+    "duplicate column name" (columna ya existe, resultado final idéntico
+    al que hubiéramos obtenido si el chequeo previo hubiera visto la
+    columna) -- cualquier OTRO error se re-lanza, no se oculta un fallo
+    real de un guardrail que sí importa.
+
+    Nota: Peewee reenvuelve sqlite3.OperationalError como
+    peewee.OperationalError (no es subclase de la de sqlite3) -- hay que
+    capturar la de peewee, verificado con un test que reprodujo la
+    carrera real antes de este fix (capturar solo sqlite3.OperationalError
+    no atrapaba nada, seguía reventando)."""
+    try:
+        database.execute_sql(f"ALTER TABLE {table} ADD COLUMN {col} {sql_type}")
+    except peewee.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
 
 
 def init_db() -> None:
@@ -121,7 +155,7 @@ def init_db() -> None:
     }
     for col, sql_type in _new_cols.items():
         if col not in existing_cols:
-            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+            _add_column_if_missing(db, "limitarbsignal", col, sql_type)
 
     # Monitoring/exit-recommendation columns added 2026-07-22 (see
     # workers/limitarb_monitor_worker.py and limitarbsignal.py). Same
@@ -141,7 +175,7 @@ def init_db() -> None:
     }
     for col, sql_type in _monitor_cols.items():
         if col not in existing_cols:
-            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+            _add_column_if_missing(db, "limitarbsignal", col, sql_type)
 
     # market_leg_side/market_leg_price_at_signal added 2026-07-23 (see
     # limitarbsignal.py) -- closes the exit_locked_profit_pct coverage
@@ -154,7 +188,7 @@ def init_db() -> None:
     }
     for col, sql_type in _market_leg_cols.items():
         if col not in existing_cols:
-            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+            _add_column_if_missing(db, "limitarbsignal", col, sql_type)
 
     # market_leg_ticker/limit_leg_ticker added 2026-07-23 -- real Kalshi
     # tickers per leg, fixes the cross-ticket (tenis/team-sports)
@@ -167,7 +201,7 @@ def init_db() -> None:
     }
     for col, sql_type in _real_ticker_cols.items():
         if col not in existing_cols:
-            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+            _add_column_if_missing(db, "limitarbsignal", col, sql_type)
 
     existing_pt_cols = {row[1] for row in db.execute_sql("PRAGMA table_info(papertrade)").fetchall()}
     _papertrade_cols = {
@@ -175,7 +209,7 @@ def init_db() -> None:
     }
     for col, sql_type in _papertrade_cols.items():
         if col not in existing_pt_cols:
-            db.execute_sql(f"ALTER TABLE papertrade ADD COLUMN {col} {sql_type}")
+            _add_column_if_missing(db, "papertrade", col, sql_type)
 
 
 def init_db_historical() -> None:
