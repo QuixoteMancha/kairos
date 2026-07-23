@@ -145,24 +145,24 @@ def _parse_dt(value):
 
 
 def _market_leg_entry_price(signal: dict) -> float | None:
-    """See module docstring's exit_locked_profit_pct section -- only
-    recoverable for case 'favorite_undervalued' (market leg == fav
-    side, which was snapshotted). None otherwise, on purpose."""
-    if signal.get('case') == 'favorite_undervalued' and signal.get('fav_price_at_signal') is not None:
-        return signal['fav_price_at_signal']
-    return None
+    """Added 2026-07-23 (see limitarbsignal.py): market_leg_price_at_signal
+    now covers BOTH cases directly (previously only 'favorite_undervalued'
+    was computable via fav_price_at_signal -- 'favorite_overvalued' had no
+    entry-price snapshot for the dog-side market leg at all). Rows logged
+    before this column existed still return None here -- never fabricated
+    via a same-instant complementary-price approximation."""
+    return signal.get('market_leg_price_at_signal')
 
 
 def _market_leg_side(signal: dict) -> str | None:
+    """Same rationale as above -- market_leg_side now covers both cases
+    directly. Legacy rows (pre-2026-07-23) fall back to the old
+    fav_side-based inference for 'favorite_undervalued' only, since that
+    one snapshot did already exist."""
+    if signal.get('market_leg_side') is not None:
+        return signal['market_leg_side']
     if signal.get('case') == 'favorite_undervalued':
         return signal.get('fav_side')
-    if signal.get('case') == 'favorite_overvalued':
-        # dog side = the side that isn't fav_side, 'a'/'b' only.
-        fav = signal.get('fav_side')
-        if fav == 'a':
-            return 'b'
-        if fav == 'b':
-            return 'a'
     return None
 
 

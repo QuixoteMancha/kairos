@@ -63,6 +63,19 @@ class LimitArbSignal(BaseModel):
     limit_leg_side = CharField(null=True)  # 'a' | 'b' -- side the limit order was planned on
     limit_leg_price = FloatField(null=True)  # planned limit price for that leg
 
+    # Added 2026-07-23 (see workers/limitarb_monitor_worker.py) to close a
+    # coverage gap: exit_locked_profit_pct could only be computed for case
+    # 'favorite_undervalued' (market leg == fav side, already snapshotted
+    # above) -- for 'favorite_overvalued' the market leg is the DOG side,
+    # which had no entry-price snapshot anywhere. market_leg_side/price
+    # cover BOTH cases explicitly (redundant with fav_price_at_signal for
+    # the undervalued case, but simpler than branching two different
+    # snapshot fields at read time). Nullable: rows logged before this
+    # change won't have it -- exit_locked_profit_pct stays None for those,
+    # same fail-closed behavior as before, never fabricated.
+    market_leg_side = CharField(null=True)  # 'a' | 'b' -- side the market order was/would be placed on
+    market_leg_price_at_signal = FloatField(null=True)  # market leg's price at signal time (entry price)
+
     # Outcome columns -- NULL until a follow-up mechanism exists to
     # observe them. Populated by workers/outcome_observer_worker.py.
     # Fail-closed: never populate with a guessed/default value -- if the

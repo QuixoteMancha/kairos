@@ -16,7 +16,8 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
                 case: str, return_opportunity: float,
                 fav_side: str | None = None, fav_price_at_signal: float | None = None,
                 limit_leg_side: str | None = None, limit_leg_price: float | None = None,
-                market_close_time=None) -> None:
+                market_close_time=None,
+                market_leg_side: str | None = None, market_leg_price_at_signal: float | None = None) -> None:
     """Persists one LimitArb signal. Fail-closed at the call site (see
     strategies/limit_arb.py, wrapped in try/except): a logging failure
     must never crash or block a scan.
@@ -42,6 +43,8 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
             limit_leg_side=limit_leg_side,
             limit_leg_price=limit_leg_price,
             market_close_time=market_close_time,
+            market_leg_side=market_leg_side,
+            market_leg_price_at_signal=market_leg_price_at_signal,
         )
 
 
@@ -167,6 +170,8 @@ def _row_to_dict(r: LimitArbSignal) -> dict:
         'fav_price_at_signal': r.fav_price_at_signal,
         'limit_leg_side': r.limit_leg_side,
         'limit_leg_price': r.limit_leg_price,
+        'market_leg_side': r.market_leg_side,
+        'market_leg_price_at_signal': r.market_leg_price_at_signal,
         'created_at': r.created_at.isoformat(),
         'outcome_observed_at': r.outcome_observed_at.isoformat() if r.outcome_observed_at else None,
         'observed_price_move': r.observed_price_move,

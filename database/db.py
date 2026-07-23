@@ -132,6 +132,19 @@ def init_db() -> None:
         if col not in existing_cols:
             db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
 
+    # market_leg_side/market_leg_price_at_signal added 2026-07-23 (see
+    # limitarbsignal.py) -- closes the exit_locked_profit_pct coverage
+    # gap for case 'favorite_overvalued' (market leg == dog side, which
+    # had no entry-price snapshot before this). Same idempotent
+    # mechanism, both nullable, no DEFAULT needed.
+    _market_leg_cols = {
+        "market_leg_side": "VARCHAR(255)",
+        "market_leg_price_at_signal": "REAL",
+    }
+    for col, sql_type in _market_leg_cols.items():
+        if col not in existing_cols:
+            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+
 
 def init_db_historical() -> None:
     """Crea las tablas que falten en la DB histórica/de referencia
