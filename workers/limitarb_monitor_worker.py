@@ -97,7 +97,7 @@ the batch. A signal that fails is simply retried next cycle (still
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -129,9 +129,18 @@ def _parse_dt(value):
         return value
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
         except ValueError:
             return None
+        # Normalize to naive UTC -- Kalshi's close_time parses tz-aware
+        # (+00:00), but created_at (Peewee, default=datetime.utcnow) and
+        # datetime.utcnow() below are naive. Mixing the two raises
+        # TypeError on subtraction (verified: this silently broke Rule C
+        # on every signal, always caught by the per-signal try/except in
+        # run_once -- fixed here rather than left undiscovered).
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
     return None
 
 
