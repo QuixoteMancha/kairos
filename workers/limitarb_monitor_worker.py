@@ -123,10 +123,25 @@ def _parse_dt(value):
     """Best-effort parse of a datetime that may already be a datetime
     object (Peewee round-trip) or an ISO-ish string (Kalshi's
     close_time, snapshotted verbatim by log_signal). Returns None if it
-    can't be parsed -- never fabricates a fallback time."""
+    can't be parsed -- never fabricates a fallback time.
+
+    BUG FOUND IN PROD 2026-07-23 (round 2): the original fix here only
+    normalized tzinfo in the STRING-parsing branch, assuming the
+    `isinstance(value, datetime)` branch (Peewee round-trip) always came
+    back naive. Verified live against a real open signal in prod:
+    `market_close_time` actually comes back from Peewee as a
+    TIMEZONE-AWARE datetime (tzinfo=UTC) while `created_at` comes back
+    as a naive ISO string -- the datetime-object branch returned it
+    as-is, unnormalized, and Rule C's subtraction against the naive
+    `created_at`/`datetime.utcnow()` raised the exact same
+    "can't subtract offset-naive and offset-aware datetimes" error the
+    first fix (e1a5593) was supposed to close. Both branches now
+    normalize to naive UTC."""
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
         return value
     if isinstance(value, str):
         try:
