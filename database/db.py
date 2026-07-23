@@ -133,6 +133,7 @@ def init_db() -> None:
     from database.accounting.limitarbsignal import LimitArbSignal
     from database.accounting.papertrade import PaperTrade
     from database.accounting.paperaccount import PaperAccount
+    from database.accounting.fillverification import FillVerification
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
@@ -202,6 +203,12 @@ def init_db() -> None:
     for col, sql_type in _real_ticker_cols.items():
         if col not in existing_cols:
             _add_column_if_missing(db, "limitarbsignal", col, sql_type)
+
+    # FillVerification (2026-07-23, see database/accounting/fillverification.py
+    # and workers/fill_verification_worker.py) -- brand-new table, no
+    # ALTER TABLE migration needed (create_tables with safe=True is
+    # CREATE TABLE IF NOT EXISTS).
+    db.create_tables([FillVerification], safe=True)
 
     existing_pt_cols = {row[1] for row in db.execute_sql("PRAGMA table_info(papertrade)").fetchall()}
     _papertrade_cols = {

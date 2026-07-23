@@ -105,6 +105,24 @@ services:
     volumes:
       - kairos_data_historical:/data_historical
 
+  fill_verification_worker:
+    image: kairos:latest
+    container_name: kairos_fill_verification_worker
+    build: .
+    command: ["python", "-m", "workers.fill_verification_worker"]
+    env_file:
+      - .env
+    environment:
+      # 10min -- retrospective analysis, not time-critical like
+      # limitarb_monitor_worker's 30s (see workers/fill_verification_worker.py).
+      FILL_VERIFICATION_INTERVAL_SECONDS: "600"
+      DB_PATH: "/data/kairos.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data:/data
+
 networks:
   kairos_net:
     name: kairos_kairos_net

@@ -9,6 +9,7 @@ from datetime import datetime
 
 from database.db import db, init_db
 from database.accounting.limitarbsignal import LimitArbSignal
+from database.accounting.fillverification import FillVerification
 
 
 def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
@@ -159,6 +160,52 @@ def record_exit_recommendation(*, signal_id: int, exit_reason: str,
                   exit_locked_profit_pct=exit_locked_profit_pct)
          .where(LimitArbSignal.id == signal_id)
          .execute())
+
+
+def get_unverified_resolved_signals(limit: int = 500) -> list[dict]:
+    """Rows eligible for retrospective fill verification (see
+    workers/fill_verification_worker.py and
+    strategies/fill_verification.py): already resolved by the live
+    monitor (`monitoring_status` in ('closed', 'exit_recommended')),
+    have a real `limit_leg_ticker` (legacy rows without it aren't
+    verifiable -- skipped, documented), and don't already have a
+    FillVerification row (this table is written exactly once per
+    signal)."""
+    init_db()
+    with db.connection_context():
+        already_verified_ids = {row.signal_id for row in FillVerification.select(FillVerification.signal_id)}
+        rows = (LimitArbSignal
+                .select()
+                .where(
+                    LimitArbSignal.monitoring_status.in_(['closed', 'exit_recommended']),
+                    LimitArbSignal.limit_leg_ticker.is_null(False),
+                )
+                .order_by(LimitArbSignal.created_at.asc())
+                .limit(limit))
+        return [_row_to_dict(r) for r in rows if r.id not in already_verified_ids]
+
+
+def record_fill_verification(*, signal_id: int, market_id: str, price_touched: bool,
+                              post_touch_volume: float | None, queue_ahead_estimate: float | None,
+                              our_order_contracts: float | None, limit_filled_verified: bool,
+                              fail_reason: str | None) -> int:
+    """Persists one FillVerification row (write-once per signal_id, see
+    get_unverified_resolved_signals -- this function itself doesn't
+    re-check, callers own that guarantee, same pattern as
+    record_outcome)."""
+    init_db()
+    with db.connection_context():
+        row = FillVerification.create(
+            signal_id=signal_id,
+            market_id=market_id,
+            price_touched=price_touched,
+            post_touch_volume=post_touch_volume,
+            queue_ahead_estimate=queue_ahead_estimate,
+            our_order_contracts=our_order_contracts,
+            limit_filled_verified=limit_filled_verified,
+            fail_reason=fail_reason,
+        )
+        return row.id
 
 
 def _row_to_dict(r: LimitArbSignal) -> dict:
