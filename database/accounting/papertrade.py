@@ -53,3 +53,10 @@ class PaperTrade(BaseModel):
     # same vocabulary as LimitArbSignal.exit_reason, plus 'market_gone_unresolved'
     close_reason = CharField(null=True)  # 'limit_filled' | 'timeout' | 'trailing_stop' | 'time_decay' | 'market_gone_unresolved'
     realized_pnl_usd = FloatField(null=True)  # None when genuinely not computable -- never fabricated
+
+    # Added 2026-07-23: the market leg's price at close time (live quote,
+    # or a terminal 0.0/1.0 reconstructed from a real Kalshi settlement
+    # 'result' via get_market_any_status -- see workers/limitarb_monitor_
+    # worker.py). Lets PnL/close audits see exactly what price closed the
+    # position instead of only the derived realized_pnl_usd.
+    close_market_leg_price = FloatField(null=True)

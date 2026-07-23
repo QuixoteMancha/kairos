@@ -17,7 +17,8 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
                 fav_side: str | None = None, fav_price_at_signal: float | None = None,
                 limit_leg_side: str | None = None, limit_leg_price: float | None = None,
                 market_close_time=None,
-                market_leg_side: str | None = None, market_leg_price_at_signal: float | None = None) -> int:
+                market_leg_side: str | None = None, market_leg_price_at_signal: float | None = None,
+                market_leg_ticker: str | None = None, limit_leg_ticker: str | None = None) -> int:
     """Persists one LimitArb signal, returns the new row's id (used by
     strategies/limit_arb.py to open a paper trade against it, see
     strategies/paper_trading.py). Fail-closed at the call site (see
@@ -47,6 +48,8 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
             market_close_time=market_close_time,
             market_leg_side=market_leg_side,
             market_leg_price_at_signal=market_leg_price_at_signal,
+            market_leg_ticker=market_leg_ticker,
+            limit_leg_ticker=limit_leg_ticker,
         )
         return row.id
 
@@ -175,6 +178,8 @@ def _row_to_dict(r: LimitArbSignal) -> dict:
         'limit_leg_price': r.limit_leg_price,
         'market_leg_side': r.market_leg_side,
         'market_leg_price_at_signal': r.market_leg_price_at_signal,
+        'market_leg_ticker': r.market_leg_ticker,
+        'limit_leg_ticker': r.limit_leg_ticker,
         'created_at': r.created_at.isoformat(),
         'outcome_observed_at': r.outcome_observed_at.isoformat() if r.outcome_observed_at else None,
         'observed_price_move': r.observed_price_move,

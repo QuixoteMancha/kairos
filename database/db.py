@@ -156,6 +156,27 @@ def init_db() -> None:
         if col not in existing_cols:
             db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
 
+    # market_leg_ticker/limit_leg_ticker added 2026-07-23 -- real Kalshi
+    # tickers per leg, fixes the cross-ticket (tenis/team-sports)
+    # monitoring bug where market_id was a non-fetchable synthetic
+    # event_ticker (see workers/limitarb_monitor_worker.py). Same
+    # idempotent mechanism, both nullable, no DEFAULT needed.
+    _real_ticker_cols = {
+        "market_leg_ticker": "VARCHAR(255)",
+        "limit_leg_ticker": "VARCHAR(255)",
+    }
+    for col, sql_type in _real_ticker_cols.items():
+        if col not in existing_cols:
+            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+
+    existing_pt_cols = {row[1] for row in db.execute_sql("PRAGMA table_info(papertrade)").fetchall()}
+    _papertrade_cols = {
+        "close_market_leg_price": "REAL",
+    }
+    for col, sql_type in _papertrade_cols.items():
+        if col not in existing_pt_cols:
+            db.execute_sql(f"ALTER TABLE papertrade ADD COLUMN {col} {sql_type}")
+
 
 def init_db_historical() -> None:
     """Crea las tablas que falten en la DB histórica/de referencia

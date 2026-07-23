@@ -144,7 +144,8 @@ def close_paper_trade(*, signal_id: int, exit_reason: str,
                        exit_locked_profit_pct: float | None,
                        return_opportunity: float,
                        limit_leg_price: float | None = None,
-                       category: str | None = None) -> None:
+                       category: str | None = None,
+                       close_market_leg_price: float | None = None) -> None:
     """Closes the open PaperTrade for this signal_id, if one exists (if
     not -- e.g. the signal never cleared MIN_POSITION_USD at open time --
     this is a silent no-op, not an error). Computes realized_pnl_usd
@@ -185,16 +186,28 @@ def close_paper_trade(*, signal_id: int, exit_reason: str,
             else:
                 realized_pnl_usd = None
         elif exit_reason == 'market_gone':
-            # Market ticker no longer returned by Kalshi -- no way to know
-            # the real outcome. Breakeven assumption, explicitly documented
-            # as an approximation, not a measured result.
-            close_reason = 'market_gone_unresolved'
-            realized_pnl_usd = 0.0
+            # Added 2026-07-23: if the caller could reconstruct a real
+            # terminal price for the market leg (via
+            # KalshiAPI.get_market_any_status's 'result' field, see
+            # workers/limitarb_monitor_worker.py), exit_locked_profit_pct
+            # is a REAL measured return, not a guess -- use it instead of
+            # the old breakeven assumption. Only fall back to the
+            # unresolved breakeven when truly nothing is known (neither a
+            # live quote nor a settlement result was recoverable for
+            # either leg).
+            if exit_locked_profit_pct is not None:
+                close_reason = 'market_gone'
+                realized_pnl_usd = trade.position_size_usd * exit_locked_profit_pct
+            else:
+                close_reason = 'market_gone_unresolved'
+                realized_pnl_usd = 0.0
 
         trade.status = 'closed'
         trade.closed_at = datetime.utcnow()
         trade.close_reason = close_reason
         trade.realized_pnl_usd = realized_pnl_usd
+        if close_market_leg_price is not None:
+            trade.close_market_leg_price = close_market_leg_price
         trade.save()
 
         account, _ = PaperAccount.get_or_create(id=1, defaults={'bankroll_usd': STARTING_BANKROLL_USD})

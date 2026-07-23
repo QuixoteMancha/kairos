@@ -98,26 +98,59 @@ def _current_side_price(market: dict, side: str) -> float | None:
     return None
 
 
+def _fetch_leg_price(api: KalshiAPI, ticker: str, side: str, same_ticket: bool) -> float | None:
+    """Same helper as workers/limitarb_monitor_worker.py -- fetches one
+    leg's current price by its OWN real ticker, falling back to
+    KalshiAPI.get_market_any_status()'s real settlement 'result' (as a
+    TERMINAL 0.0/1.0 price) when the direct ticker lookup 404s (purged
+    after settling). Returns None only if genuinely nothing is known."""
+    try:
+        market = api.get_market(ticker)
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            market = None
+        else:
+            raise
+
+    if market is not None:
+        return _current_side_price(market, side) if same_ticket else market.get('current_a_price')
+
+    any_status = api.get_market_any_status(ticker)
+    if any_status is not None:
+        result = (any_status.get('raw') or {}).get('result')
+        if result in ('yes', 'no'):
+            return 1.0 if result == 'yes' else 0.0
+    return None
+
+
+def _ticker_for_side(signal: dict, side: str) -> str | None:
+    """fav_side always equals either market_leg_side or limit_leg_side
+    (see strategies/limit_arb.py's _build_order_plan: case
+    'favorite_undervalued' -> market_leg==fav_side; case
+    'favorite_overvalued' -> limit_leg==fav_side) -- so its real ticker
+    can always be recovered from the two leg-ticker columns without a
+    dedicated fav-side-ticker column."""
+    if side is not None and side == signal.get('market_leg_side'):
+        return signal.get('market_leg_ticker')
+    if side is not None and side == signal.get('limit_leg_side'):
+        return signal.get('limit_leg_ticker')
+    return None
+
+
 def _observe_one(api: KalshiAPI, signal: dict) -> tuple[float | None, str]:
     """Returns (observed_price_move, limit_leg_filled) for one signal.
     Never raises for expected conditions (missing snapshot, market gone)
-    -- those are valid, honestly-labeled outcomes, not errors."""
-    try:
-        market = api.get_market(signal['market_id'])
-    except requests.exceptions.HTTPError as e:
-        # Kalshi returns 404 for a ticker that no longer exists (settled
-        # and purged, or malformed) -- APIs/kalshi.py's get_market()
-        # doesn't itself translate that into None (it only returns None
-        # when the response body has no "market" key), so a 404 raises
-        # here. That's still a real, honest outcome for this worker's
-        # purposes, same as a body-shaped "not found".
-        if e.response is not None and e.response.status_code == 404:
-            return None, 'market_gone'
-        raise
+    -- those are valid, honestly-labeled outcomes, not errors.
 
-    if market is None:
-        # Settled/removed -- a real outcome, not a failure to hide.
-        return None, 'market_gone'
+    Added 2026-07-23: when market_leg_ticker/limit_leg_ticker are
+    populated (real per-leg Kalshi tickers), each leg is fetched
+    INDEPENDENTLY by its own ticker instead of `signal['market_id']` --
+    fixes the cross-ticket bug (tenis/team sports) where market_id is a
+    synthetic, never-fetchable event_ticker, see module docstring /
+    workers/limitarb_monitor_worker.py. Legacy rows (both ticker columns
+    None) fall back to the EXACT old market_id-based fetch, unchanged."""
+    market_leg_ticker = signal.get('market_leg_ticker')
+    limit_leg_ticker = signal.get('limit_leg_ticker')
 
     has_snapshot = (signal.get('fav_side') is not None
                      and signal.get('fav_price_at_signal') is not None
@@ -129,19 +162,56 @@ def _observe_one(api: KalshiAPI, signal: dict) -> tuple[float | None, str]:
         # existed -- honestly can't reconstruct fav/limit prices.
         return None, 'unknown_legacy_row'
 
-    current_fav_price = _current_side_price(market, signal['fav_side'])
+    if market_leg_ticker and limit_leg_ticker:
+        same_ticket = (market_leg_ticker == limit_leg_ticker)
+        fav_ticker = _ticker_for_side(signal, signal['fav_side'])
+        limit_ticker = _ticker_for_side(signal, signal['limit_leg_side'])
+
+        current_fav_price = (_fetch_leg_price(api, fav_ticker, signal['fav_side'], same_ticket)
+                              if fav_ticker else None)
+        current_limit_side_price = (_fetch_leg_price(api, limit_ticker, signal['limit_leg_side'], same_ticket)
+                                     if limit_ticker else None)
+
+        if current_fav_price is None and current_limit_side_price is None:
+            # Neither leg resolvable via live fetch nor real settlement --
+            # genuinely gone (never existed, or a transient real error).
+            return None, 'market_gone'
+    else:
+        # Legacy row (pre-2026-07-23, no per-leg ticker columns) -- exact
+        # old behavior: fetch by market_id.
+        try:
+            market = api.get_market(signal['market_id'])
+        except requests.exceptions.HTTPError as e:
+            # Kalshi returns 404 for a ticker that no longer exists (settled
+            # and purged, or malformed) -- APIs/kalshi.py's get_market()
+            # doesn't itself translate that into None (it only returns None
+            # when the response body has no "market" key), so a 404 raises
+            # here. That's still a real, honest outcome for this worker's
+            # purposes, same as a body-shaped "not found".
+            if e.response is not None and e.response.status_code == 404:
+                return None, 'market_gone'
+            raise
+
+        if market is None:
+            # Settled/removed -- a real outcome, not a failure to hide.
+            return None, 'market_gone'
+
+        current_fav_price = _current_side_price(market, signal['fav_side'])
+        current_limit_side_price = _current_side_price(market, signal['limit_leg_side'])
+
     if current_fav_price is None:
         return None, 'unknown_legacy_row'
 
     observed_price_move = round(abs(current_fav_price - signal['fav_price_at_signal']), 4)
 
-    current_limit_side_price = _current_side_price(market, signal['limit_leg_side'])
     if current_limit_side_price is None:
         limit_leg_filled = 'unknown_legacy_row'
     else:
         # The limit leg was placed BELOW the price at signal time
         # (buy-limit) -- it would be marketable/filled once the ask on
-        # that side drops to or below the planned limit price.
+        # that side drops to or below the planned limit price. A TERMINAL
+        # price (0.0/1.0, reconstructed from a real settlement 'result')
+        # is a perfectly valid input to this same comparison.
         limit_leg_filled = 'yes' if current_limit_side_price <= signal['limit_leg_price'] else 'no'
 
     return observed_price_move, limit_leg_filled

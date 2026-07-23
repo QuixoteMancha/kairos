@@ -77,6 +77,21 @@ class LimitArb:
         self.model = Model()
         self.opportunities = []
 
+    @staticmethod
+    def _real_ticker_for_side(market, side):
+        """Devuelve el ticker REAL de Kalshi fetcheable para ese lado.
+        Cross-ticket (tenis/team sports, ver kalshi_tennis_markets.py /
+        kalshi_team_sport_markets.py): el market combinado trae
+        ticker_a/ticker_b (tickers reales de cada pierna) porque market['id']
+        ahí es un event_ticker sintético que nunca es fetcheable. Single-
+        ticket (crypto/clima/economía/financieros): no hay ticker_a/
+        ticker_b, el ticker real ES market['id']."""
+        ticker_a = market.get('ticker_a')
+        ticker_b = market.get('ticker_b')
+        if ticker_a and ticker_b:
+            return ticker_a if side == 'a' else ticker_b
+        return market.get('id')
+
     def evaluate_risk_and_return_opportunities(self):
         """Recorre todos los mercados y junta las oportunidades que superan
         el umbral mínimo de volatilidad esperada y de retorno. No corta en
@@ -115,7 +130,9 @@ class LimitArb:
                                limit_leg_price=plan['limit_leg']['price'],
                                market_close_time=market.get('close_time'),
                                market_leg_side=plan['market_leg']['side'],
-                               market_leg_price_at_signal=plan['market_leg']['price'])
+                               market_leg_price_at_signal=plan['market_leg']['price'],
+                               market_leg_ticker=self._real_ticker_for_side(market, plan['market_leg']['side']),
+                               limit_leg_ticker=self._real_ticker_for_side(market, plan['limit_leg']['side']))
                     # Simulated paper position (100% fake money, see
                     # strategies/paper_trading.py) sized via fractional
                     # Kelly against this signal -- part of the same
