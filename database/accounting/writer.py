@@ -15,7 +15,8 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
                 price_adjustment: float, w_edge: float, w_volatility: float,
                 case: str, return_opportunity: float,
                 fav_side: str | None = None, fav_price_at_signal: float | None = None,
-                limit_leg_side: str | None = None, limit_leg_price: float | None = None) -> None:
+                limit_leg_side: str | None = None, limit_leg_price: float | None = None,
+                market_close_time=None) -> None:
     """Persists one LimitArb signal. Fail-closed at the call site (see
     strategies/limit_arb.py, wrapped in try/except): a logging failure
     must never crash or block a scan.
@@ -40,6 +41,7 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
             fav_price_at_signal=fav_price_at_signal,
             limit_leg_side=limit_leg_side,
             limit_leg_price=limit_leg_price,
+            market_close_time=market_close_time,
         )
 
 
@@ -97,6 +99,59 @@ def record_outcome(*, signal_id: int, observed_price_move: float | None,
          .execute())
 
 
+def get_open_signals(limit: int = 500) -> list[dict]:
+    """Rows eligible for the exit-monitoring loop (see
+    workers/limitarb_monitor_worker.py): `monitoring_status == 'open'`."""
+    init_db()
+    with db.connection_context():
+        rows = (LimitArbSignal
+                .select()
+                .where(LimitArbSignal.monitoring_status == 'open')
+                .order_by(LimitArbSignal.created_at.asc())
+                .limit(limit))
+        return [_row_to_dict(r) for r in rows]
+
+
+def record_monitoring_check(*, signal_id: int, attempt_count: int | None = None,
+                             best_limit_gap: float | None = None) -> None:
+    """Updates only the running-tally fields for a cycle where none of
+    the 3 exit rules fired yet -- monitoring_status stays 'open'.
+    Passing None for a field leaves it untouched (only the fields
+    actually provided are updated)."""
+    init_db()
+    updates = {}
+    if attempt_count is not None:
+        updates['attempt_count'] = attempt_count
+    if best_limit_gap is not None:
+        updates['best_limit_gap'] = best_limit_gap
+    if not updates:
+        return
+    with db.connection_context():
+        (LimitArbSignal
+         .update(**updates)
+         .where(LimitArbSignal.id == signal_id)
+         .execute())
+
+
+def record_exit_recommendation(*, signal_id: int, exit_reason: str,
+                                exit_locked_profit_pct: float | None) -> None:
+    """Marks a signal as exit_recommended (rules A/B/C) or closed via a
+    non-failure path (e.g. 'limit_filled', 'market_gone') -- see
+    workers/limitarb_monitor_worker.py for which reason maps to which
+    monitoring_status. exit_locked_profit_pct may be None when it
+    genuinely can't be computed -- never fabricated."""
+    init_db()
+    status = 'closed' if exit_reason in ('limit_filled', 'market_gone') else 'exit_recommended'
+    with db.connection_context():
+        (LimitArbSignal
+         .update(monitoring_status=status,
+                  exit_reason=exit_reason,
+                  exit_recommended_at=datetime.utcnow(),
+                  exit_locked_profit_pct=exit_locked_profit_pct)
+         .where(LimitArbSignal.id == signal_id)
+         .execute())
+
+
 def _row_to_dict(r: LimitArbSignal) -> dict:
     return {
         'id': r.id,
@@ -116,4 +171,11 @@ def _row_to_dict(r: LimitArbSignal) -> dict:
         'outcome_observed_at': r.outcome_observed_at.isoformat() if r.outcome_observed_at else None,
         'observed_price_move': r.observed_price_move,
         'limit_leg_filled': r.limit_leg_filled,
+        'market_close_time': r.market_close_time,
+        'monitoring_status': r.monitoring_status,
+        'attempt_count': r.attempt_count,
+        'best_limit_gap': r.best_limit_gap,
+        'exit_reason': r.exit_reason,
+        'exit_recommended_at': r.exit_recommended_at.isoformat() if r.exit_recommended_at else None,
+        'exit_locked_profit_pct': r.exit_locked_profit_pct,
     }

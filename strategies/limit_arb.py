@@ -111,7 +111,8 @@ class LimitArb:
                                case=plan['case'], return_opportunity=plan['return_opportunity'],
                                fav_side=plan['fav_side'], fav_price_at_signal=plan['fav_price_at_signal'],
                                limit_leg_side=plan['limit_leg']['side'],
-                               limit_leg_price=plan['limit_leg']['price'])
+                               limit_leg_price=plan['limit_leg']['price'],
+                               market_close_time=market.get('close_time'))
                 except Exception:
                     pass
 

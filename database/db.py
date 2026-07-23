@@ -112,6 +112,26 @@ def init_db() -> None:
         if col not in existing_cols:
             db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
 
+    # Monitoring/exit-recommendation columns added 2026-07-22 (see
+    # workers/limitarb_monitor_worker.py and limitarbsignal.py). Same
+    # idempotent ALTER TABLE mechanism as above -- literal DEFAULTs only
+    # for the columns that have a Python-side default in the model
+    # (SQLite ALTER TABLE ADD COLUMN doesn't support non-constant
+    # DEFAULT, but literal constants are fine); nullable-only columns
+    # get no DEFAULT (NULL).
+    _monitor_cols = {
+        "market_close_time": "DATETIME",
+        "monitoring_status": "VARCHAR(255) DEFAULT 'open'",
+        "attempt_count": "INTEGER DEFAULT 0",
+        "best_limit_gap": "REAL",
+        "exit_reason": "VARCHAR(255)",
+        "exit_recommended_at": "DATETIME",
+        "exit_locked_profit_pct": "REAL",
+    }
+    for col, sql_type in _monitor_cols.items():
+        if col not in existing_cols:
+            db.execute_sql(f"ALTER TABLE limitarbsignal ADD COLUMN {col} {sql_type}")
+
 
 def init_db_historical() -> None:
     """Crea las tablas que falten en la DB histórica/de referencia

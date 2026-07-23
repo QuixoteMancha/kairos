@@ -7,7 +7,7 @@ volume, not `db_historical`).
 
 from datetime import datetime
 
-from peewee import CharField, DateTimeField, FloatField, Model
+from peewee import CharField, DateTimeField, FloatField, IntegerField, Model
 
 from database.db import db
 
@@ -75,3 +75,16 @@ class LimitArbSignal(BaseModel):
     # be inferred) | 'market_gone' (ticker no longer returned by Kalshi --
     # settled/removed) | None (not yet observed)
     limit_leg_filled = CharField(null=True)
+
+    # Monitoring/exit-recommendation columns added 2026-07-22 (see
+    # workers/limitarb_monitor_worker.py). This worker NEVER places or
+    # cancels a real order (hard red line, same as everywhere else in
+    # this project) -- it only recommends closing/abandoning the plan
+    # based on 3 rules (timeout / trailing-stop-near-pinch / time-decay).
+    market_close_time = DateTimeField(null=True)  # snapshot of market['close_time'] at log_signal time
+    monitoring_status = CharField(default='open')  # 'open' | 'exit_recommended' | 'closed'
+    attempt_count = IntegerField(default=0)  # rule A: consecutive 30s checks where limit leg wasn't marketable
+    best_limit_gap = FloatField(null=True)  # rule B: min observed |current_limit_side_price - limit_leg_price|
+    exit_reason = CharField(null=True)  # 'timeout' | 'trailing_stop' | 'time_decay' | 'limit_filled' | 'market_gone'
+    exit_recommended_at = DateTimeField(null=True)
+    exit_locked_profit_pct = FloatField(null=True)  # can be negative (rule C); None if not computable -- never fabricated

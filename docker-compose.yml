@@ -30,6 +30,81 @@ services:
       # schema/conexión ya estén listos cuando se construya esa pieza.
       - kairos_data_historical:/data_historical
 
+  mls_worker:
+    image: kairos:latest
+    container_name: kairos_mls_worker
+    build: .
+    command: ["python", "workers/mls_worker.py"]
+    env_file:
+      - .env
+    environment:
+      # 6h -- MLS Elo solo cambia con resultados reales, no hace falta
+      # refrescar más seguido (ver workers/mls_worker.py).
+      MLS_REFRESH_INTERVAL_SECONDS: "21600"
+      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data_historical:/data_historical
+
+  outcome_observer_worker:
+    image: kairos:latest
+    container_name: kairos_outcome_observer_worker
+    build: .
+    command: ["python", "workers/outcome_observer_worker.py"]
+    env_file:
+      - .env
+    environment:
+      # 30min -- ver ventana de observación (2h-30d) documentada en el
+      # docstring del worker; el intervalo del loop solo controla cada
+      # cuánto se re-chequean señales YA elegibles, no la ventana en sí.
+      OUTCOME_OBSERVER_INTERVAL_SECONDS: "1800"
+      DB_PATH: "/data/kairos.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data:/data
+
+  limitarb_monitor_worker:
+    image: kairos:latest
+    container_name: kairos_limitarb_monitor_worker
+    build: .
+    command: ["python", "workers/limitarb_monitor_worker.py"]
+    env_file:
+      - .env
+    environment:
+      # 30s -- see workers/limitarb_monitor_worker.py: rule A counts one
+      # "attempt" per cycle where the limit leg isn't marketable yet, 3
+      # attempts triggers timeout, so the interval directly drives that
+      # timing (user-confirmed 30s).
+      LIMITARB_MONITOR_INTERVAL_SECONDS: "30"
+      DB_PATH: "/data/kairos.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data:/data
+
+  historical_collector_worker:
+    image: kairos:latest
+    container_name: kairos_historical_collector_worker
+    build: .
+    command: ["python", "workers/historical_collector_worker.py"]
+    env_file:
+      - .env
+    environment:
+      # 5min -- ticks/candles son time-sensitive (crypto_15m resuelve en
+      # ~15min), ver workers/historical_collector_worker.py.
+      HISTORICAL_COLLECTOR_INTERVAL_SECONDS: "300"
+      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data_historical:/data_historical
+
 networks:
   kairos_net:
     name: kairos_kairos_net
