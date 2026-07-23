@@ -97,9 +97,20 @@ def init_db() -> None:
     columnas nuevas, comportamiento esperado y documentado en el
     modelo)."""
     from database.accounting.limitarbsignal import LimitArbSignal
+    from database.accounting.papertrade import PaperTrade
+    from database.accounting.paperaccount import PaperAccount
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
+
+    # Paper-trading tables (2026-07-23, see strategies/paper_trading.py) --
+    # brand-new tables, no ALTER TABLE migration needed (create_tables with
+    # safe=True is CREATE TABLE IF NOT EXISTS, doesn't touch existing ones).
+    db.create_tables([PaperTrade, PaperAccount], safe=True)
+
+    # PaperAccount is a singleton (one row, id=1) -- get_or_create is
+    # idempotent across repeated init_db() calls, never duplicates the row.
+    PaperAccount.get_or_create(id=1, defaults={'bankroll_usd': 200.0})
 
     existing_cols = {row[1] for row in db.execute_sql("PRAGMA table_info(limitarbsignal)").fetchall()}
     _new_cols = {

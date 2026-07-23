@@ -58,6 +58,7 @@ from APIs.kalshi import KalshiAPI
 from APIs.kalshi_fees import order_fee
 from models.basemodel import Model
 from database.accounting.writer import log_signal
+from strategies.paper_trading import open_paper_trade
 
 MIN_VOLATILITY = 0.10
 MIN_RETURN_OPPORTUNITY = 0.02
@@ -105,7 +106,7 @@ class LimitArb:
                 # resultados reales más adelante (ver database/limit_arb_signals.py).
                 # Fail-closed: un fallo de log nunca debe tumbar el scan.
                 try:
-                    log_signal(market_id=market['id'], avg_volatility=avg_volatility,
+                    signal_id = log_signal(market_id=market['id'], avg_volatility=avg_volatility,
                                raw_edge=plan['raw_edge'], price_adjustment=plan['price_adjustment'],
                                w_edge=W_EDGE, w_volatility=W_VOLATILITY,
                                case=plan['case'], return_opportunity=plan['return_opportunity'],
@@ -115,6 +116,17 @@ class LimitArb:
                                market_close_time=market.get('close_time'),
                                market_leg_side=plan['market_leg']['side'],
                                market_leg_price_at_signal=plan['market_leg']['price'])
+                    # Simulated paper position (100% fake money, see
+                    # strategies/paper_trading.py) sized via fractional
+                    # Kelly against this signal -- part of the same
+                    # fail-closed try/except so a paper-trading failure
+                    # never blocks the real (read-only/proposal) scan.
+                    open_paper_trade(signal_id=signal_id, market_id=market['id'], case=plan['case'],
+                                      avg_volatility=avg_volatility, raw_edge=plan['raw_edge'],
+                                      return_opportunity=plan['return_opportunity'],
+                                      price_adjustment=plan['price_adjustment'],
+                                      market_leg_price=plan['market_leg']['price'],
+                                      category=market.get('type'))
                 except Exception:
                     pass
 

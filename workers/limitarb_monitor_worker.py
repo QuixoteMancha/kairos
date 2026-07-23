@@ -103,6 +103,7 @@ import requests
 
 from APIs.kalshi import KalshiAPI
 from database.accounting.writer import get_open_signals, record_monitoring_check, record_exit_recommendation
+from strategies.paper_trading import close_paper_trade, recalibrate_kelly_factor
 
 ATTEMPT_LIMIT = 3
 TRAILING_STOP_GAP_THRESHOLD = 0.05
@@ -177,6 +178,29 @@ def _locked_profit_pct(signal: dict, market: dict) -> float | None:
     return round((current - entry) / entry, 4)
 
 
+def _close_paper_trade_safe(signal: dict, exit_reason: str, exit_locked_profit_pct: float | None,
+                             limit_leg_price: float | None = None) -> None:
+    """Mirrors a record_exit_recommendation() call onto the paper-trading
+    ledger (see strategies/paper_trading.py) -- purely simulated money,
+    never a real order. Own try/except: a paper-trading failure must
+    never break real guardrail monitoring.
+
+    category is always None here: get_open_signals()/_row_to_dict() in
+    writer.py doesn't carry market['type'] on the signal dict (it's only
+    available at signal-creation time in strategies/limit_arb.py, not
+    persisted on LimitArbSignal). Consequence: for exit_reason
+    'limit_filled', close_paper_trade can't deduct the limit leg's fee
+    precisely here -- it falls back to its documented 0-fee approximation
+    (conservative-optimistic, not fatal). Not fabricating a category."""
+    try:
+        close_paper_trade(signal_id=signal['id'], exit_reason=exit_reason,
+                           exit_locked_profit_pct=exit_locked_profit_pct,
+                           return_opportunity=signal.get('return_opportunity'),
+                           limit_leg_price=limit_leg_price, category=None)
+    except Exception as e:
+        print(f"[limitarb_monitor] paper-trade close failed signal_id={signal.get('id')} error: {e}")
+
+
 def _monitor_one(api: KalshiAPI, signal: dict) -> str:
     """Evaluates the 3 rules for one open signal. Returns a short status
     string for the cycle summary. Never raises for expected conditions."""
@@ -186,12 +210,14 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         if e.response is not None and e.response.status_code == 404:
             record_exit_recommendation(signal_id=signal['id'], exit_reason='market_gone',
                                         exit_locked_profit_pct=None)
+            _close_paper_trade_safe(signal, 'market_gone', None)
             return 'market_gone'
         raise
 
     if market is None:
         record_exit_recommendation(signal_id=signal['id'], exit_reason='market_gone',
                                     exit_locked_profit_pct=None)
+        _close_paper_trade_safe(signal, 'market_gone', None)
         return 'market_gone'
 
     limit_side = signal.get('limit_leg_side')
@@ -211,6 +237,8 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         # failure. attempt_count is moot once this happens.
         record_exit_recommendation(signal_id=signal['id'], exit_reason='limit_filled',
                                     exit_locked_profit_pct=_locked_profit_pct(signal, market))
+        _close_paper_trade_safe(signal, 'limit_filled', _locked_profit_pct(signal, market),
+                                 limit_leg_price=limit_price)
         return 'limit_filled'
 
     attempt_count = (signal.get('attempt_count') or 0) + 1
@@ -221,6 +249,7 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
     if attempt_count >= ATTEMPT_LIMIT:
         record_exit_recommendation(signal_id=signal['id'], exit_reason='timeout',
                                     exit_locked_profit_pct=_locked_profit_pct(signal, market))
+        _close_paper_trade_safe(signal, 'timeout', _locked_profit_pct(signal, market))
         return 'timeout'
 
     # --- Rule B: trailing stop near the pinch ---
@@ -229,6 +258,7 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         if locked is not None and locked >= TRAILING_STOP_MIN_PROFIT_PCT:
             record_exit_recommendation(signal_id=signal['id'], exit_reason='trailing_stop',
                                         exit_locked_profit_pct=locked)
+            _close_paper_trade_safe(signal, 'trailing_stop', locked)
             return 'trailing_stop'
         # Reversal detected but the >=1% profit floor isn't met (or isn't
         # computable) -- don't force a close that violates the stated
@@ -243,8 +273,10 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         if window > 0:
             remaining_fraction = (close_time - now).total_seconds() / window
             if remaining_fraction <= TIME_DECAY_FRACTION_REMAINING:
+                locked = _locked_profit_pct(signal, market)
                 record_exit_recommendation(signal_id=signal['id'], exit_reason='time_decay',
-                                            exit_locked_profit_pct=_locked_profit_pct(signal, market))
+                                            exit_locked_profit_pct=locked)
+                _close_paper_trade_safe(signal, 'time_decay', locked)
                 return 'time_decay'
 
     # No rule fired -- just update the running tallies.
@@ -267,7 +299,16 @@ def run_once() -> dict:
             print(f"[limitarb_monitor] signal_id={signal.get('id')} market_id={signal.get('market_id')} "
                   f"error: {e}")
 
-    result = {'open': len(open_signals), 'errors': errors, **counts}
+    # Recalibrate the Kelly proxy factor once per cycle, after all signals
+    # in this cycle have been processed (and any paper trades closed
+    # above). Own try/except -- a recalibration failure must never break
+    # the real guardrail monitoring summary.
+    try:
+        recalibration = recalibrate_kelly_factor()
+    except Exception as e:
+        recalibration = {'recalibrated': False, 'error': str(e)}
+
+    result = {'open': len(open_signals), 'errors': errors, **counts, 'kelly_recalibration': recalibration}
     print(f"[limitarb_monitor] {result}")
     return result
 

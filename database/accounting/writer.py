@@ -17,8 +17,10 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
                 fav_side: str | None = None, fav_price_at_signal: float | None = None,
                 limit_leg_side: str | None = None, limit_leg_price: float | None = None,
                 market_close_time=None,
-                market_leg_side: str | None = None, market_leg_price_at_signal: float | None = None) -> None:
-    """Persists one LimitArb signal. Fail-closed at the call site (see
+                market_leg_side: str | None = None, market_leg_price_at_signal: float | None = None) -> int:
+    """Persists one LimitArb signal, returns the new row's id (used by
+    strategies/limit_arb.py to open a paper trade against it, see
+    strategies/paper_trading.py). Fail-closed at the call site (see
     strategies/limit_arb.py, wrapped in try/except): a logging failure
     must never crash or block a scan.
 
@@ -29,7 +31,7 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
     to check for a fill."""
     init_db()
     with db.connection_context():
-        LimitArbSignal.create(
+        row = LimitArbSignal.create(
             market_id=market_id,
             case=case,
             avg_volatility=avg_volatility,
@@ -46,6 +48,7 @@ def log_signal(*, market_id: str, avg_volatility: float, raw_edge: float,
             market_leg_side=market_leg_side,
             market_leg_price_at_signal=market_leg_price_at_signal,
         )
+        return row.id
 
 
 def get_recent_signals(limit: int = 100) -> list[dict]:
