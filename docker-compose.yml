@@ -34,7 +34,7 @@ services:
     image: kairos:latest
     container_name: kairos_mls_worker
     build: .
-    command: ["python", "workers/mls_worker.py"]
+    command: ["python", "-m", "workers.mls_worker"]
     env_file:
       - .env
     environment:
@@ -52,7 +52,7 @@ services:
     image: kairos:latest
     container_name: kairos_outcome_observer_worker
     build: .
-    command: ["python", "workers/outcome_observer_worker.py"]
+    command: ["python", "-m", "workers.outcome_observer_worker"]
     env_file:
       - .env
     environment:
@@ -71,7 +71,7 @@ services:
     image: kairos:latest
     container_name: kairos_limitarb_monitor_worker
     build: .
-    command: ["python", "workers/limitarb_monitor_worker.py"]
+    command: ["python", "-m", "workers.limitarb_monitor_worker"]
     env_file:
       - .env
     environment:
@@ -91,7 +91,7 @@ services:
     image: kairos:latest
     container_name: kairos_historical_collector_worker
     build: .
-    command: ["python", "workers/historical_collector_worker.py"]
+    command: ["python", "-m", "workers.historical_collector_worker"]
     env_file:
       - .env
     environment:
