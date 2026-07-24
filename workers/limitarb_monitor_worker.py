@@ -15,19 +15,28 @@ recommendation (`monitoring_status='exit_recommended'`, `exit_reason`,
 act on it manually, exactly like every other part of this system (see
 memory kairos-no-real-execution-user-trades-manually).
 
-THE 3 EXIT RULES (evaluated in this order every cycle -- first one that
+THE EXIT RULES (evaluated in this order every cycle -- first one that
 applies wins; a signal is only closed once)
 ------------------------------------------------------------------------
-A) TIMEOUT: every ~30s cycle where the limit leg would NOT yet be
-   marketable (current ask on `limit_leg_side` > `limit_leg_price`)
-   counts as one "attempt" (`attempt_count`). After 3 such attempts in a
-   row, recommend closing NOW with the market leg's current small
-   profit rather than waiting indefinitely. If a cycle finds the limit
-   leg WOULD be marketable (current price <= limit_leg_price), that is
-   NOT a rule-A failure -- it's a valid close via 'limit_filled'
-   (`monitoring_status` goes straight to 'closed', not
-   'exit_recommended' -- see record_exit_recommendation in writer.py),
-   and `attempt_count` is irrelevant at that point.
+REDESIGNED 2026-07-23 (see memory kairos-timeout-rule-gated-by-game-
+progress-2026-07-23): originally rule A ("timeout") fired standalone
+after 3 consecutive 30s checks (~90s wall clock) regardless of how much
+of the event had actually elapsed. Observed live in prod: this abandoned
+positions almost instantly relative to real match durations (tennis
+matches run for hours), producing ~29/29 early trades that closed via
+this standalone rule within ~90s of opening with PnL~$0.00 in most
+cases -- pure sampling noise, not real signal, and it had already
+started dragging the Kelly calibration factor down on garbage data. User
+clarified the intended design: the 30s cycle is only the fill-check
+SAMPLING cadence, not a patience budget by itself -- keep checking every
+30s for as long as the event is running, and only give up once the game
+has genuinely progressed AND enough checks have happened.
+
+'limit_filled' (immediate, not gated by anything below): if a cycle
+finds the limit leg WOULD be marketable now (current ask on
+`limit_leg_side` <= `limit_leg_price`), that's a valid close --
+`monitoring_status` goes straight to 'closed'. Always checked first,
+every cycle.
 
 B) TRAILING STOP NEAR THE PINCH: tracks `best_limit_gap`, the minimum
    observed |current_limit_side_price - limit_leg_price| across all
@@ -35,21 +44,30 @@ B) TRAILING STOP NEAR THE PINCH: tracks `best_limit_gap`, the minimum
    <=0.05 (got close to triggering the limit) but the CURRENT gap is
    now larger than that historical minimum (price reversed away again),
    recommend closing with a trailing stop that locks in >=1% profit
-   over the market leg's entry price.
+   over the market leg's entry price. Can fire at any point, not gated
+   by game progress -- protects a near-fill from reversing away
+   completely, that opportunity doesn't wait for a time threshold.
 
-C) TIME DECAY: if neither A nor B fired this cycle, and the fraction of
-   monitoring-window time remaining is <=25% -- computed as
-   (market_close_time - now) / (market_close_time - signal.created_at),
-   using `market_close_time` (snapshotted at signal-creation time from
-   the Kalshi market's own `close_time`, proxy for event end) and the
-   signal's own `created_at` as the start of the monitoring window --
-   recommend closing/selling the market leg NOW at whatever price
-   applies, even if that locks in a loss (this rule's
-   exit_locked_profit_pct CAN be negative, unlike A/B which only fire
-   on a real/near-real gain). Expected to fire in a MINORITY of cases:
-   under normal conditions rule A (3 failed attempts) or rule B
-   (reversal near the pinch) should resolve most signals well before
-   75% of the window elapses.
+A+C COMBINED -- TIMEOUT GATED BY GAME PROGRESS: only fires when BOTH
+   conditions hold: (1) `attempt_count` (incremented every 30s cycle
+   where the limit leg isn't marketable yet) is >= ATTEMPT_LIMIT (3),
+   AND (2) the fraction of monitoring-window time remaining is <=25% --
+   computed as (market_close_time - now) / (market_close_time -
+   signal.created_at), using `market_close_time` (snapshotted at
+   signal-creation time from the Kalshi market's own `close_time`, proxy
+   for event end) and the signal's own `created_at` as the start of the
+   monitoring window. In practice, by the time a match reaches 25%
+   remaining, attempt_count will already be far past 3 (many 30s cycles
+   elapsed) -- the attempt_count check mostly guards the edge case of a
+   very short-lived event. Recommends closing/selling the market leg NOW
+   at whatever price applies, even if that locks in a loss
+   (exit_locked_profit_pct CAN be negative here, unlike B which only
+   fires on a real/near-real gain). Still logged with exit_reason
+   'timeout' (kept the existing vocabulary/DB enum -- no schema change,
+   strategies/paper_trading.py's close_paper_trade already handles
+   'timeout' as exit_locked_profit_pct-based PnL that can be negative).
+   'time_decay' as a standalone exit_reason is no longer emitted by this
+   worker (kept in the DB enum for legacy-row compatibility only).
 
 exit_locked_profit_pct FORMULA -- DESIGN DECISION
 --------------------------------------------------
@@ -348,13 +366,6 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
     prior_best_gap = signal.get('best_limit_gap')
     best_limit_gap = gap if prior_best_gap is None else min(prior_best_gap, gap)
 
-    if attempt_count >= ATTEMPT_LIMIT:
-        record_exit_recommendation(signal_id=signal['id'], exit_reason='timeout',
-                                    exit_locked_profit_pct=_locked_profit_pct(signal, market))
-        _close_paper_trade_safe(signal, 'timeout', _locked_profit_pct(signal, market),
-                                 close_market_leg_price=close_market_leg_price)
-        return 'timeout'
-
     # --- Rule B: trailing stop near the pinch ---
     if prior_best_gap is not None and prior_best_gap <= TRAILING_STOP_GAP_THRESHOLD and gap > prior_best_gap:
         locked = _locked_profit_pct(signal, market)
@@ -367,7 +378,28 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         # computable) -- don't force a close that violates the stated
         # guarantee; fall through to rule C / keep monitoring.
 
-    # --- Rule C: time decay ---
+    # --- Rule A+C combined: timeout gated by real game progress ---
+    # Redesigned 2026-07-23 per user clarification: the 30s cycle is just
+    # the fill-check SAMPLING cadence, not itself a patience budget. The
+    # standalone "3 attempts = ~90s wall clock -> give up" trigger that
+    # used to exist here was abandoning positions almost instantly
+    # relative to real match durations (observed live in prod: 29/29
+    # early trades closed via that old standalone rule, ~90s after
+    # opening, PnL~$0.00 in most cases -- pure noise, not real signal,
+    # and it had already started dragging the Kelly calibration factor
+    # down on garbage data). Now: only give up once BOTH conditions hold
+    # -- at least ATTEMPT_LIMIT (3) checks have happened AND real game
+    # time has progressed to TIME_DECAY_FRACTION_REMAINING (25%) or less
+    # remaining. In practice, by the time a match reaches 25% remaining,
+    # attempt_count will already be far past 3 (many 30s cycles will have
+    # elapsed) -- the attempt_count>=3 check mostly guards the edge case
+    # of a very short-lived event, not a real independent gate. Keeps the
+    # 'timeout' exit_reason vocabulary (still means "gave up waiting for
+    # the limit leg, closed on the market leg's current price, can be a
+    # loss or a small profit") -- see strategies/paper_trading.py's
+    # close_paper_trade, which already handles 'timeout' as
+    # exit_locked_profit_pct-based PnL, can be negative, no change needed
+    # there.
     close_time = _parse_dt(signal.get('market_close_time'))
     created_at = _parse_dt(signal.get('created_at'))
     if close_time is not None and created_at is not None:
@@ -375,12 +407,12 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
         window = (close_time - created_at).total_seconds()
         if window > 0:
             remaining_fraction = (close_time - now).total_seconds() / window
-            if remaining_fraction <= TIME_DECAY_FRACTION_REMAINING:
+            if remaining_fraction <= TIME_DECAY_FRACTION_REMAINING and attempt_count >= ATTEMPT_LIMIT:
                 locked = _locked_profit_pct(signal, market)
-                record_exit_recommendation(signal_id=signal['id'], exit_reason='time_decay',
+                record_exit_recommendation(signal_id=signal['id'], exit_reason='timeout',
                                             exit_locked_profit_pct=locked)
-                _close_paper_trade_safe(signal, 'time_decay', locked, close_market_leg_price=close_market_leg_price)
-                return 'time_decay'
+                _close_paper_trade_safe(signal, 'timeout', locked, close_market_leg_price=close_market_leg_price)
+                return 'timeout'
 
     # No rule fired -- just update the running tallies.
     record_monitoring_check(signal_id=signal['id'], attempt_count=attempt_count, best_limit_gap=best_limit_gap)
