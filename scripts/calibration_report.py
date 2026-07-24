@@ -137,46 +137,107 @@ def _fit_2d_no_intercept(rows):
     return {'a': a_coef, 'b': b_coef, 'n': n, 'r_squared': r_squared}
 
 
-def main():
+def compute_report() -> dict:
+    """Envuelve _classifiable_rows()/_fit_2d_no_intercept() y devuelve un
+    dict puro con el mismo resultado que hoy se imprime -- reusado tanto
+    por main() como por api/server.py (GET /api/stats/calibration)."""
     rows = _classifiable_rows()
     n = len(rows)
+
+    report = {
+        'w_edge_current': W_EDGE,
+        'w_volatility_current': W_VOLATILITY,
+        'n_classifiable': n,
+        'min_samples_required': MIN_SAMPLES_FOR_REPORT,
+        'ready': False,
+        'reason': None,
+        'fit': None,
+        'suggestion': None,
+        'anomaly': False,
+        'case_breakdown': [],
+    }
+
+    if n < MIN_SAMPLES_FOR_REPORT:
+        report['reason'] = 'insufficient_samples'
+        return report
+
+    fit = _fit_2d_no_intercept(rows)
+    if fit is None:
+        report['reason'] = 'singular_matrix'
+        return report
+
+    a, b = fit['a'], fit['b']
+    report['ready'] = True
+    report['fit'] = {'a': a, 'b': b, 'r_squared': fit['r_squared']}
+
+    if a + b > 0:
+        w_edge_suggested = a / (a + b)
+        w_vol_suggested = b / (a + b)
+        report['suggestion'] = {'w_edge': w_edge_suggested, 'w_volatility': w_vol_suggested}
+    else:
+        report['anomaly'] = True
+
+    for case in ('favorite_overvalued', 'favorite_undervalued'):
+        case_rows = [r for r in rows if r['case'] == case]
+        entry = {'case': case, 'n': len(case_rows)}
+        if len(case_rows) < MIN_SAMPLES_PER_CASE:
+            entry['status'] = 'insufficient'
+        else:
+            case_fit = _fit_2d_no_intercept(case_rows)
+            if case_fit is None:
+                entry['status'] = 'singular_matrix'
+            else:
+                ca, cb = case_fit['a'], case_fit['b']
+                if ca + cb > 0:
+                    entry['status'] = 'ok'
+                    entry['w_edge'] = ca / (ca + cb)
+                    entry['w_volatility'] = cb / (ca + cb)
+                    entry['r_squared'] = case_fit['r_squared']
+                else:
+                    entry['status'] = 'anomaly'
+        report['case_breakdown'].append(entry)
+
+    return report
+
+
+def main():
+    r = compute_report()
+    n = r['n_classifiable']
 
     print("=" * 72)
     print("KAIROS -- INFORME DE RECALIBRACIÓN SUGERIDA (W_EDGE / W_VOLATILITY)")
     print("Este informe NO modifica nada -- es una recomendación para revisión manual.")
     print("=" * 72)
     print()
-    print(f"W_EDGE actual:       {W_EDGE}")
-    print(f"W_VOLATILITY actual: {W_VOLATILITY}")
-    print(f"Muestras clasificables disponibles: {n} (mínimo requerido: {MIN_SAMPLES_FOR_REPORT})")
+    print(f"W_EDGE actual:       {r['w_edge_current']}")
+    print(f"W_VOLATILITY actual: {r['w_volatility_current']}")
+    print(f"Muestras clasificables disponibles: {n} (mínimo requerido: {r['min_samples_required']})")
     print()
 
-    if n < MIN_SAMPLES_FOR_REPORT:
+    if r['reason'] == 'insufficient_samples':
         print(f"Todavía NO hay suficientes datos limpios para una recalibración con algo")
-        print(f"de confianza estadística (faltan {MIN_SAMPLES_FOR_REPORT - n} muestras más).")
+        print(f"de confianza estadística (faltan {r['min_samples_required'] - n} muestras más).")
         print("Los pesos actuales se mantienen sin cambios.")
         print("=" * 72)
         return
 
-    fit = _fit_2d_no_intercept(rows)
-    if fit is None:
+    if r['reason'] == 'singular_matrix':
         print("No se pudo ajustar la regresión (raw_edge y avg_volatility están")
         print("demasiado correlacionados en esta muestra -- matriz casi singular).")
         print("Los pesos actuales se mantienen sin cambios.")
         print("=" * 72)
         return
 
+    fit = r['fit']
     a, b = fit['a'], fit['b']
     print(f"Coeficientes ajustados (sin normalizar): a(edge)={a:.4f}  b(volatility)={b:.4f}")
     print(f"R^2 del ajuste: {fit['r_squared']:.4f}" if fit['r_squared'] is not None else "R^2: N/A")
 
     print()
-    if a + b > 0:
-        w_edge_suggested = a / (a + b)
-        w_vol_suggested = b / (a + b)
+    if r['suggestion']:
         print(f"SUGERENCIA (normalizada a sumar 1, mismo convenio que hoy):")
-        print(f"  W_EDGE'       = {w_edge_suggested:.4f}  (actual: {W_EDGE})")
-        print(f"  W_VOLATILITY' = {w_vol_suggested:.4f}  (actual: {W_VOLATILITY})")
+        print(f"  W_EDGE'       = {r['suggestion']['w_edge']:.4f}  (actual: {r['w_edge_current']})")
+        print(f"  W_VOLATILITY' = {r['suggestion']['w_volatility']:.4f}  (actual: {r['w_volatility_current']})")
     else:
         print("ANOMALÍA: a+b <= 0 -- no se puede normalizar a una combinación convexa")
         print("razonable. Esto sugiere que, en esta muestra, ni raw_edge ni")
@@ -187,21 +248,17 @@ def main():
     print("-" * 72)
     print("DESGLOSE POR CASO (solo si hay >= %d muestras en ese caso)" % MIN_SAMPLES_PER_CASE)
     print("-" * 72)
-    for case in ('favorite_overvalued', 'favorite_undervalued'):
-        case_rows = [r for r in rows if r['case'] == case]
-        if len(case_rows) < MIN_SAMPLES_PER_CASE:
-            print(f"  {case:<24} n={len(case_rows):<4} (insuficiente, mínimo {MIN_SAMPLES_PER_CASE})")
-            continue
-        case_fit = _fit_2d_no_intercept(case_rows)
-        if case_fit is None:
-            print(f"  {case:<24} n={len(case_rows):<4} (no se pudo ajustar, matriz singular)")
-            continue
-        ca, cb = case_fit['a'], case_fit['b']
-        if ca + cb > 0:
-            print(f"  {case:<24} n={len(case_rows):<4} W_EDGE'={ca/(ca+cb):.4f} "
-                  f"W_VOLATILITY'={cb/(ca+cb):.4f} R^2={case_fit['r_squared']:.4f}")
+    for entry in r['case_breakdown']:
+        case, cn = entry['case'], entry['n']
+        if entry['status'] == 'insufficient':
+            print(f"  {case:<24} n={cn:<4} (insuficiente, mínimo {MIN_SAMPLES_PER_CASE})")
+        elif entry['status'] == 'singular_matrix':
+            print(f"  {case:<24} n={cn:<4} (no se pudo ajustar, matriz singular)")
+        elif entry['status'] == 'ok':
+            print(f"  {case:<24} n={cn:<4} W_EDGE'={entry['w_edge']:.4f} "
+                  f"W_VOLATILITY'={entry['w_volatility']:.4f} R^2={entry['r_squared']:.4f}")
         else:
-            print(f"  {case:<24} n={len(case_rows):<4} anomalía (a+b<=0)")
+            print(f"  {case:<24} n={cn:<4} anomalía (a+b<=0)")
 
     print()
     print("=" * 72)
