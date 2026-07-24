@@ -119,7 +119,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from APIs.kalshi import KalshiAPI
+from outer_apis.kalshi import KalshiAPI
 from database.accounting.writer import get_open_signals, record_monitoring_check, record_exit_recommendation
 from strategies.paper_trading import close_paper_trade, recalibrate_kelly_factor
 

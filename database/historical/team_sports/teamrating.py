@@ -33,7 +33,7 @@ class TeamRating(HistoricalBaseModel):
     `CREATE UNIQUE INDEX teamrating_sport_name_norm ON
     teamrating(sport, name_norm)` (only discovered by inspecting indexes
     on `sqlite_master`, not just the table's own CREATE TABLE sql — a
-    first attempt at APIs/football_ratings.py assumed this was a time
+    first attempt at outer_apis/football_ratings.py assumed this was a time
     series like TennisPlayerRanking and got IntegrityError on every
     write in production). Writers MUST upsert (insert-or-update on
     conflict), never blind-insert. See writer.py in this package."""

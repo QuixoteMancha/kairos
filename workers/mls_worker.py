@@ -1,6 +1,6 @@
 """
 Periodic worker: fetches real completed MLS games (ESPN), computes Elo,
-persists into TeamRating (source="mls_elo") -- see APIs/mls_ratings.py.
+persists into TeamRating (source="mls_elo") -- see outer_apis/mls_ratings.py.
 
 Same env-var-gated loop pattern as kairos.py: if MLS_REFRESH_INTERVAL_SECONDS
 is set, runs forever with a try/except per iteration (one failure doesn't
@@ -10,7 +10,7 @@ kill the process); otherwise runs once and exits.
 import os
 import time
 
-from APIs import mls_ratings
+from outer_apis import mls_ratings
 
 _REFRESH_INTERVAL_S = os.getenv("MLS_REFRESH_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 21600  # 6h

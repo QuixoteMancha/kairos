@@ -54,8 +54,8 @@
 #   posterior "si supera tal techo, rechazar" (que nunca se activaría
 #   correctamente si el número ya viene sin relación con la volatilidad).
 
-from APIs.kalshi import KalshiAPI
-from APIs.kalshi_fees import order_fee
+from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi_fees import order_fee
 from models.basemodel import Model
 from database.accounting.writer import log_signal
 from strategies.paper_trading import open_paper_trade
@@ -205,7 +205,7 @@ class LimitArb:
 
         # Fees reales de Kalshi sobre ambas patas. La pata límite se cobra
         # al mismo nivel que una taker (fail-closed: no hay cifra confiable
-        # de descuento maker por serie, ver APIs/kalshi_fees.py) usando su
+        # de descuento maker por serie, ver outer_apis/kalshi_fees.py) usando su
         # precio de ejecución esperado (limit_price), no el precio actual.
         market_fee = order_fee(market_leg['price'], category=category)
         limit_fee = order_fee(limit_leg['price'], category=category)

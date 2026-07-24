@@ -1,5 +1,5 @@
 """
-Persists real tennis data (already fetched by APIs/tennis_*.py) into the
+Persists real tennis data (already fetched by outer_apis/tennis_*.py) into the
 historical DB (database/historical/tennis/ models) — called from those
 facades on a FRESH fetch only (not on every in-process cache hit, to
 avoid flooding the DB with redundant snapshots of unchanged data).
@@ -29,7 +29,7 @@ def save_rankings_snapshot(tour: str, players: list[dict[str, Any]]) -> None:
     """One new row per player, per fresh fetch -- deliberately NOT
     deduped: this is a time series (ranking history), each fetch is a
     real new data point. Bounded naturally by the 1h cache TTL in
-    APIs/tennis_rankings.py (a fresh fetch only happens that often)."""
+    outer_apis/tennis_rankings.py (a fresh fetch only happens that often)."""
     if not players:
         return
     try:
@@ -55,7 +55,7 @@ def save_rankings_snapshot(tour: str, players: list[dict[str, Any]]) -> None:
 def save_serve_calibration_snapshot(tour: str, calibration: dict[tuple[int, int], dict[str, Any]]) -> None:
     """One row per rank bucket, per fresh calibration run -- also a time
     series (is p_serve drifting over time? is n_matches growing?).
-    Bounded by the 6h cache TTL in APIs/tennis_serve_stats.py."""
+    Bounded by the 6h cache TTL in outer_apis/tennis_serve_stats.py."""
     if not calibration:
         return
     try:
@@ -88,7 +88,7 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
     (e.g. a "recent form" query built on top of this table would double-
     count matches). Checks existence before each insert -- O(n) queries
     per call, acceptable given `matches` is capped at _MAX_DEPTH=40 in
-    APIs/tennis_match_history.py."""
+    outer_apis/tennis_match_history.py."""
     if not matches:
         return
     try:
@@ -130,7 +130,7 @@ def save_head_to_head_snapshot(player_a: str, player_b: str, h2h: dict[str, Any]
     """One new row per fresh h2h computation -- a snapshot (like
     calibration), since the underlying record can genuinely change as new
     matches get played. Bounded by the 1h cache TTL of the underlying
-    match-history fetch in APIs/tennis_match_history.py."""
+    match-history fetch in outer_apis/tennis_match_history.py."""
     if not h2h:
         return
     try:

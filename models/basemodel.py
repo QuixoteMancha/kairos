@@ -60,7 +60,7 @@ class Model:
 
     def calculate_average_volatility(self, market):
         """Fail-closed: categoría desconocida ('unknown', asignada por
-        APIs.kalshi._infer_category cuando no reconoce el ticker) devuelve
+        outer_apis.kalshi._infer_category cuando no reconoce el ticker) devuelve
         volatilidad 0.0 en vez de reventar o inventar un valor — nunca debe
         traducirse en aprobar una oportunidad de arb por falta de dato."""
         market_type = market.get('type')

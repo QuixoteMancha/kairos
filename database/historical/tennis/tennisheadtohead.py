@@ -10,7 +10,7 @@ class HistoricalBaseModel(Model):
 
 class TennisHeadToHead(HistoricalBaseModel):
     """One row per (player_a, player_b, computation) snapshot of head-to-
-    head record — see APIs/tennis_match_history.py::get_head_to_head.
+    head record — see outer_apis/tennis_match_history.py::get_head_to_head.
     Player order is NOT normalized (a vs b is whatever order the caller
     used) — a query needs to check both orderings if it wants a
     canonical lookup; kept simple rather than adding a normalization

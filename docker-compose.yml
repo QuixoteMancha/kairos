@@ -127,14 +127,14 @@ services:
     image: kairos:latest
     container_name: kairos_api
     build: .
-    command: ["python", "-m", "api.server"]
+    command: ["python", "-m", "inner_api.server"]
     env_file:
       - .env
     environment:
       # 8765 -- puerto legacy pre-"extreme makeover" (había Flask acá
       # antes); otro proyecto del ecosistema (Aegis) ya tiene una
       # referencia apuntando acá, confirmado libre en la mini-pc (ver
-      # api/server.py module docstring).
+      # inner_api/server.py module docstring).
       API_PORT: "8765"
       DB_PATH: "/data/kairos.db"
     restart: unless-stopped

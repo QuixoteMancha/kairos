@@ -71,9 +71,9 @@ def _bucket_for_rank(rank: int) -> tuple[int, int]:
 
 # ── Real calibration (Match Charting Project x live rankings) ─────────────
 #
-# `APIs/tennis_serve_stats.py` calibrates real p_serve-by-bucket from Jeff
+# `outer_apis/tennis_serve_stats.py` calibrates real p_serve-by-bucket from Jeff
 # Sackmann's Match Charting Project (per-match serve stats, both tours)
-# cross-referenced against current ATP/WTA rankings (`APIs/tennis_rankings.py`).
+# cross-referenced against current ATP/WTA rankings (`outer_apis/tennis_rankings.py`).
 # Cached at module level here since it's an expensive multi-request live
 # calibration (~10s), not something to redo on every model call.
 
@@ -95,7 +95,7 @@ def _get_calibrated_table(tour: str) -> dict[tuple[int, int], float]:
 
     table = dict(_BUCKET_P_SERVE)  # start from the static placeholder for every bucket
     try:
-        from APIs import tennis_serve_stats
+        from outer_apis import tennis_serve_stats
 
         real = tennis_serve_stats.calibrate_serve_pct_by_bucket(tour)
         for bucket, data in real.items():

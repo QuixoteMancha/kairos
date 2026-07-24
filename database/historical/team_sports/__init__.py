@@ -16,16 +16,16 @@ RESEARCH DONE 2026-07-21 (before building this, not guessed):
   Kalshi football series and ClubElo doesn't cover it.
 - American football (NFL): real data already rescued too
   (source='nflverse', 32 teams) — nflverse-data's public `games.csv`
-  GitHub release wired live (`APIs/nfl_ratings.py`).
+  GitHub release wired live (`outer_apis/nfl_ratings.py`).
 - Basketball (NBA): no dedicated free live Elo API. Self-computed from
   stats.nba.com (needs curl_cffi TLS impersonation, same fix class as
-  ATP tour) via `APIs/basketball_ratings.py`.
+  ATP tour) via `outer_apis/basketball_ratings.py`.
 - Baseball (MLB): no dedicated free live Elo API, but MLB's own official
-  Stats API is free — self-computed via `APIs/baseball_ratings.py`.
+  Stats API is free — self-computed via `outer_apis/baseball_ratings.py`.
 - Hockey (NHL): same situation as MLB, self-computed via
-  `APIs/hockey_ratings.py` against api-web.nhle.com.
+  `outer_apis/hockey_ratings.py` against api-web.nhle.com.
 
-All 4 self-computed sports share `APIs/elo_engine.py` (the math) and
+All 4 self-computed sports share `outer_apis/elo_engine.py` (the math) and
 `writer.py` in this package (persistence + the `find_team_rating` prefix-
 match lookup, needed because Kalshi's market data gives short/partial
 team names that don't exact-match the full names stored here).

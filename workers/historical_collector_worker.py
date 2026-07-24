@@ -8,9 +8,9 @@ had NOTHING writing new rows to them (see database/db.py's
 independent, fail-closed collectors, run each cycle:
 
   - Part A: real per-trade Kalshi ticks for currently-open crypto_15m
-    markets (APIs/kalshi_ticks_collector.py, KalshiAPI.get_trades).
+    markets (outer_apis/kalshi_ticks_collector.py, KalshiAPI.get_trades).
   - Part B: real underlying OHLCV from Binance's public klines endpoint
-    (APIs/crypto_prices.py).
+    (outer_apis/crypto_prices.py).
 
 Neither part ever fabricates data -- a fetch/parse failure for one
 market/symbol just yields zero rows for it and moves on, never blocks the
@@ -25,8 +25,8 @@ unset, runs once (useful for cron/manual verification).
 import os
 import time
 
-from APIs.crypto_prices import collect_real_prices
-from APIs.kalshi_ticks_collector import collect_real_ticks
+from outer_apis.crypto_prices import collect_real_prices
+from outer_apis.kalshi_ticks_collector import collect_real_ticks
 
 
 def run_once() -> dict:

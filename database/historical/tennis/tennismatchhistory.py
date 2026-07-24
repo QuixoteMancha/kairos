@@ -10,7 +10,7 @@ class HistoricalBaseModel(Model):
 
 class TennisMatchHistory(HistoricalBaseModel):
     """One row per real charted match result for a player — see
-    APIs/tennis_match_history.py::get_recent_matches (Flashscore-sourced).
+    outer_apis/tennis_match_history.py::get_recent_matches (Flashscore-sourced).
     Persisting this builds a real historical match database over time
     (the old RecentMatchHistory/Match tables never got populated) —
     useful for recent-form calculations that don't need to re-scrape

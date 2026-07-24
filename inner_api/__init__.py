@@ -1,5 +1,5 @@
 """
-Servidor HTTP de solo lectura de Kairos (ver api/server.py).
+Servidor HTTP de solo lectura de Kairos (ver inner_api/server.py).
 
 Este rebuild ("extreme makeover") eliminó a propósito el servidor web
 original -- Kairos es un motor de scan, no una app web (ver comentario en

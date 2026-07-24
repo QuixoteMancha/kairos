@@ -28,7 +28,7 @@ from datetime import datetime
 from database.db import db, init_db
 from database.accounting.papertrade import PaperTrade
 from database.accounting.paperaccount import PaperAccount
-from APIs.kalshi_fees import order_fee
+from outer_apis.kalshi_fees import order_fee
 
 STARTING_BANKROLL_USD = 200.0
 KELLY_FRACTION_MULTIPLIER = 0.5   # half-Kelly

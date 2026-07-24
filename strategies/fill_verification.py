@@ -11,7 +11,7 @@ whether the limit leg "would be marketable". That is fast but lossy: a
 price can cross the limit and revert between two 30s checks, and a
 snapshot of the current ASK is not proof anything actually TRADED at
 that price. This module runs ONCE, AFTER the event has settled, against
-Kalshi's real trade tape (`APIs/kalshi.py:get_trades`,
+Kalshi's real trade tape (`outer_apis/kalshi.py:get_trades`,
 `GET /markets/trades`, real executed trades) -- a strictly more honest
 (but still imperfect) signal.
 
@@ -50,7 +50,7 @@ left None/False with a documented reason, never a fabricated value.
 
 from datetime import datetime, timezone
 
-from APIs.kalshi import KalshiAPI
+from outer_apis.kalshi import KalshiAPI
 
 # How far back (in pages of up to `limit` trades each) to look for
 # pre-signal trade history when estimating queue_ahead_estimate. Kept

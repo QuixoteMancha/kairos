@@ -28,7 +28,7 @@
 #      entre sí porque describen el mismo evento desde lados opuestos —
 #      hallazgo real verificado en tenis: cada partido ATP/WTA en Kalshi son
 #      DOS mercados separados ("¿Gana el jugador A?" / "¿Gana el jugador B?"),
-#      no un solo ticker A/B (ver APIs/kalshi_tennis_markets.py). Si
+#      no un solo ticker A/B (ver outer_apis/kalshi_tennis_markets.py). Si
 #      precio_yes_A + precio_yes_B + fees < 1, comprar "yes" en AMBOS
 #      tickers garantiza cobrar $1 sin importar quién gane — mismo arb,
 #      dos tickers distintos. Acá cada pata se coloca en su propio ticker
@@ -38,8 +38,8 @@
 # presentes, cross-ticket; si no, ambas patas caen en `market['id']`, el
 # ticker del propio mercado — same-ticket, comportamiento histórico).
 
-from APIs.kalshi import KalshiAPI
-from APIs.kalshi_fees import order_fee
+from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi_fees import order_fee
 
 MIN_RETURN_OPPORTUNITY = 0.01
 
@@ -68,7 +68,7 @@ class MarketArb:
         oportunidad), nunca se asume un precio por defecto. `price_a`/
         `price_b` son genéricos: side 'a' es yes u option-A según el
         mercado, side 'b' es no u option-B. Fees reales de Kalshi (ver
-        APIs/kalshi_fees.py) para ambas patas, ambas market/taker.
+        outer_apis/kalshi_fees.py) para ambas patas, ambas market/taker.
 
         `ticker_a`/`ticker_b`: opcionales en el market dict. Si están
         presentes (caso cross-ticket, ej. tenis: dos tickers distintos de

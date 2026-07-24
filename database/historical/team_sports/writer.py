@@ -1,9 +1,9 @@
 """
 Shared Elo-computation + persistence logic for basketball/baseball/hockey
 (the 3 sports with NO pre-computed rating source, unlike tennis/football
-— see APIs/elo_engine.py docstring). Each sport's facade
-(APIs/basketball_ratings.py, APIs/baseball_ratings.py,
-APIs/hockey_ratings.py) converts its own scraper's raw game shape into a
+— see outer_apis/elo_engine.py docstring). Each sport's facade
+(outer_apis/basketball_ratings.py, outer_apis/baseball_ratings.py,
+outer_apis/hockey_ratings.py) converts its own scraper's raw game shape into a
 common `{"date", "team_a", "team_b", "a_won"}` list and calls
 `compute_and_persist_elo` here, instead of tripling this logic 3x.
 """
@@ -13,7 +13,7 @@ from typing import Any
 
 from peewee import EXCLUDED
 
-from APIs import elo_engine
+from outer_apis import elo_engine
 from database.db import init_db_historical
 from database.historical.team_sports.teamrating import TeamRating
 from database.historical.team_sports.teammatchhistory import TeamMatchHistory
@@ -56,7 +56,7 @@ def compute_and_persist_elo(
     doesn't need to pre-sort) starting from each team's CURRENT rating in
     TeamRating (default `elo_engine.DEFAULT_RATING` for a team never seen
     before), persists the final ratings (upsert, same pattern as
-    APIs/football_ratings.py -- TeamRating is current-state, not a time
+    outer_apis/football_ratings.py -- TeamRating is current-state, not a time
     series, see that module's docstring for the production bug that
     taught us this) and every individual game (deduped, TeamMatchHistory).
 

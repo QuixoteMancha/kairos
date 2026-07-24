@@ -4,7 +4,7 @@
 # temperature and a historical-average/std-dev for that location+date, use a
 # normal-distribution CDF to estimate P(outcome A). This is a deliberately
 # simplified rebuild, not a real forecast model (no NWS/live forecast feed
-# wired into fairprice/ - that would live in APIs/).
+# wired into fairprice/ - that would live in outer_apis/).
 #
 # Expected `market` keys:
 #   id, type, current_a_price, current_b_price   (base, always required)

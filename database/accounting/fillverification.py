@@ -10,7 +10,7 @@ of the current price to guess whether the limit leg "would be
 marketable" -- it can miss a price that crossed the limit and came back
 between two checks, and it never looks at real EXECUTED trades. This
 table records a ONE-TIME, retrospective, post-settlement verification
-per signal, using Kalshi's real trade tape (`APIs/kalshi.py:get_trades`,
+per signal, using Kalshi's real trade tape (`outer_apis/kalshi.py:get_trades`,
 `GET /markets/trades`) instead of a live snapshot -- see
 strategies/fill_verification.py for the actual computation and its
 documented approximations (this is still a proxy, not a real fill

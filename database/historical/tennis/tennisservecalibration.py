@@ -11,7 +11,7 @@ class HistoricalBaseModel(Model):
 class TennisServeCalibration(HistoricalBaseModel):
     """One row per (tour, rank bucket, calibration run) snapshot of the
     real p_serve calibration — see
-    APIs/tennis_serve_stats.py::calibrate_serve_pct_by_bucket, which feeds
+    outer_apis/tennis_serve_stats.py::calibrate_serve_pct_by_bucket, which feeds
     models/volatility/sports/tennis/tennis_markov.py. Persisting this
     over time lets the calibration be tracked/audited across runs (is
     p_serve drifting? is n_matches per bucket growing?) instead of only

@@ -10,7 +10,7 @@ class HistoricalBaseModel(Model):
 
 class TennisPlayerRanking(HistoricalBaseModel):
     """One row per (player, fetch) snapshot of a player's current ATP/WTA
-    ranking — see APIs/tennis_rankings.py::get_top_rankings. Accumulating
+    ranking — see outer_apis/tennis_rankings.py::get_top_rankings. Accumulating
     these over time builds a real ranking-history time series (something
     the old schema had a dedicated table for, RankingHistory, but never
     populated) — useful later for bucketing a player's rank AT THE TIME

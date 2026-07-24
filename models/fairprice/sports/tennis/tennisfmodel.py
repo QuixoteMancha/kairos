@@ -13,7 +13,7 @@
 # ranking doesn't capture (a player ranked 221 who the market still
 # treated as a heavy favorite, e.g. a former top-30 player returning from
 # injury). Blending in REAL recent-form and head-to-head data (via
-# APIs/tennis_match_history.py, Flashscore-sourced) doesn't fully close
+# outer_apis/tennis_match_history.py, Flashscore-sourced) doesn't fully close
 # that gap — it's still a simple signal, not real injury/surface/context
 # modeling — but it's real data instead of nothing, and should narrow the
 # rank-only model's blind spot somewhat.
@@ -50,7 +50,7 @@ class TennisFModel(_SportFModel):
     Form/h2h blending is itself fail-closed and independently optional:
     missing player names, missing/insufficient real match history, or a
     scraper failure all just skip that specific blend step (see
-    APIs/tennis_match_history.py), never fabricate a signal."""
+    outer_apis/tennis_match_history.py), never fabricate a signal."""
 
     def calculate_fair_price(self, market: dict) -> dict:
         rank_a = market.get('player_a_rank')
@@ -89,7 +89,7 @@ class TennisFModel(_SportFModel):
         if not name_a or not name_b:
             return fair_a  # no names -> can't look up real history, skip.
 
-        from APIs.tennis_match_history import get_recent_form
+        from outer_apis.tennis_match_history import get_recent_form
 
         form_a = get_recent_form(name_a, n=RECENT_FORM_LOOKBACK)
         form_b = get_recent_form(name_b, n=RECENT_FORM_LOOKBACK)
@@ -106,7 +106,7 @@ class TennisFModel(_SportFModel):
         if not name_a or not name_b:
             return fair_a
 
-        from APIs.tennis_match_history import get_head_to_head
+        from outer_apis.tennis_match_history import get_head_to_head
 
         h2h = get_head_to_head(name_a, name_b, lookback=H2H_LOOKBACK)
         if h2h is None or h2h['n_matches'] < MIN_H2H_MATCHES:

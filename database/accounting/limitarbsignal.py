@@ -105,7 +105,7 @@ class LimitArbSignal(BaseModel):
     # Added 2026-07-23: real Kalshi tickers of each leg, to fix the
     # cross-ticket monitoring bug (market_id for tennis/team-sports is a
     # synthetic event_ticker, never fetchable via get_market -- see
-    # APIs/kalshi_tennis_markets.py / kalshi_team_sport_markets.py). For
+    # outer_apis/kalshi_tennis_markets.py / kalshi_team_sport_markets.py). For
     # single-ticket markets these just equal market_id. Nullable: rows
     # logged before this fix won't have them -- monitor/observer workers
     # fall back to the old market_id-based fetch for those, unchanged.

@@ -11,7 +11,7 @@
 #   h2h_a_wins, h2h_b_wins                        (int, historical head-to-head)
 #
 # TODO: no live data source is wired for ratings/h2h yet (that lives outside
-# fairprice/, e.g. APIs/). Until that's wired, every call here hits the
+# fairprice/, e.g. outer_apis/). Until that's wired, every call here hits the
 # fail-closed fallback and reports zero edge.
 
 from models.fairprice._common import market_fallback, clamp01

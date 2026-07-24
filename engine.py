@@ -1,14 +1,14 @@
 from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
-from APIs.kalshi import KalshiAPI
-from APIs.kalshi_tennis_markets import build_tennis_markets
-from APIs.tennis_match_history import prefetch_player_histories
-from APIs.kalshi_football_markets import build_football_markets
-from APIs.kalshi_team_sport_markets import build_team_sport_markets
+from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi_tennis_markets import build_tennis_markets
+from outer_apis.tennis_match_history import prefetch_player_histories
+from outer_apis.kalshi_football_markets import build_football_markets
+from outer_apis.kalshi_team_sport_markets import build_team_sport_markets
 
 # Kalshi series tickers for ATP/WTA singles matches, fetched separately
 # because each match is TWO per-player legs under one event_ticker (see
-# APIs/kalshi_tennis_markets.py) — they need pairing before LimitArb's
+# outer_apis/kalshi_tennis_markets.py) — they need pairing before LimitArb's
 # fair-price/volatility models (which compare player A vs player B) can
 # use them. The generic /markets scan below still picks up each leg as
 # its own single-ticket yes/no market too, which MarketArb also evaluates
@@ -21,7 +21,7 @@ _TENNIS_SERIES = ("KXATPMATCH", "KXWTAMATCH")
 
 # Kalshi series for soccer/football moneyline markets (3-way per event:
 # team A / team B / tie). Reduced to a single-leg binary (favorite's own
-# yes/no) per market — see APIs/kalshi_football_markets.py module
+# yes/no) per market — see outer_apis/kalshi_football_markets.py module
 # docstring for the confirmed design decision. Only feeds LimitArb (needs
 # the real Elo-enriched dict); MarketArb doesn't need this at all, every
 # leg already flows through the generic scan below on its own.
@@ -29,7 +29,7 @@ _FOOTBALL_SERIES = ("KXMLSGAME", "KXUEFAGAME")
 
 # Kalshi series for the 4 two-way team sports (MLB/NBA/NHL/NFL, no draws
 # -- unlike soccer, these pair cross-ticket exactly like tennis, see
-# APIs/kalshi_team_sport_markets.py module docstring). Feeds BOTH
+# outer_apis/kalshi_team_sport_markets.py module docstring). Feeds BOTH
 # LimitArb and MarketArb, same as tennis. KXNBAGAME/KXNHLGAME had zero
 # open markets at verification time (NBA/NHL off-season in July) --
 # built and wired anyway, will activate automatically once those seasons
@@ -52,7 +52,7 @@ class Kairos:
             tennis_legs.extend(kalshi_api.get_markets(series_ticker=series))
         tennis_markets = build_tennis_markets(tennis_legs)
 
-        # Parallel prefetch (thread pool, see APIs/tennis_match_history.py):
+        # Parallel prefetch (thread pool, see outer_apis/tennis_match_history.py):
         # TennisFModel needs Flashscore recent-form/head-to-head data per
         # player, and Flashscore has no bulk endpoint (one proxied request
         # per player). Fetching sequentially inside LimitArb's per-market
@@ -90,7 +90,7 @@ class Kairos:
         # paired tennis and team-sport markets (covers the cross-ticket
         # arb -- see strategies/market_arb.py module docstring). Football
         # is NOT added here: its favorite-only markets aren't a genuine
-        # cross-ticket pair (see APIs/kalshi_football_markets.py).
+        # cross-ticket pair (see outer_apis/kalshi_football_markets.py).
         market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets)
         market_arb.evaluate_risk_and_return_opportunities()
         market_arb.execute_order_placement()

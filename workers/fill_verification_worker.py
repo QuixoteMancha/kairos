@@ -6,7 +6,7 @@ table this writes).
 
 HARD RED LINE -- READ FIRST: Kairos has NO real order execution anywhere.
 This worker only reads PUBLIC Kalshi data (real executed trades via
-`APIs/kalshi.py:get_trades`) and writes a retrospective ANALYSIS row --
+`outer_apis/kalshi.py:get_trades`) and writes a retrospective ANALYSIS row --
 it never places, modifies, or cancels anything.
 
 WHAT IT DOES, EACH CYCLE
@@ -53,7 +53,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from APIs.kalshi import KalshiAPI
+from outer_apis.kalshi import KalshiAPI
 from database.accounting.writer import get_unverified_resolved_signals, record_fill_verification
 from database.accounting.papertrade import PaperTrade
 from database.db import db, init_db

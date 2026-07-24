@@ -13,7 +13,7 @@ For each logged LimitArbSignal that hasn't been observed yet
 (`outcome_observed_at IS NULL`) and falls inside the observation window
 below, re-fetch that SAME market from Kalshi (`market_id` stored on the
 signal IS the ticker Kalshi's `get_market` needs directly --
-APIs/kalshi.py's `_normalize_market` sets `"id": raw.get("ticker")`, so
+outer_apis/kalshi.py's `_normalize_market` sets `"id": raw.get("ticker")`, so
 no translation step is needed) and record what actually happened:
 
   - `observed_price_move`: |current fav price - fav_price_at_signal|,
@@ -83,7 +83,7 @@ import time
 
 import requests
 
-from APIs.kalshi import KalshiAPI
+from outer_apis.kalshi import KalshiAPI
 from database.accounting.writer import get_unobserved_signals, record_outcome
 
 MIN_AGE_SECONDS = 2 * 3600        # 2 hours
@@ -183,7 +183,7 @@ def _observe_one(api: KalshiAPI, signal: dict) -> tuple[float | None, str]:
             market = api.get_market(signal['market_id'])
         except requests.exceptions.HTTPError as e:
             # Kalshi returns 404 for a ticker that no longer exists (settled
-            # and purged, or malformed) -- APIs/kalshi.py's get_market()
+            # and purged, or malformed) -- outer_apis/kalshi.py's get_market()
             # doesn't itself translate that into None (it only returns None
             # when the response body has no "market" key), so a 404 raises
             # here. That's still a real, honest outcome for this worker's

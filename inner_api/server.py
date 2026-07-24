@@ -25,10 +25,10 @@ excepción) de un fallo real. Todas las rutas devuelven JSON en cualquier
 código de estado, nunca el traceback HTML por defecto de Flask.
 
 Uso local (contra la DB de dev, desde la raíz del repo):
-    python3 -m api.server
+    python3 -m inner_api.server
 
 Uso en producción (contenedor kairos_api, ver docker-compose.yml):
-    python -m api.server
+    python -m inner_api.server
 """
 
 import os
