@@ -33,16 +33,37 @@ calculation hits an already-warm cache instead of blocking on a live
 proxy fetch one player at a time. `engine.py` calls `prefetch_player_histories`
 once per scan with every tennis market's player names, before building
 `LimitArb`.
+
+CACHING (rediseñado 2026-07-28, ver memoria
+kairos-tennis-brightdata-db-cache-2026-07-28): antes había un dict en
+memoria (`_recent_matches_cache`) ADEMÁS de la persistencia en DB
+(`save_match_history`). Ese cache en memoria era el ÚNICO gate contra un
+fetch en vivo -- vivía solo en RAM del proceso, así que cualquier
+reinicio del contenedor `kairos` lo vaciaba por completo y disparaba un
+refetch masivo vía BrightData de TODOS los jugadores activos de una sola
+vez (causa raíz real de un pico de tráfico de proxy investigado el mismo
+día). La DB ya se escribía en cada fetch fresco pero nunca se leía de
+vuelta -- pura contabilidad sin uso funcional.
+
+Fix: se elimina el dict en memoria. Ahora CADA llamada consulta
+`database.historical.tennis.writer.get_recent_match_history()` primero
+(SQLite en WAL + índice por `player_name`, del orden de milisegundos,
+nada comparable a los ~5s de un fetch real vía proxy) -- si hay datos
+con menos de 1h de antigüedad, se usan directo, sin red. Solo si la DB
+no tiene nada fresco se hace el fetch en vivo (y ese resultado se
+persiste, cerrando el círculo). La DB es ahora la única fuente de verdad,
+sobrevive a cualquier reinicio.
 """
 
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from outer_apis.scrapers.tennis import flashscore_scraper
-from database.historical.tennis.writer import save_match_history, save_head_to_head_snapshot
+from database.historical.tennis.writer import (
+    save_match_history, save_head_to_head_snapshot, get_recent_match_history,
+)
 
-_CACHE_TTL_S = 3600  # 1h
+_DB_FRESHNESS_HOURS = 1.0
 # Single canonical fetch depth per player: get_recent_form/get_head_to_head
 # both slice from this ONE cached list instead of each doing their own
 # separately-cached fetch at a different depth (that used to double the
@@ -50,7 +71,6 @@ _CACHE_TTL_S = 3600  # 1h
 # n=40 for h2h -- for no benefit, since a deeper fetch trivially covers a
 # shallower request).
 _MAX_DEPTH = 40
-_recent_matches_cache: dict[str, tuple[float, list[dict]]] = {}
 
 MIN_MATCHES_FOR_FORM = 3  # fail-closed: fewer than this -> no form signal, not a fabricated one.
 # Tuned empirically 2026-07-20: throughput roughly doubled from 8->16
@@ -62,21 +82,18 @@ DEFAULT_PREFETCH_WORKERS = 16
 
 
 def _fetch_and_cache(player_name: str) -> list[dict]:
-    cache_key = player_name.lower().strip()
-    cached = _recent_matches_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
-        return cached[1]
+    db_matches = get_recent_match_history(player_name, max_age_hours=_DB_FRESHNESS_HOURS, limit=_MAX_DEPTH)
+    if db_matches is not None:
+        return db_matches
 
     try:
         matches = flashscore_scraper.get_player_recent_matches(player_name, n=_MAX_DEPTH)
     except Exception:
         matches = []
 
-    _recent_matches_cache[cache_key] = (time.monotonic(), matches)
-
-    # Persiste al historial SOLO en fetch fresco (nunca en cache hit, ver
-    # arriba). Dedupe real vs. redundante lo hace save_match_history
-    # (un partido no cambia, no tiene sentido duplicarlo cada refresh).
+    # Persiste al historial SOLO en fetch fresco. Dedupe real vs.
+    # redundante lo hace save_match_history (un partido no cambia, no
+    # tiene sentido duplicarlo cada refresh).
     if matches:
         save_match_history(player_name, matches)
 

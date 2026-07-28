@@ -126,6 +126,70 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
         pass
 
 
+def get_recent_match_history(player_name: str, max_age_hours: float = 1.0, limit: int = 40) -> list[dict[str, Any]] | None:
+    """Lee el historial de partidos ya persistido para `player_name` si
+    está lo bastante fresco -- None si no hay filas, o si la fila más
+    reciente (`fetched_at`) tiene más de `max_age_hours` (fuerza un fetch
+    en vivo en ese caso).
+
+    Reemplaza el cache en memoria que existía en
+    outer_apis/tennis_match_history.py (`_recent_matches_cache`): ese
+    diccionario vivía solo en RAM del proceso y se vaciaba por completo en
+    cada reinicio del contenedor, disparando un refetch masivo vía
+    BrightData de TODOS los jugadores activos de una sola vez -- causa
+    real investigada tras un pico de tráfico de proxy (ver memoria
+    kairos-tennis-brightdata-db-cache-2026-07-28). La DB es la única
+    fuente de verdad ahora: sobrevive a cualquier reinicio, y en SQLite
+    con WAL + índice por `player_name` esta consulta es de milisegundos
+    (nada comparable a los ~5s de un fetch real vía proxy), así que no
+    hace falta una capa de memoria intermedia.
+
+    Devuelve la MISMA forma que
+    outer_apis.scrapers.tennis.flashscore_scraper.get_player_recent_matches
+    ({"fecha", "oponente", "resultado", "score", "source"}, más reciente
+    primero), para que el caller no tenga que distinguir si el dato vino
+    de la DB o de un fetch en vivo.
+
+    Fail-closed: cualquier error de DB devuelve None (fuerza fetch en vivo,
+    nunca sirve una lista vacía fabricada como si fuera "sin historial")."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisMatchHistory
+            .select(TennisMatchHistory.fetched_at)
+            .where(TennisMatchHistory.player_name == player_name)
+            .order_by(TennisMatchHistory.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+
+        age_hours = (_now() - latest.fetched_at).total_seconds() / 3600.0
+        if age_hours > max_age_hours:
+            return None
+
+        rows = (
+            TennisMatchHistory
+            .select()
+            .where(TennisMatchHistory.player_name == player_name)
+            .order_by(TennisMatchHistory.match_date.desc(), TennisMatchHistory.id.desc())
+            .limit(limit)
+        )
+        return [
+            {
+                "fecha": r.match_date,
+                "oponente": r.opponent_name,
+                "resultado": r.result,
+                "score": r.score,
+                "source": r.source,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return None
+
+
 def save_head_to_head_snapshot(player_a: str, player_b: str, h2h: dict[str, Any]) -> None:
     """One new row per fresh h2h computation -- a snapshot (like
     calibration), since the underlying record can genuinely change as new
