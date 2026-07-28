@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from inner_api.server import app
+from inner_api.server import app, _derive_net_pnl_usd
 from outer_apis.kalshi.portfolio import KalshiAuthError, KalshiCredentialsError
 
 
@@ -160,6 +160,8 @@ def test_portfolio_kalshi_by_event_attaches_settlement_for_closed_positions(clie
     assert closed["settlement"]["market_result"] == "yes"
     assert closed["settlement"]["revenue"] == 4000
     assert len(closed["fills"]) == 1
+    # revenue $40.00 - costo yes $20 - costo no $0 - fee $0.80 = $19.20
+    assert closed["net_pnl_usd"] == pytest.approx(19.20)
 
 
 def test_portfolio_kalshi_by_event_includes_settlement_without_fills_in_range(client):
@@ -184,6 +186,30 @@ def test_portfolio_kalshi_by_event_includes_settlement_without_fills_in_range(cl
     assert data[0]["ticker"] == "KXMLBGAME-OLDCLOSED"
     assert data[0]["settlement"]["market_result"] == "no"
     assert data[0]["fills"] == []
+
+
+def test_derive_net_pnl_usd_from_settlement():
+    settlement = {
+        "revenue": 4000, "yes_total_cost_dollars": "20.000000",
+        "no_total_cost_dollars": "0.000000", "fee_cost": "0.800000",
+    }
+    assert _derive_net_pnl_usd(None, settlement) == pytest.approx(19.20)
+
+
+def test_derive_net_pnl_usd_from_open_position_uses_realized_pnl_dollars():
+    position = {"realized_pnl_dollars": "0.000000"}
+    assert _derive_net_pnl_usd(position, None) == pytest.approx(0.0)
+
+
+def test_derive_net_pnl_usd_none_when_neither_available():
+    assert _derive_net_pnl_usd(None, None) is None
+
+
+def test_derive_net_pnl_usd_fail_closed_on_malformed_settlement():
+    """Un settlement con un campo corrupto/inesperado no debe reventar
+    todo el endpoint por un solo registro raro -- None, no una excepción
+    ni un número fabricado."""
+    assert _derive_net_pnl_usd(None, {"revenue": "not-a-number"}) is None
 
 
 def test_portfolio_kalshi_by_event_missing_credentials_returns_400(client):

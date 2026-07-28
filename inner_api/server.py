@@ -317,6 +317,38 @@ def portfolio_kalshi():
         return jsonify({'error': str(e)}), 500
 
 
+def _derive_net_pnl_usd(position: dict | None, settlement: dict | None) -> float | None:
+    """PnL neto en USD para un evento, derivado TRANSPARENTEMENTE de los
+    campos crudos que ya expone Kalshi (nunca reconstruido desde fills
+    individuales, para no repetir el bug de infra-reporte de ROI de
+    scanning.py/same_market_arb.py -- auditoría 2026-07-04):
+
+      - Si liquidó (`settlement` presente): revenue/100 - costo yes -
+        costo no - fees. `revenue` viene en centavos (100¢ = $1 por
+        contrato ganador), de ahí el /100.
+      - Si todavía está en pie (`settlement` ausente, `position`
+        presente): `realized_pnl_dollars` tal cual (0.0 mientras no
+        liquide, ver docstring de la ruta).
+      - Si no hay ninguno de los dos (mercado purgado de ambas listas):
+        None -- fail-closed, nunca se fabrica un número.
+
+    Cualquier campo con formato inesperado (ValueError/TypeError/KeyError)
+    también devuelve None en vez de reventar todo el endpoint por un solo
+    registro raro."""
+    try:
+        if settlement is not None:
+            revenue_usd = float(settlement.get('revenue', 0)) / 100.0
+            yes_cost = float(settlement.get('yes_total_cost_dollars', 0) or 0)
+            no_cost = float(settlement.get('no_total_cost_dollars', 0) or 0)
+            fee = float(settlement.get('fee_cost', 0) or 0)
+            return revenue_usd - yes_cost - no_cost - fee
+        if position is not None:
+            return float(position.get('realized_pnl_dollars', 0) or 0)
+        return None
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 @app.route('/api/portfolio/kalshi/by-event')
 def portfolio_kalshi_by_event():
     """Operaciones REALES de Kalshi agrupadas por ticker de mercado
@@ -339,7 +371,14 @@ def portfolio_kalshi_by_event():
     Un evento puede tener ambos en None si Kalshi ya lo purgó de las dos
     listas (mercado muy viejo) -- fail-closed, nunca se fabrica un
     resultado, se deja `null` explícito en vez de inventar 'ganado' o
-    'perdido'."""
+    'perdido'.
+
+    `net_pnl_usd` (agregado 2026-07-28): campo calculado de conveniencia
+    para no obligar al cliente (Kairos_Desktop) a hacer la cuenta de
+    revenue/costos/fees él mismo -- ver `_derive_net_pnl_usd`. Se agrega
+    ADEMÁS de (no en reemplazo de) `position`/`settlement`/`fills` crudos:
+    el detalle de cada apuesta hecha en el evento (`fills`) se mantiene
+    intacto para poder auditar de dónde sale ese número."""
     try:
         min_ts = request.args.get('min_ts', type=int)
         max_ts = request.args.get('max_ts', type=int)
@@ -352,30 +391,31 @@ def portfolio_kalshi_by_event():
         position_by_ticker = {p['ticker']: p for p in positions.get('market_positions') or []}
         settlement_by_ticker = {s['ticker']: s for s in settlements if s.get('ticker')}
 
+        def _new_bucket(ticker: str) -> dict:
+            position = position_by_ticker.get(ticker)
+            settlement = settlement_by_ticker.get(ticker)
+            return {
+                'ticker': ticker,
+                'position': position,
+                'settlement': settlement,
+                'net_pnl_usd': _derive_net_pnl_usd(position, settlement),
+                'fills': [],
+            }
+
         by_ticker: dict[str, dict] = {}
         for f in fills:
             ticker = f.get('ticker') or f.get('market_ticker')
             if not ticker:
                 continue
-            bucket = by_ticker.setdefault(ticker, {
-                'ticker': ticker,
-                'position': position_by_ticker.get(ticker),
-                'settlement': settlement_by_ticker.get(ticker),
-                'fills': [],
-            })
+            bucket = by_ticker.setdefault(ticker, _new_bucket(ticker))
             bucket['fills'].append(f)
 
         # Eventos ya liquidados pero sin fills en el rango pedido (ej. si
         # se filtró por min_ts/max_ts angosto) igual se incluyen, para que
         # el settlement con su resultado no quede huérfano.
-        for ticker, settlement in settlement_by_ticker.items():
+        for ticker in settlement_by_ticker:
             if ticker not in by_ticker:
-                by_ticker[ticker] = {
-                    'ticker': ticker,
-                    'position': position_by_ticker.get(ticker),
-                    'settlement': settlement,
-                    'fills': [],
-                }
+                by_ticker[ticker] = _new_bucket(ticker)
 
         out = list(by_ticker.values())
         return jsonify(out), 200
