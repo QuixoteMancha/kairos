@@ -22,7 +22,7 @@ strategy.
 
 from outer_apis.scrapers.american_football import nflverse_scraper
 from outer_apis.scrapers.american_football.nfl_teams import code_to_name
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
+from database.historical.team_sports.writer import compute_and_persist_elo, get_current_ratings, find_rating_by_prefix
 
 SPORT = "american_football"
 SOURCE = "kairos_elo_engine"
@@ -60,6 +60,8 @@ def get_team_ratings(seasons: tuple[str, ...] = ("2024", "2025")) -> dict[str, f
 
 
 def get_team_rating(team_name: str) -> float | None:
-    """Prefix-matched, see database/team_elo_writer.py::find_team_rating
-    docstring. Fail-closed: None if unknown/ambiguous."""
-    return find_team_rating(SPORT, team_name)
+    """Prefix-matched, routes through `get_team_ratings()` (2026-07-28
+    fix, see find_rating_by_prefix docstring for why -- this lookup runs
+    on every scan but used to never trigger a refresh). Fail-closed: None
+    if unknown/ambiguous."""
+    return find_rating_by_prefix(get_team_ratings(), team_name)

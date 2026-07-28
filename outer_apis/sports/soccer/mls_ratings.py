@@ -24,7 +24,7 @@ in practice that's every MLS team today.
 
 from outer_apis.scrapers.football import mls_scraper
 from outer_apis.scrapers.football.mls_teams import canonical_name
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
+from database.historical.team_sports.writer import compute_and_persist_elo, get_current_ratings, find_rating_by_prefix
 
 SPORT = "football"  # SAME bucket as ClubElo -- see module docstring, no name collisions
 SOURCE = "mls_elo"
@@ -67,6 +67,10 @@ def get_team_ratings(days_back: int = 365) -> dict[str, float]:
 
 def get_team_rating(team_name: str) -> float | None:
     """Prefix-matched against the SAME `sport="football"` bucket ClubElo
-    uses (see module docstring) -- fail-closed: None if unknown/ambiguous,
-    same contract as every other *_ratings.py in this project."""
-    return find_team_rating(SPORT, team_name)
+    uses (see module docstring). Routes through `get_team_ratings()`
+    (2026-07-28 fix, see find_rating_by_prefix docstring): MLS happened
+    to stay fresh anyway via `workers/mls_worker.py`'s 6h refresh, but
+    this lookup itself never triggered a refresh -- fixed for defense in
+    depth in case that worker's cadence ever drifts or stops. Fail-closed:
+    None if unknown/ambiguous."""
+    return find_rating_by_prefix(get_team_ratings(), team_name)

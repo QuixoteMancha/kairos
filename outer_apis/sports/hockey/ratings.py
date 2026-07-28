@@ -5,7 +5,7 @@ See `outer_apis/elo_engine.py` for why this is self-computed.
 """
 
 from outer_apis.scrapers.hockey import nhl_stats_scraper
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
+from database.historical.team_sports.writer import compute_and_persist_elo, get_current_ratings, find_rating_by_prefix
 
 SPORT = "hockey"
 SOURCE = "kairos_elo_engine"
@@ -40,7 +40,8 @@ def get_team_ratings(weeks_back: int = 10) -> dict[str, float]:
 
 
 def get_team_rating(team_name: str) -> float | None:
-    """Prefix-matched, see basketball_ratings.py::get_team_rating and
-    database/team_elo_writer.py::find_team_rating docstrings. Fail-closed:
-    None if unknown/ambiguous."""
-    return find_team_rating(SPORT, team_name)
+    """Prefix-matched, routes through `get_team_ratings()` (2026-07-28
+    fix, see find_rating_by_prefix docstring for why -- this lookup runs
+    on every scan but used to never trigger a refresh). Fail-closed: None
+    if unknown/ambiguous."""
+    return find_rating_by_prefix(get_team_ratings(), team_name)

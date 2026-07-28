@@ -8,7 +8,7 @@ pre-computed NBA Elo source exists, unlike tennis/football).
 from typing import Any
 
 from outer_apis.scrapers.basketball import nba_stats_scraper
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
+from database.historical.team_sports.writer import compute_and_persist_elo, get_current_ratings, find_rating_by_prefix
 
 SPORT = "basketball"
 SOURCE = "kairos_elo_engine"
@@ -36,11 +36,14 @@ def get_team_ratings(season: str = "2024-25") -> dict[str, float]:
 
 
 def get_team_rating(team_name: str) -> float | None:
-    """Current stored rating for a team, matched by prefix (Kalshi's
-    market data gives short names like "Milwaukee" vs the full stored
-    "Milwaukee Bucks", see database/team_elo_writer.py::find_team_rating
-    docstring) -- fail-closed: None if unknown/ambiguous."""
-    return find_team_rating(SPORT, team_name)
+    """Current rating for a team, matched by prefix (Kalshi's market data
+    gives short names like "Milwaukee" vs the full stored "Milwaukee
+    Bucks"). Routes through `get_team_ratings()` (2026-07-28 fix, see
+    find_rating_by_prefix docstring: this used to read stale DB rows
+    directly and never triggered a refresh, even though this is the
+    lookup the live scan calls every cycle) -- fail-closed: None if
+    unknown/ambiguous."""
+    return find_rating_by_prefix(get_team_ratings(), team_name)
 
 
 def _pair_games(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

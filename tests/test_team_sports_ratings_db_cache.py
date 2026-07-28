@@ -116,3 +116,58 @@ def test_football_get_team_ratings_skips_live_fetch_when_db_fresh():
 
     mock_fetch.assert_not_called()
     assert result == [{"team_name": "Real Madrid", "country": "", "elo": 2000.0, "level": 1}]
+
+
+def test_baseball_get_team_rating_singular_also_routes_through_refresh_check():
+    """BUG REAL encontrado en producción (verificado 2026-07-28): el
+    lookup singular `get_team_rating()` es el que corre en cada scan real
+    (vía los market builders, ver outer_apis/kalshi/markets/team_sport.py)
+    -- antes de este fix usaba `find_team_rating` (lectura pura de DB,
+    nunca dispara refresh). En prod, esto dejó filas de hasta 162 HORAS
+    sin actualizar porque el código de refresh (`get_team_ratings`)
+    técnicamente existía pero nunca se ejecutaba desde el camino real.
+    Este test verifica el lookup SINGULAR, no el plural -- ese es
+    justamente el que estaba roto."""
+    from outer_apis.sports.baseball import ratings as baseball_ratings
+
+    _insert_rating("baseball", "New York Yankees", 1550.0, "kairos_elo_engine",
+                    datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    with patch("outer_apis.sports.baseball.ratings.mlb_stats_scraper.get_games_in_range") as mock_fetch:
+        rating = baseball_ratings.get_team_rating("New York")  # short name, prefix match
+
+    mock_fetch.assert_not_called()
+    assert rating == 1550.0
+
+
+def test_baseball_get_team_rating_singular_triggers_live_fetch_when_stale():
+    """Contraparte del test anterior: con datos viejos, el lookup
+    singular SÍ debe disparar el fetch en vivo (a través de
+    get_team_ratings), no quedarse leyendo la fila vieja para siempre."""
+    from outer_apis.sports.baseball import ratings as baseball_ratings
+
+    _insert_rating("baseball", "New York Yankees", 1550.0, "kairos_elo_engine",
+                    datetime.now(timezone.utc) - timedelta(hours=8))
+
+    with patch("outer_apis.sports.baseball.ratings.mlb_stats_scraper.get_games_in_range",
+               return_value=[]) as mock_fetch:
+        rating = baseball_ratings.get_team_rating("New York")
+
+    mock_fetch.assert_called_once()
+    assert rating is None  # sin juegos nuevos que devolver, fail-closed
+
+
+def test_mls_get_team_rating_singular_also_routes_through_refresh_check():
+    """Mismo bug, aplicado también a MLS por consistencia (aunque en la
+    práctica se mantenía fresco gracias a workers/mls_worker.py -- fix
+    de defensa en profundidad si ese worker alguna vez deja de correr)."""
+    from outer_apis.sports.soccer import mls_ratings
+
+    _insert_rating("football", "LA Galaxy", 1500.0, "mls_elo",
+                    datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    with patch("outer_apis.sports.soccer.mls_ratings.mls_scraper.get_completed_games") as mock_fetch:
+        rating = mls_ratings.get_team_rating("LA Galaxy")
+
+    mock_fetch.assert_not_called()
+    assert rating == 1500.0

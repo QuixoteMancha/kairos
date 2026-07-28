@@ -135,7 +135,25 @@ def find_team_rating(sport: str, short_name: str) -> float | None:
     in practice (e.g. "Los Angeles R" only prefix-matches "Los Angeles
     Rams", not "Los Angeles Chargers") -- if that assumption ever breaks
     for a specific league, this fails closed instead of picking wrong.
-    """
+
+    NOTA (2026-07-28, ver bug real de abajo en `find_rating_by_prefix`):
+    esta función es una consulta PURA de lo que YA está en TeamRating --
+    nunca dispara un refresh. `outer_apis/sports/{baseball,basketball,
+    hockey,american_football}/ratings.py` y `mls_ratings.py` la usaban
+    directo desde su `get_team_rating()` singular, lo cual significaba
+    que el lookup que corre en cada scan real (vía los market builders)
+    NUNCA pasaba por el chequeo de frescura/refresh de `get_team_ratings()`
+    -- a diferencia de `outer_apis/sports/soccer/ratings.py`, cuyo
+    `get_team_rating()` sí llama a `get_team_ratings()` internamente.
+    Resultado real verificado en producción: ClubElo (fútbol) se
+    mantenía fresco en cada scan, pero baseball/basketball/hockey/NFL
+    tenían filas de hasta 162 HORAS de antigüedad -- ese código de
+    refresh nunca se ejecutaba. Fix: esos 5 módulos ahora llaman a
+    `get_team_ratings()` primero y usan `find_rating_by_prefix` sobre el
+    resultado, igual que fútbol. `find_team_rating` se deja acá como
+    utilidad de más bajo nivel (lectura pura, sin refresh) para quien
+    explícitamente la necesite, pero ya no es el camino usado por esos
+    5 facades."""
     try:
         init_db_historical()
         target = short_name.strip().lower()
@@ -148,6 +166,24 @@ def find_team_rating(sport: str, short_name: str) -> float | None:
         return None
     except Exception:
         return None
+
+
+def find_rating_by_prefix(ratings: dict[str, float], short_name: str) -> float | None:
+    """Mismo matching por prefijo que `find_team_rating`, pero sobre un
+    dict YA EN MEMORIA (el que devuelve `get_team_ratings()` de cada
+    sport, que ya pasó por el chequeo de frescura + refresh si hacía
+    falta) en vez de consultar la DB de nuevo -- así el `get_team_rating()`
+    singular de cada facade dispara el mismo camino de refresh que su
+    `get_team_ratings()` plural, en vez de leer directo lo que haya
+    (posiblemente viejo) en la tabla.
+
+    Fail-closed: requiere EXACTAMENTE UN match (mismo contrato que
+    `find_team_rating`) -- None si es ambiguo o no hay ninguno."""
+    target = short_name.strip().lower()
+    candidates = [name for name in ratings if name.strip().lower().startswith(target)]
+    if len(candidates) == 1:
+        return ratings[candidates[0]]
+    return None
 
 
 def compute_and_persist_elo(
