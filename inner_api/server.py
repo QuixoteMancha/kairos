@@ -317,58 +317,61 @@ def portfolio_kalshi():
         return jsonify({'error': str(e)}), 500
 
 
-def _derive_net_pnl_usd(position: dict | None, settlement: dict | None) -> float | None:
-    """PnL neto en USD para un evento, derivado TRANSPARENTEMENTE de los
-    campos crudos que ya expone Kalshi (nunca reconstruido desde fills
-    individuales, para no repetir el bug de infra-reporte de ROI de
-    scanning.py/same_market_arb.py -- auditoría 2026-07-04).
+def _derive_net_pnl_usd(fills: list[dict], position: dict | None, settlement: dict | None) -> float | None:
+    """PnL neto en USD para un evento, derivado del FLUJO DE CAJA real de
+    sus fills (no de los campos agregados de `settlement` -- ver bug real
+    de abajo).
 
-    BUG REAL encontrado y corregido en la misma sesión que se agregó este
-    campo (verificado contra datos reales de producción, no solo en
-    teoría): la fórmula simple `revenue/100 - yes_cost - no_cost - fee`
-    SOLO es válida cuando se tuvo posición en UN SOLO lado (yes o no) del
-    mercado. Cuando el usuario arbitra el mismo mercado (compra yes Y no
-    simultáneamente -- estrategia same-market arb, `yes_count_fp` ==
-    `no_count_fp` en el settlement), Kalshi NETEA esa posición
-    internamente y la ganancia del arb ya quedó capturada en el flujo de
-    caja de las compras/ventas -- `revenue` da 0 aunque `market_result`
-    tenga un lado ganador, y restar el costo de AMBOS lados sin acreditar
-    nada produce un PnL falso y muy negativo (confirmado en prod: casos de
-    -$500+ en mercados donde el resultado real era ganancia). Para esos
-    casos, fail-closed: no se fabrica un número, se devuelve None -- la
-    reconstrucción correcta requeriría contabilidad FIFO completa sobre
-    los fills individuales, no implementada todavía.
+    HISTORIA (misma sesión): la primera versión usaba únicamente
+    `settlement.revenue/100 - yes_cost - no_cost - fee`. Verificando
+    contra datos reales de producción, esa fórmula daba pérdidas
+    fabricadas de -$500+ en mercados donde el usuario en realidad había
+    arbitrado con ganancia (comprando yes Y no del mismo mercado --
+    estrategia same-market arb). Causa: cuando `yes_count_fp` ==
+    `no_count_fp` en el settlement, Kalshi netea esa posición
+    internamente y `revenue` da 0 aunque haya lado ganador -- la ganancia
+    del arb ya había quedado capturada en el PRECIO de cada compra/venta,
+    no en un payout de settlement adicional. La fórmula agregada no podía
+    distinguir ese caso sin inventar un número (por eso la primera
+    corrección devolvía None ahí, fail-closed pero incompleto).
 
-      - Si liquidó (`settlement` presente) y la posición fue de UN SOLO
-        lado (min(yes_count_fp, no_count_fp) ~= 0): revenue/100 - costo
-        yes - costo no - fees (revenue en centavos, de ahí el /100).
-      - Si liquidó pero fue una posición arbitrada en ambos lados: None
-        (ver bug arriba).
+    FIX: en vez de adivinar a partir de agregados, se suma el flujo de
+    caja real de cada fill individual (que YA se está trayendo para el
+    detalle de la respuesta, no es una llamada extra a Kalshi): cada
+    'buy' resta `precio_del_lado * count_fp`, cada 'sell' suma lo mismo;
+    se restan las fees de cada fill. Esto es correcto SIN importar si hubo
+    arb en ambos lados o no -- no hace falta distinguir el caso, el cash
+    flow ya lo captura todo. Verificado a mano contra un caso real
+    (KXWTAMATCH-...-UDV, arb yes+no simultáneo): cálculo manual y este
+    código coinciden en -$399.41.
+
+      - Si liquidó (`settlement` presente): cash_flow_de_fills - fees +
+        settlement.revenue/100 (lo que se cobró al liquidar por lo que
+        haya quedado sin vender, 0 si ya se cerró todo antes).
       - Si todavía está en pie (`settlement` ausente, `position`
-        presente): `realized_pnl_dollars` tal cual (0.0 mientras no
-        liquide, ver docstring de la ruta).
-      - Si no hay ninguno de los dos (mercado purgado de ambas listas), o
-        si el settlement no trae `yes_count_fp`/`no_count_fp` para poder
-        distinguir el caso arbitrado: None -- fail-closed, nunca se
-        fabrica un número.
+        presente): se usa `realized_pnl_dollars` de Kalshi tal cual (no
+        cash-flow, porque una posición abierta tiene valor no realizado
+        que no está en los fills) -- 0.0 mientras no liquide.
+      - Si no hay ninguno de los dos (mercado purgado de ambas listas):
+        None -- fail-closed, nunca se fabrica un número.
 
-    Cualquier campo con formato inesperado (ValueError/TypeError/KeyError)
-    también devuelve None en vez de reventar todo el endpoint por un solo
-    registro raro."""
+    Cualquier fill/campo con formato inesperado (ValueError/TypeError/
+    KeyError) hace fail-closed toda la cuenta de ese evento (None), no se
+    ignora silenciosamente un fill raro y se sigue con un número parcial
+    engañoso."""
     try:
         if settlement is not None:
-            yes_count = float(settlement.get('yes_count_fp', 'nan'))
-            no_count = float(settlement.get('no_count_fp', 'nan'))
-            if any(x != x for x in (yes_count, no_count)):  # NaN -> no vino el campo, no podemos distinguir
-                return None
-            if min(yes_count, no_count) > 0.01:  # ambos lados con posición real -> arb neteado, ver docstring
-                return None
-
+            cash_flow = 0.0
+            fees = 0.0
+            for f in fills:
+                side = f['side']
+                price = float(f['yes_price_dollars']) if side == 'yes' else float(f['no_price_dollars'])
+                count = float(f['count_fp'])
+                sign = 1.0 if f['action'] == 'sell' else -1.0
+                cash_flow += sign * price * count
+                fees += float(f.get('fee_cost', 0) or 0)
             revenue_usd = float(settlement.get('revenue', 0)) / 100.0
-            yes_cost = float(settlement.get('yes_total_cost_dollars', 0) or 0)
-            no_cost = float(settlement.get('no_total_cost_dollars', 0) or 0)
-            fee = float(settlement.get('fee_cost', 0) or 0)
-            return revenue_usd - yes_cost - no_cost - fee
+            return cash_flow - fees + revenue_usd
         if position is not None:
             return float(position.get('realized_pnl_dollars', 0) or 0)
         return None
@@ -400,12 +403,15 @@ def portfolio_kalshi_by_event():
     resultado, se deja `null` explícito en vez de inventar 'ganado' o
     'perdido'.
 
-    `net_pnl_usd` (agregado 2026-07-28): campo calculado de conveniencia
+    `net_pnl_usd` (agregado 2026-07-28, corregido el mismo día -- ver
+    docstring de `_derive_net_pnl_usd`): campo calculado de conveniencia
     para no obligar al cliente (Kairos_Desktop) a hacer la cuenta de
-    revenue/costos/fees él mismo -- ver `_derive_net_pnl_usd`. Se agrega
-    ADEMÁS de (no en reemplazo de) `position`/`settlement`/`fills` crudos:
-    el detalle de cada apuesta hecha en el evento (`fills`) se mantiene
-    intacto para poder auditar de dónde sale ese número."""
+    cash-flow él mismo. Se agrega ADEMÁS de (no en reemplazo de)
+    `position`/`settlement`/`fills` crudos: el detalle de cada apuesta
+    hecha en el evento (`fills`) se mantiene intacto para poder auditar de
+    dónde sale ese número -- se calcula precisamente A PARTIR de esos
+    fills, así que siempre es reproducible a mano con lo que ya viene en
+    la respuesta."""
     try:
         min_ts = request.args.get('min_ts', type=int)
         max_ts = request.args.get('max_ts', type=int)
@@ -419,13 +425,10 @@ def portfolio_kalshi_by_event():
         settlement_by_ticker = {s['ticker']: s for s in settlements if s.get('ticker')}
 
         def _new_bucket(ticker: str) -> dict:
-            position = position_by_ticker.get(ticker)
-            settlement = settlement_by_ticker.get(ticker)
             return {
                 'ticker': ticker,
-                'position': position,
-                'settlement': settlement,
-                'net_pnl_usd': _derive_net_pnl_usd(position, settlement),
+                'position': position_by_ticker.get(ticker),
+                'settlement': settlement_by_ticker.get(ticker),
                 'fills': [],
             }
 
@@ -443,6 +446,13 @@ def portfolio_kalshi_by_event():
         for ticker in settlement_by_ticker:
             if ticker not in by_ticker:
                 by_ticker[ticker] = _new_bucket(ticker)
+
+        # net_pnl_usd se calcula en un segundo paso, ya con TODOS los
+        # fills de cada ticker acumulados (ver _derive_net_pnl_usd: suma
+        # el cash-flow de fills, necesita la lista completa, no fill por
+        # fill).
+        for bucket in by_ticker.values():
+            bucket['net_pnl_usd'] = _derive_net_pnl_usd(bucket['fills'], bucket['position'], bucket['settlement'])
 
         out = list(by_ticker.values())
         return jsonify(out), 200

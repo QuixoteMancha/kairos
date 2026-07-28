@@ -143,7 +143,8 @@ def test_portfolio_kalshi_by_event_attaches_settlement_for_closed_positions(clie
         }
     ]
     fake_fills = [
-        {"fill_id": "1", "ticker": "KXMLBGAME-CLOSED", "yes_price_dollars": "0.50"},
+        {"fill_id": "1", "ticker": "KXMLBGAME-CLOSED", "side": "yes", "action": "buy",
+         "count_fp": "40.00", "yes_price_dollars": "0.50", "no_price_dollars": "0.50", "fee_cost": "0.000000"},
     ]
 
     with patch("inner_api.server.KalshiPortfolioAPI") as MockClient:
@@ -162,8 +163,8 @@ def test_portfolio_kalshi_by_event_attaches_settlement_for_closed_positions(clie
     assert closed["settlement"]["market_result"] == "yes"
     assert closed["settlement"]["revenue"] == 4000
     assert len(closed["fills"]) == 1
-    # revenue $40.00 - costo yes $20 - costo no $0 - fee $0.80 = $19.20
-    assert closed["net_pnl_usd"] == pytest.approx(19.20)
+    # cash flow del único fill (compra $20 en yes) + revenue $40 al liquidar = $20.00 neto
+    assert closed["net_pnl_usd"] == pytest.approx(20.00)
 
 
 def test_portfolio_kalshi_by_event_includes_settlement_without_fills_in_range(client):
@@ -188,62 +189,69 @@ def test_portfolio_kalshi_by_event_includes_settlement_without_fills_in_range(cl
     assert data[0]["ticker"] == "KXMLBGAME-OLDCLOSED"
     assert data[0]["settlement"]["market_result"] == "no"
     assert data[0]["fills"] == []
+    assert data[0]["net_pnl_usd"] == pytest.approx(0.0)  # sin fills, revenue 0 -> nada que sumar/restar
 
 
-def test_derive_net_pnl_usd_from_settlement_single_sided():
-    settlement = {
-        "revenue": 4000, "yes_total_cost_dollars": "20.000000",
-        "no_total_cost_dollars": "0.000000", "fee_cost": "0.800000",
-        "yes_count_fp": "40.00", "no_count_fp": "0.00",
+def _fill(side, action, count, price, fee="0.000000"):
+    return {
+        "side": side, "action": action, "count_fp": str(count),
+        "yes_price_dollars": price if side == "yes" else "0.00",
+        "no_price_dollars": price if side == "no" else "0.00",
+        "fee_cost": fee,
     }
-    assert _derive_net_pnl_usd(None, settlement) == pytest.approx(19.20)
 
 
-def test_derive_net_pnl_usd_none_for_arbed_same_market_position():
-    """BUG REAL encontrado verificando contra datos de producción: cuando
-    yes_count_fp y no_count_fp son ambos > 0 (arb same-market, se compró
-    yes Y no del mismo mercado), Kalshi netea la posición y `revenue` da 0
-    aunque haya un lado ganador -- restar el costo de ambos lados sin
-    acreditar nada da un PnL falso muy negativo. Debe devolver None, no
-    ese número fabricado."""
-    settlement = {
-        "revenue": 0,
-        "yes_total_cost_dollars": "437.000000",
-        "no_total_cost_dollars": "152.400000",
-        "fee_cost": "6.809700",
-        "yes_count_fp": "610.00",
-        "no_count_fp": "610.00",
-        "market_result": "yes",
-    }
-    assert _derive_net_pnl_usd(None, settlement) is None
+def test_derive_net_pnl_usd_single_sided_buy_then_settle():
+    fills = [_fill("yes", "buy", 40, "0.50")]
+    settlement = {"revenue": 4000}  # $40.00 al liquidar
+    # -$20 de compra + $40 de revenue = $20 neto
+    assert _derive_net_pnl_usd(fills, None, settlement) == pytest.approx(20.00)
 
 
-def test_derive_net_pnl_usd_none_when_count_fields_missing():
-    """Sin yes_count_fp/no_count_fp no se puede distinguir el caso
-    arbitrado del de un solo lado -- fail-closed, None en vez de asumir."""
-    settlement = {
-        "revenue": 4000, "yes_total_cost_dollars": "20.000000",
-        "no_total_cost_dollars": "0.000000", "fee_cost": "0.800000",
-    }
-    assert _derive_net_pnl_usd(None, settlement) is None
+def test_derive_net_pnl_usd_arbed_same_market_position_now_computable():
+    """BUG REAL encontrado verificando contra datos de producción: la
+    primera versión usaba solo los campos agregados del settlement, que
+    dan revenue=0 para posiciones arbitradas (yes+no del mismo mercado,
+    Kalshi las netea internamente) y producía pérdidas fabricadas de
+    -$500+ en mercados donde en realidad se había ganado. El fix usa
+    cash-flow real de los fills -- ya NO hace falta distinguir el caso
+    arbitrado, el resultado sale correcto igual. Caso real verificado a
+    mano (KXWTAMATCH-...-UDV): -$399.41."""
+    fills = [
+        _fill("no", "sell", 200, "0.02", fee="0.068600"),
+        _fill("yes", "buy", 155.31, "0.95", fee="0.129200"),
+        _fill("yes", "buy", 44.69, "0.95", fee="0.037200"),
+        _fill("no", "sell", 110, "0.04", fee="0.074000"),
+        _fill("yes", "buy", 100, "0.92", fee="0.515200"),
+        _fill("yes", "buy", 10, "0.90", fee="0.063000"),
+        _fill("no", "sell", 111.48, "0.25", fee="0.365800"),
+        _fill("no", "sell", 47.58, "0.25", fee="0.156200"),
+        _fill("no", "sell", 40.94, "0.25", fee="0.134400"),
+        _fill("yes", "buy", 200, "0.53", fee="3.487400"),
+        _fill("yes", "sell", 100, "0.40", fee="1.680000"),
+        _fill("no", "buy", 100, "0.94", fee="0.098700"),
+    ]
+    settlement = {"revenue": 0}  # ya cerrado todo antes de liquidar, ver docstring
+    assert _derive_net_pnl_usd(fills, None, settlement) == pytest.approx(-399.41, abs=0.01)
 
 
 def test_derive_net_pnl_usd_from_open_position_uses_realized_pnl_dollars():
+    """Posición todavía en pie: se usa el número de Kalshi tal cual, no
+    cash-flow (una posición abierta tiene valor no realizado que los
+    fills solos no capturan)."""
     position = {"realized_pnl_dollars": "0.000000"}
-    assert _derive_net_pnl_usd(position, None) == pytest.approx(0.0)
+    assert _derive_net_pnl_usd([], position, None) == pytest.approx(0.0)
 
 
 def test_derive_net_pnl_usd_none_when_neither_available():
-    assert _derive_net_pnl_usd(None, None) is None
+    assert _derive_net_pnl_usd([], None, None) is None
 
 
-def test_derive_net_pnl_usd_fail_closed_on_malformed_settlement():
-    """Un settlement con un campo corrupto/inesperado no debe reventar
-    todo el endpoint por un solo registro raro -- None, no una excepción
-    ni un número fabricado."""
-    assert _derive_net_pnl_usd(None, {
-        "revenue": "not-a-number", "yes_count_fp": "10.00", "no_count_fp": "0.00",
-    }) is None
+def test_derive_net_pnl_usd_fail_closed_on_malformed_fill():
+    """Un fill con un campo corrupto/faltante no debe reventar todo el
+    endpoint ni devolver un número parcial engañoso -- None."""
+    fills = [{"side": "yes", "action": "buy"}]  # sin count_fp/precio
+    assert _derive_net_pnl_usd(fills, None, {"revenue": 100}) is None
 
 
 def test_portfolio_kalshi_by_event_missing_credentials_returns_400(client):
