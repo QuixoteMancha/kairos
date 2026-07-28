@@ -279,3 +279,53 @@ class KalshiPortfolioAPI:
             time.sleep(REQUEST_DELAY_S)
 
         return fills
+
+    def get_portfolio_settlements(
+        self,
+        limit: int = 200,
+        max_pages: int = DEFAULT_MAX_PAGES,
+        ticker: str | None = None,
+        event_ticker: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> list[dict]:
+        """GET /portfolio/settlements, paginado por cursor.
+
+        DISTINTO de get_portfolio_positions(): positions solo lista
+        posiciones actualmente EN PIE (position_fp != 0); una vez que un
+        mercado liquida y la posición queda en 0, Kalshi deja de listarlo
+        ahí. Este endpoint es la fuente correcta para "¿qué resultado tuvo
+        esta operación ya cerrada?" -- cada fila trae, por mercado ya
+        resuelto: `market_result` ('yes'/'no'/'scalar'), costo de las
+        patas yes/no (`yes_total_cost_dollars`/`no_total_cost_dollars`),
+        `revenue` (payout total en centavos, ganador paga 100¢/contrato) y
+        `fee_cost`. PnL neto = revenue/100 - yes_total_cost_dollars -
+        no_total_cost_dollars - fee_cost -- no lo calculamos acá, se deja
+        crudo (igual criterio que market_positions.realized_pnl_dollars:
+        preferir el número que ya expone Kalshi antes que reconstruir
+        contabilidad nosotros mismos)."""
+        settlements: list[dict] = []
+        cursor = None
+        for _ in range(max_pages):
+            params: dict = {"limit": limit}
+            if ticker:
+                params["ticker"] = ticker
+            if event_ticker:
+                params["event_ticker"] = event_ticker
+            if min_ts is not None:
+                params["min_ts"] = min_ts
+            if max_ts is not None:
+                params["max_ts"] = max_ts
+            if cursor:
+                params["cursor"] = cursor
+
+            data = self._get("/portfolio/settlements", params=params)
+            page_settlements = data.get("settlements") or []
+            settlements.extend(page_settlements)
+
+            cursor = data.get("cursor")
+            if not cursor or not page_settlements:
+                break
+            time.sleep(REQUEST_DELAY_S)
+
+        return settlements

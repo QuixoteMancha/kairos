@@ -322,18 +322,24 @@ def portfolio_kalshi_by_event():
     """Operaciones REALES de Kalshi agrupadas por ticker de mercado
     (evento/match), con el resultado de cada una.
 
-    DELIBERADAMENTE no recalcula PnL nosotros mismos: `realized_pnl_dollars`
-    viene tal cual de Kalshi (GET /portfolio/positions, ver
-    KalshiPortfolioAPI.get_portfolio_positions) -- es la fuente de verdad
-    autoritativa de cuánto ganaste/perdiste neto de fees en cada mercado,
-    y confiar en el número que YA calcula el exchange es más seguro que
-    reconstruir la contabilidad de compra/venta yes/no nosotros (evita el
-    tipo de bug de infra-reporte de ROI ya encontrado antes en
-    scanning.py/same_market_arb.py -- ver auditoría 2026-07-04).
+    DELIBERADAMENTE no recalcula PnL nosotros mismos, usa 2 fuentes ya
+    calculadas por Kalshi (evita el tipo de bug de infra-reporte de ROI ya
+    encontrado antes en scanning.py/same_market_arb.py -- auditoría
+    2026-07-04):
+      - `position`: de GET /portfolio/positions -- solo cubre mercados con
+        posición TODAVÍA EN PIE (`position_fp` != 0), con
+        `realized_pnl_dollars` (0.000000 mientras no liquide).
+      - `settlement`: de GET /portfolio/settlements -- cubre mercados YA
+        LIQUIDADOS (Kalshi los saca de `positions` en cuanto la posición
+        queda en 0 tras liquidar). Trae `market_result` ('yes'/'no') y los
+        campos crudos para derivar PnL (`revenue` en centavos,
+        `yes_total_cost_dollars`/`no_total_cost_dollars`, `fee_cost`) --
+        también sin recalcular, se devuelve tal cual.
 
-    Un mercado con `realized_pnl_dollars` positivo es una operación
-    ganada; negativo, perdida; "0.000000" con posición aún abierta
-    (`position_fp` != 0) significa que todavía no se resolvió."""
+    Un evento puede tener ambos en None si Kalshi ya lo purgó de las dos
+    listas (mercado muy viejo) -- fail-closed, nunca se fabrica un
+    resultado, se deja `null` explícito en vez de inventar 'ganado' o
+    'perdido'."""
     try:
         min_ts = request.args.get('min_ts', type=int)
         max_ts = request.args.get('max_ts', type=int)
@@ -341,8 +347,10 @@ def portfolio_kalshi_by_event():
         client = KalshiPortfolioAPI()
         positions = client.get_portfolio_positions()
         fills = client.get_portfolio_fills(min_ts=min_ts, max_ts=max_ts)
+        settlements = client.get_portfolio_settlements(min_ts=min_ts, max_ts=max_ts)
 
-        pnl_by_ticker = {p['ticker']: p for p in positions.get('market_positions') or []}
+        position_by_ticker = {p['ticker']: p for p in positions.get('market_positions') or []}
+        settlement_by_ticker = {s['ticker']: s for s in settlements if s.get('ticker')}
 
         by_ticker: dict[str, dict] = {}
         for f in fills:
@@ -351,10 +359,23 @@ def portfolio_kalshi_by_event():
                 continue
             bucket = by_ticker.setdefault(ticker, {
                 'ticker': ticker,
-                'position': pnl_by_ticker.get(ticker),  # None si Kalshi ya no lo reporta (mercado muy viejo purgado)
+                'position': position_by_ticker.get(ticker),
+                'settlement': settlement_by_ticker.get(ticker),
                 'fills': [],
             })
             bucket['fills'].append(f)
+
+        # Eventos ya liquidados pero sin fills en el rango pedido (ej. si
+        # se filtró por min_ts/max_ts angosto) igual se incluyen, para que
+        # el settlement con su resultado no quede huérfano.
+        for ticker, settlement in settlement_by_ticker.items():
+            if ticker not in by_ticker:
+                by_ticker[ticker] = {
+                    'ticker': ticker,
+                    'position': position_by_ticker.get(ticker),
+                    'settlement': settlement,
+                    'fills': [],
+                }
 
         out = list(by_ticker.values())
         return jsonify(out), 200

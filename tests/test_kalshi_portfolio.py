@@ -226,3 +226,40 @@ def test_fills_passes_ts_range_params(env_with_creds):
     client.get_portfolio_fills(min_ts=1000, max_ts=2000)
     assert captured_params["min_ts"] == 1000
     assert captured_params["max_ts"] == 2000
+
+
+def test_settlements_pagination_and_raw_shape(env_with_creds):
+    """get_portfolio_settlements pagina igual que fills, y no recalcula
+    nada -- devuelve los campos crudos (market_result/revenue/costos/fees)
+    tal cual los manda Kalshi (ver docstring del método: PnL se deriva del
+    lado del caller, no acá)."""
+    pages = [
+        {
+            "settlements": [
+                {"ticker": "A", "market_result": "yes", "revenue": 100,
+                 "yes_total_cost_dollars": "0.500000", "no_total_cost_dollars": "0.000000",
+                 "fee_cost": "0.020000"},
+            ],
+            "cursor": "page2",
+        },
+        {"settlements": [], "cursor": "page3"},  # cursor presente pero vacío -> corta
+    ]
+    calls = {"n": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        page = pages[calls["n"]]
+        calls["n"] += 1
+        return _mock_response(200, page)
+
+    client = KalshiPortfolioAPI()
+    client.initialize()
+    client.session.get = fake_get
+
+    with patch("outer_apis.kalshi.portfolio.time.sleep"):
+        settlements = client.get_portfolio_settlements()
+
+    assert calls["n"] == 2
+    assert len(settlements) == 1
+    assert settlements[0]["ticker"] == "A"
+    assert settlements[0]["market_result"] == "yes"
+    assert settlements[0]["revenue"] == 100

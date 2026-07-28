@@ -106,6 +106,7 @@ def test_portfolio_kalshi_by_event_groups_fills_and_attaches_kalshi_pnl(client):
         instance = MockClient.return_value
         instance.get_portfolio_positions.return_value = fake_positions
         instance.get_portfolio_fills.return_value = fake_fills
+        instance.get_portfolio_settlements.return_value = []
 
         resp = client.get("/api/portfolio/kalshi/by-event")
 
@@ -122,6 +123,67 @@ def test_portfolio_kalshi_by_event_groups_fills_and_attaches_kalshi_pnl(client):
     # Fail-closed: un ticker con fills pero sin position ya reportada por
     # Kalshi (mercado muy viejo purgado) no inventa un PnL, queda None.
     assert by_ticker["KXMLBGAME-NOPOSITION"]["position"] is None
+
+
+def test_portfolio_kalshi_by_event_attaches_settlement_for_closed_positions(client):
+    """Un mercado YA LIQUIDADO desaparece de `positions` (Kalshi solo
+    lista posiciones en pie) -- el resultado real tiene que venir de
+    `settlements`, no quedar en None solo porque `positions` ya no lo
+    tiene."""
+    fake_settlements = [
+        {
+            "ticker": "KXMLBGAME-CLOSED",
+            "market_result": "yes",
+            "revenue": 4000,
+            "yes_total_cost_dollars": "20.000000",
+            "no_total_cost_dollars": "0.000000",
+            "fee_cost": "0.800000",
+        }
+    ]
+    fake_fills = [
+        {"fill_id": "1", "ticker": "KXMLBGAME-CLOSED", "yes_price_dollars": "0.50"},
+    ]
+
+    with patch("inner_api.server.KalshiPortfolioAPI") as MockClient:
+        instance = MockClient.return_value
+        instance.get_portfolio_positions.return_value = {"market_positions": [], "event_positions": []}
+        instance.get_portfolio_fills.return_value = fake_fills
+        instance.get_portfolio_settlements.return_value = fake_settlements
+
+        resp = client.get("/api/portfolio/kalshi/by-event")
+
+    assert resp.status_code == 200
+    by_ticker = {d["ticker"]: d for d in resp.get_json()}
+
+    closed = by_ticker["KXMLBGAME-CLOSED"]
+    assert closed["position"] is None  # ya no está en positions, esperado
+    assert closed["settlement"]["market_result"] == "yes"
+    assert closed["settlement"]["revenue"] == 4000
+    assert len(closed["fills"]) == 1
+
+
+def test_portfolio_kalshi_by_event_includes_settlement_without_fills_in_range(client):
+    """Un evento liquidado sin fills en el rango pedido (ej. filtrado por
+    min_ts/max_ts angosto) no debe quedar huérfano -- su settlement debe
+    aparecer igual."""
+    fake_settlements = [
+        {"ticker": "KXMLBGAME-OLDCLOSED", "market_result": "no", "revenue": 0},
+    ]
+
+    with patch("inner_api.server.KalshiPortfolioAPI") as MockClient:
+        instance = MockClient.return_value
+        instance.get_portfolio_positions.return_value = {"market_positions": [], "event_positions": []}
+        instance.get_portfolio_fills.return_value = []
+        instance.get_portfolio_settlements.return_value = fake_settlements
+
+        resp = client.get("/api/portfolio/kalshi/by-event")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data) == 1
+    assert data[0]["ticker"] == "KXMLBGAME-OLDCLOSED"
+    assert data[0]["settlement"]["market_result"] == "no"
+    assert data[0]["fills"] == []
 
 
 def test_portfolio_kalshi_by_event_missing_credentials_returns_400(client):
