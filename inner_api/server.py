@@ -128,6 +128,7 @@ def list_operations():
     try:
         status = request.args.get('status')
         case = request.args.get('case')
+        market_id = request.args.get('market_id')  # filtra por evento/match (ver docstring de módulo)
         try:
             limit = int(request.args.get('limit', DEFAULT_LIMIT))
         except ValueError:
@@ -146,6 +147,8 @@ def list_operations():
                 query = query.where(LimitArbSignal.monitoring_status == status)
             if case:
                 query = query.where(LimitArbSignal.case == case)
+            if market_id:
+                query = query.where(LimitArbSignal.market_id == market_id)
             query = query.order_by(LimitArbSignal.created_at.desc()).limit(limit).offset(offset)
             signals = list(query)
 
@@ -157,6 +160,60 @@ def list_operations():
 
             out = [_operation_to_dict(s, trades_by_signal.get(s.id), verifications_by_signal.get(s.id))
                    for s in signals]
+        return jsonify(out), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/operations/by-event')
+def operations_by_event():
+    """Paper trades (estrategia LimitArb) agrupados por `market_id` (el
+    ticker del evento/match -- ej. un partido de tenis o un juego de
+    KXMLBGAME) con PnL agregado. Complementa `/api/operations` (que lista
+    operaciones individuales) para responder "¿cómo me fue en este
+    evento/match en particular?" sin tener que agregar del lado del
+    cliente.
+
+    Solo agrega paper trades ya CERRADOS con `realized_pnl_usd` no nulo
+    para wins/losses/total_realized_pnl_usd -- fail-closed: un trade
+    abierto o con PnL aún no computable no se cuenta como ganado ni
+    perdido, se contabiliza aparte en `n_open`."""
+    try:
+        limit_events = max(1, min(int(request.args.get('limit', 100)), MAX_LIMIT))
+
+        init_db()
+        with db.connection_context():
+            signals = list(LimitArbSignal.select().order_by(LimitArbSignal.created_at.desc()))
+            signal_ids = [s.id for s in signals]
+            trades_by_signal = {t.signal_id: t for t in
+                                 PaperTrade.select().where(PaperTrade.signal_id.in_(signal_ids))} if signal_ids else {}
+
+            by_market: dict[str, dict] = {}
+            for s in signals:
+                trade = trades_by_signal.get(s.id)
+                bucket = by_market.setdefault(s.market_id, {
+                    'market_id': s.market_id,
+                    'n_operations': 0,
+                    'n_wins': 0,
+                    'n_losses': 0,
+                    'n_open': 0,
+                    'total_realized_pnl_usd': 0.0,
+                    'operations': [],
+                })
+                bucket['n_operations'] += 1
+                bucket['operations'].append(_operation_to_dict(s, trade, None))
+                if trade is None or trade.status != 'closed' or trade.realized_pnl_usd is None:
+                    bucket['n_open'] += 1
+                elif trade.realized_pnl_usd > 0:
+                    bucket['n_wins'] += 1
+                    bucket['total_realized_pnl_usd'] += trade.realized_pnl_usd
+                else:
+                    bucket['n_losses'] += 1
+                    bucket['total_realized_pnl_usd'] += trade.realized_pnl_usd
+
+        # más eventos primero (por operación más reciente dentro del evento,
+        # ya que `signals` viene ordenado desc y armamos los buckets en ese orden)
+        out = list(by_market.values())[:limit_events]
         return jsonify(out), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -252,6 +309,55 @@ def portfolio_kalshi():
             'positions': positions,
             'fills': fills,
         }), 200
+    except KalshiCredentialsError as e:
+        return jsonify({'error': str(e)}), 400
+    except KalshiAuthError as e:
+        return jsonify({'error': str(e)}), 401
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/kalshi/by-event')
+def portfolio_kalshi_by_event():
+    """Operaciones REALES de Kalshi agrupadas por ticker de mercado
+    (evento/match), con el resultado de cada una.
+
+    DELIBERADAMENTE no recalcula PnL nosotros mismos: `realized_pnl_dollars`
+    viene tal cual de Kalshi (GET /portfolio/positions, ver
+    KalshiPortfolioAPI.get_portfolio_positions) -- es la fuente de verdad
+    autoritativa de cuánto ganaste/perdiste neto de fees en cada mercado,
+    y confiar en el número que YA calcula el exchange es más seguro que
+    reconstruir la contabilidad de compra/venta yes/no nosotros (evita el
+    tipo de bug de infra-reporte de ROI ya encontrado antes en
+    scanning.py/same_market_arb.py -- ver auditoría 2026-07-04).
+
+    Un mercado con `realized_pnl_dollars` positivo es una operación
+    ganada; negativo, perdida; "0.000000" con posición aún abierta
+    (`position_fp` != 0) significa que todavía no se resolvió."""
+    try:
+        min_ts = request.args.get('min_ts', type=int)
+        max_ts = request.args.get('max_ts', type=int)
+
+        client = KalshiPortfolioAPI()
+        positions = client.get_portfolio_positions()
+        fills = client.get_portfolio_fills(min_ts=min_ts, max_ts=max_ts)
+
+        pnl_by_ticker = {p['ticker']: p for p in positions.get('market_positions') or []}
+
+        by_ticker: dict[str, dict] = {}
+        for f in fills:
+            ticker = f.get('ticker') or f.get('market_ticker')
+            if not ticker:
+                continue
+            bucket = by_ticker.setdefault(ticker, {
+                'ticker': ticker,
+                'position': pnl_by_ticker.get(ticker),  # None si Kalshi ya no lo reporta (mercado muy viejo purgado)
+                'fills': [],
+            })
+            bucket['fills'].append(f)
+
+        out = list(by_ticker.values())
+        return jsonify(out), 200
     except KalshiCredentialsError as e:
         return jsonify({'error': str(e)}), 400
     except KalshiAuthError as e:

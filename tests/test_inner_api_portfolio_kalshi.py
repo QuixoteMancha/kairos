@@ -83,3 +83,50 @@ def test_portfolio_kalshi_unexpected_error_returns_500(client):
 
     assert resp.status_code == 500
     assert "error" in resp.get_json()
+
+
+def test_portfolio_kalshi_by_event_groups_fills_and_attaches_kalshi_pnl(client):
+    """El PnL de cada evento viene TAL CUAL de Kalshi (realized_pnl_dollars
+    en market_positions), no recalculado -- ver docstring de la ruta."""
+    fake_positions = {
+        "market_positions": [
+            {"ticker": "KXMLBGAME-FOO", "realized_pnl_dollars": "12.500000", "position_fp": "0.00"},
+            {"ticker": "KXMLBGAME-BAR", "realized_pnl_dollars": "-3.000000", "position_fp": "0.00"},
+        ],
+        "event_positions": [],
+    }
+    fake_fills = [
+        {"fill_id": "1", "ticker": "KXMLBGAME-FOO", "yes_price_dollars": "0.55"},
+        {"fill_id": "2", "ticker": "KXMLBGAME-FOO", "yes_price_dollars": "0.60"},
+        {"fill_id": "3", "ticker": "KXMLBGAME-BAR", "yes_price_dollars": "0.30"},
+        {"fill_id": "4", "ticker": "KXMLBGAME-NOPOSITION", "yes_price_dollars": "0.40"},
+    ]
+
+    with patch("inner_api.server.KalshiPortfolioAPI") as MockClient:
+        instance = MockClient.return_value
+        instance.get_portfolio_positions.return_value = fake_positions
+        instance.get_portfolio_fills.return_value = fake_fills
+
+        resp = client.get("/api/portfolio/kalshi/by-event")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    by_ticker = {d["ticker"]: d for d in data}
+
+    assert len(by_ticker["KXMLBGAME-FOO"]["fills"]) == 2
+    assert by_ticker["KXMLBGAME-FOO"]["position"]["realized_pnl_dollars"] == "12.500000"
+
+    assert len(by_ticker["KXMLBGAME-BAR"]["fills"]) == 1
+    assert by_ticker["KXMLBGAME-BAR"]["position"]["realized_pnl_dollars"] == "-3.000000"
+
+    # Fail-closed: un ticker con fills pero sin position ya reportada por
+    # Kalshi (mercado muy viejo purgado) no inventa un PnL, queda None.
+    assert by_ticker["KXMLBGAME-NOPOSITION"]["position"] is None
+
+
+def test_portfolio_kalshi_by_event_missing_credentials_returns_400(client):
+    with patch("inner_api.server.KalshiPortfolioAPI") as MockClient:
+        MockClient.return_value.get_portfolio_positions.side_effect = KalshiCredentialsError("no creds")
+        resp = client.get("/api/portfolio/kalshi/by-event")
+
+    assert resp.status_code == 400
