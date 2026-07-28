@@ -4,3 +4,4 @@ curl_cffi>=0.14
 peewee>=4.0
 python-dotenv>=1.2
 flask>=3.0
+cryptography>=43.0

@@ -83,7 +83,7 @@ import time
 
 import requests
 
-from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi.client import KalshiAPI
 from database.accounting.writer import get_unobserved_signals, record_outcome
 
 MIN_AGE_SECONDS = 2 * 3600        # 2 hours

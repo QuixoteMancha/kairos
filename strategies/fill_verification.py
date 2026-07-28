@@ -50,7 +50,7 @@ left None/False with a documented reason, never a fabricated value.
 
 from datetime import datetime, timezone
 
-from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi.client import KalshiAPI
 
 # How far back (in pages of up to `limit` trades each) to look for
 # pre-signal trade history when estimating queue_ahead_estimate. Kept

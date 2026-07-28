@@ -32,7 +32,7 @@ strategies/.
 import re
 from typing import Any
 
-from outer_apis import football_ratings, mls_ratings
+from outer_apis.sports.soccer import ratings as football_ratings, mls_ratings
 
 # Kalshi series tickers for team-vs-team soccer moneyline markets
 # (verified live 2026-07-21: KXMLSGAME has real open markets, KXUEFAGAME

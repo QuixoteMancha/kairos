@@ -27,7 +27,7 @@ import time
 import unicodedata
 from typing import Any
 
-from outer_apis import tennis_rankings
+from outer_apis.sports.tennis import rankings as tennis_rankings
 from database.historical.tennis.writer import save_serve_calibration_snapshot
 from outer_apis.scrapers.tennis import match_charting_scraper
 

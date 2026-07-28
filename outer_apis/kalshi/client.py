@@ -11,6 +11,13 @@ Endpoints usados (públicos, no requieren API key):
   GET /trade-api/v2/markets/{ticker}
   GET /trade-api/v2/markets/{ticker}/orderbook
   GET /trade-api/v2/markets/trades
+
+Nota (2026-07-28): para leer el portfolio REAL del usuario (balance,
+posiciones, fills -- el usuario opera Kalshi manualmente, fuera de
+Kairos) se agregó un módulo separado, `outer_apis/kalshi_portfolio.py`,
+que sí requiere auth firmada (RSA-PSS) pero sigue siendo SOLO LECTURA.
+Se mantuvo separado de este archivo a propósito para que este módulo siga
+siendo 100% público/sin auth de un vistazo.
 """
 
 import time
@@ -121,6 +128,63 @@ class KalshiAPI:
             "close_time": raw.get("close_time"),
             "raw": raw,
         }
+
+    def get_markets_by_tickers(self, tickers: list[str], chunk_size: int = 200) -> dict[str, dict]:
+        """Batched lookup: UNA llamada GET /markets?tickers=t1,t2,...,tN
+        (chunkeada cada `chunk_size` para no armar una URL gigante) en vez
+        de N llamadas GET /markets/{ticker} secuenciales.
+
+        Construida para limitarb_monitor_worker.py (ver memoria
+        kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26):
+        con cientos de señales abiertas mapeando a un puñado de tickers
+        únicos (mismo partido referenciado por muchas señales), el patrón
+        anterior de 1 call por señal por leg desperdiciaba la enorme
+        mayoría de las llamadas en el MISMO ticker repetido.
+
+        Usa el mismo endpoint de LISTADO que get_market_any_status() (no
+        GET /markets/{ticker}, que 404ea una vez el mercado se purga tras
+        liquidarse) -- por eso este único método reemplaza tanto el
+        get_market() como el fallback get_market_any_status() de una sola
+        vez: la respuesta ya trae el mercado esté vivo o ya finalizado
+        (con 'result'/'status' en el raw), verificado contra la API real.
+
+        Devuelve {ticker: market_normalizado}. Un ticker ausente del dict
+        de retorno significa que Kalshi genuinamente no tiene ningún
+        registro de él (nunca existió) -- fail-closed, el caller debe
+        tratar la ausencia como 'market_gone', igual que antes.
+
+        Mercados finalizados sin cotización activa (yes_ask/no_ask
+        ausentes) no se descartan silenciosamente como en
+        _normalize_market: se devuelve un dict mínimo con 'raw' intacto
+        (mismo shape de fallback que get_market_any_status), para que el
+        caller pueda leer raw.get('result')."""
+        unique_tickers = list(dict.fromkeys(t for t in tickers if t))
+        result: dict[str, dict] = {}
+        for i in range(0, len(unique_tickers), chunk_size):
+            chunk = unique_tickers[i:i + chunk_size]
+            data = self._get("/markets", params={"tickers": ",".join(chunk)})
+            for raw in data.get("markets") or []:
+                ticker = raw.get("ticker")
+                if not ticker:
+                    continue
+                normalized = self._normalize_market(raw)
+                if normalized is not None:
+                    result[ticker] = normalized
+                else:
+                    # Finalizado/sin cotización activa -- mismo fallback
+                    # mínimo que get_market_any_status.
+                    result[ticker] = {
+                        "id": ticker,
+                        "ticker": ticker,
+                        "type": _infer_category(raw),
+                        "current_a_price": None,
+                        "current_b_price": None,
+                        "close_time": raw.get("close_time"),
+                        "raw": raw,
+                    }
+            if i + chunk_size < len(unique_tickers):
+                time.sleep(REQUEST_DELAY_S)
+        return result
 
     def get_orderbook(self, ticker: str) -> dict:
         """Devuelve el order book crudo de Kalshi (niveles yes/no en centavos).

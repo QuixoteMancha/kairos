@@ -89,7 +89,7 @@ class TennisFModel(_SportFModel):
         if not name_a or not name_b:
             return fair_a  # no names -> can't look up real history, skip.
 
-        from outer_apis.tennis_match_history import get_recent_form
+        from outer_apis.sports.tennis.match_history import get_recent_form
 
         form_a = get_recent_form(name_a, n=RECENT_FORM_LOOKBACK)
         form_b = get_recent_form(name_b, n=RECENT_FORM_LOOKBACK)
@@ -106,7 +106,7 @@ class TennisFModel(_SportFModel):
         if not name_a or not name_b:
             return fair_a
 
-        from outer_apis.tennis_match_history import get_head_to_head
+        from outer_apis.sports.tennis.match_history import get_head_to_head
 
         h2h = get_head_to_head(name_a, name_b, lookback=H2H_LOOKBACK)
         if h2h is None or h2h['n_matches'] < MIN_H2H_MATCHES:

@@ -29,6 +29,20 @@ Uso local (contra la DB de dev, desde la raíz del repo):
 
 Uso en producción (contenedor kairos_api, ver docker-compose.yml):
     python -m inner_api.server
+
+`GET /api/portfolio/kalshi` (agregado 2026-07-28): el usuario opera
+Kalshi MANUALMENTE fuera de Kairos y pidió poder ver su cuenta real desde
+Kairos_Desktop (app GTK separada, otro repo). Esta ruta envuelve
+`outer_apis/kalshi_portfolio.py` (auth firmada RSA-PSS contra
+/portfolio/balance,/positions,/fills de Kalshi) -- es SOLO LECTURA, igual
+que el resto de este servidor, y no agrega ningún camino de escritura de
+órdenes (línea roja del proyecto, ver docstring de ese módulo). El
+cálculo de curva de equity a partir de los fills se deja del lado del
+cliente (Kairos_Desktop): esta ruta devuelve los fills crudos de Kalshi
+(ya traen yes_price_dollars/no_price_dollars, fee_cost, created_time) en
+vez de un PnL acumulado precalculado, para no duplicar lógica de
+contabilidad que Kalshi ya expone y que puede diferir de como Kairos
+calcula PnL para sus propias paper trades.
 """
 
 import os
@@ -46,6 +60,11 @@ from strategies.paper_trading import get_available_equity
 import scripts.paper_trading_stats as paper_trading_stats
 import scripts.limit_fill_report as limit_fill_report
 import scripts.calibration_report as calibration_report
+from outer_apis.kalshi.portfolio import (
+    KalshiAuthError,
+    KalshiCredentialsError,
+    KalshiPortfolioAPI,
+)
 
 app = Flask(__name__)
 
@@ -204,6 +223,39 @@ def stats_fill_report():
 def stats_calibration():
     try:
         return jsonify(calibration_report.compute_report()), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/kalshi')
+def portfolio_kalshi():
+    """Portfolio REAL de Kalshi (SOLO LECTURA, ver docstring de módulo).
+    Query params opcionales: min_ts/max_ts (unix seconds) para acotar el
+    rango de fills traído -- sin esto trae hasta DEFAULT_MAX_PAGES páginas
+    de historial completo, que puede ser lento/costoso en rate-limit.
+
+    Credenciales ausentes -> 400 (error del operador, corregible sin
+    reintentar). 401/403 de Kalshi -> 401 (credenciales cargadas pero
+    inválidas/expiradas). Cualquier otro fallo -> 500, igual que el resto
+    de las rutas de este servidor."""
+    try:
+        min_ts = request.args.get('min_ts', type=int)
+        max_ts = request.args.get('max_ts', type=int)
+
+        client = KalshiPortfolioAPI()
+        balance = client.get_portfolio_balance()
+        positions = client.get_portfolio_positions()
+        fills = client.get_portfolio_fills(min_ts=min_ts, max_ts=max_ts)
+
+        return jsonify({
+            'balance': balance,
+            'positions': positions,
+            'fills': fills,
+        }), 200
+    except KalshiCredentialsError as e:
+        return jsonify({'error': str(e)}), 400
+    except KalshiAuthError as e:
+        return jsonify({'error': str(e)}), 401
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

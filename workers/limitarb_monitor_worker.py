@@ -117,9 +117,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-import requests
-
-from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi.client import KalshiAPI
 from database.accounting.writer import get_open_signals, record_monitoring_check, record_exit_recommendation
 from strategies.paper_trading import close_paper_trade, recalibrate_kelly_factor
 
@@ -211,9 +209,28 @@ def _locked_profit_pct(signal: dict, market: dict) -> float | None:
     return round((current - entry) / entry, 4)
 
 
-def _fetch_leg_price(api: KalshiAPI, ticker: str, side: str, same_ticket: bool) -> float | None:
-    """Fetches the current price for one leg. `same_ticket` distinguishes
-    the two shapes documented in the module docstring / limit_arb.py:
+def _fetch_leg_price(market_cache: dict[str, dict], ticker: str, side: str, same_ticket: bool) -> float | None:
+    """Reads the current price for one leg from `market_cache`, a
+    ticker->market dict PREFETCHED once per cycle via
+    KalshiAPI.get_markets_by_tickers() (batched, see run_once()) instead
+    of one live HTTP call per leg per signal.
+
+    BATCHING (2026-07-26, see memory
+    kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26):
+    with hundreds of open signals sharing a handful of unique tickers
+    (same match referenced by many signals), the old per-signal
+    api.get_market(ticker) pattern fired ~1000 sequential HTTP calls per
+    30s-configured cycle, actually taking ~200s wall clock (verified live
+    in prod logs) -- ~7x slower than the intended cadence, and a
+    meaningful chunk of sustained LAN traffic. get_markets_by_tickers()
+    already covers BOTH the live-quote case and the finalized/settled
+    case in the same batched call (same listing endpoint
+    get_market_any_status() used, see kalshi.py docstring), so this
+    function no longer needs its own two-step live/finalized fallback --
+    that's now handled once, up front, by the prefetch.
+
+    `same_ticket` distinguishes the two shapes documented in the module
+    docstring / limit_arb.py:
       - Cross-ticket (tenis/team sports): `ticker` is that leg's OWN real
         Kalshi ticker (never the synthetic event_ticker). Its own
         `current_a_price` (yes ask) IS the combined-market price for this
@@ -223,28 +240,30 @@ def _fetch_leg_price(api: KalshiAPI, ticker: str, side: str, same_ticket: bool) 
       - Single-ticket: `ticker` == the market itself, side selects
         current_a_price vs current_b_price of that one market as always.
 
-    Fail-closed fallback: if `api.get_market(ticker)` 404s (purged after
-    settling), tries `api.get_market_any_status(ticker)` -- if that
-    returns a real settlement `result` ('yes'/'no'), reconstructs a
-    TERMINAL price (1.0/0.0), NOT a live quote. Returns None only if
-    genuinely nothing is known (never existed, or still unsettled but
-    somehow 404ing on the direct lookup -- documented edge case)."""
-    try:
-        market = api.get_market(ticker)
-    except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            market = None
-        else:
-            raise
+    Fail-closed: a ticker absent from `market_cache` (never existed) or
+    present but with current_a_price None (finalized, no live quote --
+    caller falls back to reading raw.get('result') via
+    _fetch_settlement_result) returns None here, same semantics as
+    before."""
+    market = market_cache.get(ticker)
+    if market is None:
+        return None
+    if same_ticket:
+        return _current_side_price(market, side)
+    return market.get('current_a_price')
 
-    if market is not None:
-        return _current_side_price(market, side) if same_ticket else market.get('current_a_price')
 
-    any_status = api.get_market_any_status(ticker)
-    if any_status is not None:
-        result = (any_status.get('raw') or {}).get('result')
-        if result in ('yes', 'no'):
-            return 1.0 if result == 'yes' else 0.0
+def _fetch_settlement_result(market_cache: dict[str, dict], ticker: str) -> float | None:
+    """Fail-closed terminal price (1.0/0.0) reconstructed from a real
+    Kalshi settlement 'result', read from the same prefetched
+    `market_cache` -- replaces the old api.get_market_any_status() call
+    now that get_markets_by_tickers() already fetched this in the batch."""
+    market = market_cache.get(ticker)
+    if market is None:
+        return None
+    result = (market.get('raw') or {}).get('result')
+    if result in ('yes', 'no'):
+        return 1.0 if result == 'yes' else 0.0
     return None
 
 
@@ -273,19 +292,34 @@ def _close_paper_trade_safe(signal: dict, exit_reason: str, exit_locked_profit_p
         print(f"[limitarb_monitor] paper-trade close failed signal_id={signal.get('id')} error: {e}")
 
 
-def _monitor_one(api: KalshiAPI, signal: dict) -> str:
+def _monitor_one(market_cache: dict[str, dict], signal: dict) -> str:
     """Evaluates the 3 rules for one open signal. Returns a short status
     string for the cycle summary. Never raises for expected conditions.
 
     Added 2026-07-23: for signals that have market_leg_ticker/
     limit_leg_ticker (real per-leg Kalshi tickers, see limitarbsignal.py
-    and strategies/limit_arb.py), each leg is fetched INDEPENDENTLY via
-    api.get_market(ticker) instead of api.get_market(signal['market_id']).
-    This fixes the cross-ticket bug (tenis/team sports): market_id there
-    is a synthetic event_ticker that 404s unconditionally, regardless of
-    whether the match is still live or already settled -- see module
-    docstring. Legacy rows (market_leg_ticker/limit_leg_ticker both None,
-    pre-2026-07-23) fall back to the EXACT old behavior below, unchanged."""
+    and strategies/limit_arb.py), each leg is read INDEPENDENTLY from
+    `market_cache` (a ticker->market dict prefetched once per cycle via
+    KalshiAPI.get_markets_by_tickers() in run_once() -- see BATCHING note
+    2026-07-26 below) instead of a live api.get_market(ticker) call per
+    leg per signal. This fixes the cross-ticket bug (tenis/team sports):
+    market_id there is a synthetic event_ticker that 404s unconditionally
+    on the single-market endpoint, regardless of whether the match is
+    still live or already settled -- see module docstring. Legacy rows
+    (market_leg_ticker/limit_leg_ticker both None, pre-2026-07-23) fall
+    back to the EXACT old behavior below, reading from the same cache.
+
+    BATCHING (2026-07-26, see memory
+    kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26):
+    verified live in prod that hundreds of open signals map to a
+    HANDFUL of unique tickers (same match referenced by many signals --
+    e.g. 500 open signals -> only 24 unique tickers). The old pattern of
+    1-2 live HTTP calls PER SIGNAL wasted the overwhelming majority of
+    calls re-fetching the exact same ticker, and pushed the real cycle
+    time to ~200s against a configured 30s cadence. Prefetching every
+    unique ticker ONCE per cycle (run_once()) and having this function
+    just read from that dict turns ~1000 sequential calls into 1-2
+    batched calls per cycle."""
     limit_side = signal.get('limit_leg_side')
     limit_price = signal.get('limit_leg_price')
     if limit_side is None or limit_price is None:
@@ -299,11 +333,17 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
 
     if market_leg_ticker and limit_leg_ticker:
         same_ticket = (market_leg_ticker == limit_leg_ticker)
-        current_limit_side_price = _fetch_leg_price(api, limit_leg_ticker, limit_side, same_ticket)
-        current_market_leg_price = (
-            _fetch_leg_price(api, market_leg_ticker, market_leg_side, same_ticket)
-            if market_leg_side is not None else None
-        )
+        # NOTE: explicit `is None` checks, not `or` -- a live price of
+        # exactly 0.0 is a valid (falsy) quote, not a signal to fall
+        # back to the settlement-result path.
+        current_limit_side_price = _fetch_leg_price(market_cache, limit_leg_ticker, limit_side, same_ticket)
+        if current_limit_side_price is None:
+            current_limit_side_price = _fetch_settlement_result(market_cache, limit_leg_ticker)
+        current_market_leg_price = None
+        if market_leg_side is not None:
+            current_market_leg_price = _fetch_leg_price(market_cache, market_leg_ticker, market_leg_side, same_ticket)
+            if current_market_leg_price is None:
+                current_market_leg_price = _fetch_settlement_result(market_cache, market_leg_ticker)
 
         if current_limit_side_price is None and current_market_leg_price is None:
             # Neither a live quote nor a real settlement result was
@@ -328,16 +368,10 @@ def _monitor_one(api: KalshiAPI, signal: dict) -> str:
     else:
         # Legacy row (pre-2026-07-23, no per-leg ticker columns) -- exact
         # old behavior: fetch by market_id (works for single-ticket
-        # markets, always 404s for cross-ticket tennis/team-sports).
-        try:
-            market = api.get_market(signal['market_id'])
-        except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code == 404:
-                record_exit_recommendation(signal_id=signal['id'], exit_reason='market_gone',
-                                            exit_locked_profit_pct=None)
-                _close_paper_trade_safe(signal, 'market_gone', None)
-                return 'market_gone'
-            raise
+        # markets, always 404s for cross-ticket tennis/team-sports on the
+        # single-market endpoint -- market_cache was populated via the
+        # listing endpoint instead, which doesn't have that problem).
+        market = market_cache.get(signal['market_id'])
 
         if market is None:
             record_exit_recommendation(signal_id=signal['id'], exit_reason='market_gone',
@@ -423,11 +457,27 @@ def run_once() -> dict:
     api = KalshiAPI()
     open_signals = get_open_signals()
 
+    # BATCHING (2026-07-26): prefetch every unique ticker referenced by
+    # this cycle's open signals in 1-2 batched calls instead of the old
+    # 1-2 live HTTP calls PER SIGNAL PER LEG. Verified live in prod that
+    # 500 open signals map to as few as 24 unique tickers -- the old
+    # pattern was re-fetching the same handful of tickers hundreds of
+    # times per cycle, pushing real cycle time to ~200s against a
+    # configured 30s cadence (see memory
+    # kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26).
+    tickers: list[str] = []
+    for signal in open_signals:
+        tickers.append(signal.get('market_leg_ticker'))
+        tickers.append(signal.get('limit_leg_ticker'))
+        if not signal.get('market_leg_ticker'):
+            tickers.append(signal.get('market_id'))
+    market_cache = api.get_markets_by_tickers([t for t in tickers if t])
+
     counts: dict[str, int] = {}
     errors = 0
     for signal in open_signals:
         try:
-            outcome = _monitor_one(api, signal)
+            outcome = _monitor_one(market_cache, signal)
             counts[outcome] = counts.get(outcome, 0) + 1
         except Exception as e:
             errors += 1

@@ -95,7 +95,7 @@ def _get_calibrated_table(tour: str) -> dict[tuple[int, int], float]:
 
     table = dict(_BUCKET_P_SERVE)  # start from the static placeholder for every bucket
     try:
-        from outer_apis import tennis_serve_stats
+        from outer_apis.sports.tennis import serve_stats as tennis_serve_stats
 
         real = tennis_serve_stats.calibrate_serve_pct_by_bucket(tour)
         for bucket, data in real.items():
@@ -457,7 +457,7 @@ def _set_over(ga: int, gb: int) -> tuple[bool, bool]:
 def simulate_dwell_bands(
     pa_serve: float,
     pb_serve: float,
-    n_matches: int = 200,
+    n_matches: int = 5000,
     best_of: int = 3,
     seed: int | None = None,
 ) -> list[float]:

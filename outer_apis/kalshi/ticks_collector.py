@@ -24,7 +24,7 @@ shared heuristic, which is out of scope for this collector).
 from datetime import datetime, timezone
 from typing import Any
 
-from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi.client import KalshiAPI
 from database.db import init_db_historical
 from database.historical.market_data.kalshimarkettick import KalshiMarketTick
 

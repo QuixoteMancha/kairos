@@ -53,7 +53,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from outer_apis.kalshi import KalshiAPI
+from outer_apis.kalshi.client import KalshiAPI
 from database.accounting.writer import get_unverified_resolved_signals, record_fill_verification
 from database.accounting.papertrade import PaperTrade
 from database.db import db, init_db

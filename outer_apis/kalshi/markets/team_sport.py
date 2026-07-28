@@ -29,10 +29,10 @@ that stays in strategies/.
 from typing import Any
 
 _SERIES_CONFIG = {
-    "KXMLBGAME": {"sport_type": "baseball", "rating_module": "outer_apis.baseball_ratings"},
-    "KXNBAGAME": {"sport_type": "basketball", "rating_module": "outer_apis.basketball_ratings"},
-    "KXNHLGAME": {"sport_type": "hockey", "rating_module": "outer_apis.hockey_ratings"},
-    "KXNFLGAME": {"sport_type": "american_football", "rating_module": "outer_apis.nfl_ratings"},
+    "KXMLBGAME": {"sport_type": "baseball", "rating_module": "outer_apis.sports.baseball.ratings"},
+    "KXNBAGAME": {"sport_type": "basketball", "rating_module": "outer_apis.sports.basketball.ratings"},
+    "KXNHLGAME": {"sport_type": "hockey", "rating_module": "outer_apis.sports.hockey.ratings"},
+    "KXNFLGAME": {"sport_type": "american_football", "rating_module": "outer_apis.sports.american_football.ratings"},
 }
 
 

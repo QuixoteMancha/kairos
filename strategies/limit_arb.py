@@ -54,8 +54,8 @@
 #   posterior "si supera tal techo, rechazar" (que nunca se activaría
 #   correctamente si el número ya viene sin relación con la volatilidad).
 
-from outer_apis.kalshi import KalshiAPI
-from outer_apis.kalshi_fees import order_fee
+from outer_apis.kalshi.client import KalshiAPI
+from outer_apis.kalshi.fees import order_fee
 from models.basemodel import Model
 from database.accounting.writer import log_signal
 from strategies.paper_trading import open_paper_trade

@@ -38,8 +38,8 @@
 # presentes, cross-ticket; si no, ambas patas caen en `market['id']`, el
 # ticker del propio mercado — same-ticket, comportamiento histórico).
 
-from outer_apis.kalshi import KalshiAPI
-from outer_apis.kalshi_fees import order_fee
+from outer_apis.kalshi.client import KalshiAPI
+from outer_apis.kalshi.fees import order_fee
 
 MIN_RETURN_OPPORTUNITY = 0.01
 

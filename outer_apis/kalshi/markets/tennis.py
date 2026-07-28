@@ -33,7 +33,7 @@ import re
 import unicodedata
 from typing import Any
 
-from outer_apis import tennis_rankings
+from outer_apis.sports.tennis import rankings as tennis_rankings
 
 _RANKING_LOOKUP_DEPTH = 500
 _FUZZY_MATCH_CUTOFF = 0.85

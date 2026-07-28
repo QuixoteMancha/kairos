@@ -25,8 +25,8 @@ unset, runs once (useful for cron/manual verification).
 import os
 import time
 
-from outer_apis.crypto_prices import collect_real_prices
-from outer_apis.kalshi_ticks_collector import collect_real_ticks
+from outer_apis.crypto.prices import collect_real_prices
+from outer_apis.kalshi.ticks_collector import collect_real_ticks
 
 
 def run_once() -> dict:

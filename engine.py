@@ -1,10 +1,10 @@
 from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
-from outer_apis.kalshi import KalshiAPI
-from outer_apis.kalshi_tennis_markets import build_tennis_markets
-from outer_apis.tennis_match_history import prefetch_player_histories
-from outer_apis.kalshi_football_markets import build_football_markets
-from outer_apis.kalshi_team_sport_markets import build_team_sport_markets
+from outer_apis.kalshi.client import KalshiAPI
+from outer_apis.kalshi.markets.tennis import build_tennis_markets
+from outer_apis.sports.tennis.match_history import prefetch_player_histories
+from outer_apis.kalshi.markets.football import build_football_markets
+from outer_apis.kalshi.markets.team_sport import build_team_sport_markets
 
 # Kalshi series tickers for ATP/WTA singles matches, fetched separately
 # because each match is TWO per-player legs under one event_ticker (see

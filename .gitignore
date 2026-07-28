@@ -1,5 +1,7 @@
 # Variables de entorno (credenciales reales — NUNCA al repo)
 .env
+*.pem
+kalshi_key.pem
 
 # Python
 __pycache__/

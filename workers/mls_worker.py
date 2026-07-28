@@ -10,7 +10,7 @@ kill the process); otherwise runs once and exits.
 import os
 import time
 
-from outer_apis import mls_ratings
+from outer_apis.sports.soccer import mls_ratings
 
 _REFRESH_INTERVAL_S = os.getenv("MLS_REFRESH_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 21600  # 6h
