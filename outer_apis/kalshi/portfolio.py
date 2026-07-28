@@ -69,6 +69,13 @@ DEFAULT_TIMEOUT_S = 10
 DEFAULT_MAX_PAGES = 20
 REQUEST_DELAY_S = 0.25
 
+# Fallback si KALSHI_API_KEY_ID/KALSHI_PRIVATE_KEY no están en el entorno --
+# rutas dentro del volumen /data ya montado en los contenedores de Kairos
+# (kairos_data_v2), para no depender de recrear el contenedor solo para
+# inyectar estas 2 credenciales (ver _load_credentials).
+DEFAULT_PRIVATE_KEY_PATH = "/data/secrets/kalshi_key.pem"
+DEFAULT_KEY_ID_PATH = "/data/secrets/kalshi_api_key_id.txt"
+
 
 class KalshiCredentialsError(Exception):
     """Faltan KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY o la clave no es válida."""
@@ -98,19 +105,38 @@ class KalshiPortfolioAPI:
         """Carga y cachea key id + private key parseada. Fail-closed:
         levanta KalshiCredentialsError con mensaje explícito en vez de
         dejar que un AttributeError críptico llegue más arriba, o peor,
-        devolver silenciosamente datos vacíos."""
+        devolver silenciosamente datos vacíos.
+
+        Orden de resolución (2026-07-28, ver memoria
+        kairos-kalshi-portfolio-volume-fallback): primero env vars
+        (KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY), y si faltan, fallback a
+        archivos fijos dentro del volumen ya montado en el contenedor
+        (/data/secrets/kalshi_key.pem y kalshi_api_key_id.txt) -- así se
+        evita tener que RECREAR el contenedor (stop+rm+run, riesgoso, ver
+        incidente real del mismo día) solo para inyectar 2 variables:
+        alcanza con `docker exec` para escribir los archivos y un
+        `docker restart` normal para que el proceso los relea al arrancar."""
         if self._key_id and self._private_key is not None:
             return
 
         key_id = os.getenv("KALSHI_API_KEY_ID")
         pk_raw = os.getenv("KALSHI_PRIVATE_KEY")
+
+        if not key_id and os.path.isfile(DEFAULT_KEY_ID_PATH):
+            with open(DEFAULT_KEY_ID_PATH, "r") as f:
+                key_id = f.read().strip()
+
+        if not pk_raw and os.path.isfile(DEFAULT_PRIVATE_KEY_PATH):
+            pk_raw = DEFAULT_PRIVATE_KEY_PATH
+
         if not key_id or not pk_raw:
             raise KalshiCredentialsError(
                 "KALSHI_API_KEY_ID y/o KALSHI_PRIVATE_KEY no están seteadas "
-                "(env / .env). Sin esto no se puede leer el portfolio real "
-                "de Kalshi -- no se devuelven datos vacíos en su lugar, "
-                "cargá las credenciales en .env (ver comentario en la raíz "
-                "del repo) y reintentá."
+                "(env / .env), y tampoco se encontraron los archivos de "
+                f"fallback ({DEFAULT_KEY_ID_PATH} / {DEFAULT_PRIVATE_KEY_PATH}). "
+                "Sin esto no se puede leer el portfolio real de Kalshi -- no "
+                "se devuelven datos vacíos en su lugar, cargá las "
+                "credenciales (env vars o esos archivos) y reintentá."
             )
 
         pk_pem = pk_raw.strip()

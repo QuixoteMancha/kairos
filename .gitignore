@@ -2,6 +2,8 @@
 .env
 *.pem
 kalshi_key.pem
+deploy_kalshi_key_recreate_container.sh
+restore_kairos_engine.sh
 
 # Python
 __pycache__/

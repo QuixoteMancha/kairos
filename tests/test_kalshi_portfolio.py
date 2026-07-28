@@ -72,6 +72,32 @@ def test_invalid_private_key_fails_closed(monkeypatch):
         client.get_portfolio_balance()
 
 
+def test_falls_back_to_volume_files_when_env_vars_absent(monkeypatch, rsa_keypair, tmp_path):
+    """Sin KALSHI_API_KEY_ID/KALSHI_PRIVATE_KEY en el entorno, debe caer a
+    los archivos fijos del volumen (/data/secrets/...) en vez de fallar --
+    este es el mecanismo que evita tener que recrear el contenedor solo
+    para inyectar 2 credenciales (ver docstring de _load_credentials)."""
+    import outer_apis.kalshi.portfolio as portfolio_module
+
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY", raising=False)
+
+    _, pem = rsa_keypair
+    key_id_file = tmp_path / "kalshi_api_key_id.txt"
+    key_id_file.write_text("volume-key-id\n")
+    pem_file = tmp_path / "kalshi_key.pem"
+    pem_file.write_text(pem)
+
+    monkeypatch.setattr(portfolio_module, "DEFAULT_KEY_ID_PATH", str(key_id_file))
+    monkeypatch.setattr(portfolio_module, "DEFAULT_PRIVATE_KEY_PATH", str(pem_file))
+
+    client = KalshiPortfolioAPI()
+    client._load_credentials()
+
+    assert client._key_id == "volume-key-id"
+    assert client._private_key is not None
+
+
 def test_signature_is_valid_rsa_pss(env_with_creds, rsa_keypair, monkeypatch):
     """Verifica que la firma generada realmente verifica contra la public
     key correspondiente, con el mensaje exacto que exige la doc de Kalshi:
