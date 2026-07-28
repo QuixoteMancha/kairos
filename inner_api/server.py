@@ -321,22 +321,49 @@ def _derive_net_pnl_usd(position: dict | None, settlement: dict | None) -> float
     """PnL neto en USD para un evento, derivado TRANSPARENTEMENTE de los
     campos crudos que ya expone Kalshi (nunca reconstruido desde fills
     individuales, para no repetir el bug de infra-reporte de ROI de
-    scanning.py/same_market_arb.py -- auditoría 2026-07-04):
+    scanning.py/same_market_arb.py -- auditoría 2026-07-04).
 
-      - Si liquidó (`settlement` presente): revenue/100 - costo yes -
-        costo no - fees. `revenue` viene en centavos (100¢ = $1 por
-        contrato ganador), de ahí el /100.
+    BUG REAL encontrado y corregido en la misma sesión que se agregó este
+    campo (verificado contra datos reales de producción, no solo en
+    teoría): la fórmula simple `revenue/100 - yes_cost - no_cost - fee`
+    SOLO es válida cuando se tuvo posición en UN SOLO lado (yes o no) del
+    mercado. Cuando el usuario arbitra el mismo mercado (compra yes Y no
+    simultáneamente -- estrategia same-market arb, `yes_count_fp` ==
+    `no_count_fp` en el settlement), Kalshi NETEA esa posición
+    internamente y la ganancia del arb ya quedó capturada en el flujo de
+    caja de las compras/ventas -- `revenue` da 0 aunque `market_result`
+    tenga un lado ganador, y restar el costo de AMBOS lados sin acreditar
+    nada produce un PnL falso y muy negativo (confirmado en prod: casos de
+    -$500+ en mercados donde el resultado real era ganancia). Para esos
+    casos, fail-closed: no se fabrica un número, se devuelve None -- la
+    reconstrucción correcta requeriría contabilidad FIFO completa sobre
+    los fills individuales, no implementada todavía.
+
+      - Si liquidó (`settlement` presente) y la posición fue de UN SOLO
+        lado (min(yes_count_fp, no_count_fp) ~= 0): revenue/100 - costo
+        yes - costo no - fees (revenue en centavos, de ahí el /100).
+      - Si liquidó pero fue una posición arbitrada en ambos lados: None
+        (ver bug arriba).
       - Si todavía está en pie (`settlement` ausente, `position`
         presente): `realized_pnl_dollars` tal cual (0.0 mientras no
         liquide, ver docstring de la ruta).
-      - Si no hay ninguno de los dos (mercado purgado de ambas listas):
-        None -- fail-closed, nunca se fabrica un número.
+      - Si no hay ninguno de los dos (mercado purgado de ambas listas), o
+        si el settlement no trae `yes_count_fp`/`no_count_fp` para poder
+        distinguir el caso arbitrado: None -- fail-closed, nunca se
+        fabrica un número.
 
     Cualquier campo con formato inesperado (ValueError/TypeError/KeyError)
     también devuelve None en vez de reventar todo el endpoint por un solo
     registro raro."""
     try:
         if settlement is not None:
+            yes_count = float(settlement.get('yes_count_fp', 'nan'))
+            no_count = float(settlement.get('no_count_fp', 'nan'))
+            if any(x != x for x in (yes_count, no_count)):  # NaN -> no vino el campo, no podemos distinguir
+                return None
+            if min(yes_count, no_count) > 0.01:  # ambos lados con posición real -> arb neteado, ver docstring
+                return None
+
             revenue_usd = float(settlement.get('revenue', 0)) / 100.0
             yes_cost = float(settlement.get('yes_total_cost_dollars', 0) or 0)
             no_cost = float(settlement.get('no_total_cost_dollars', 0) or 0)
