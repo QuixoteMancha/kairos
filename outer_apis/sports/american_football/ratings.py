@@ -20,26 +20,23 @@ prefix matcher works here too instead of needing a 4th different lookup
 strategy.
 """
 
-import time
-
 from outer_apis.scrapers.american_football import nflverse_scraper
 from outer_apis.scrapers.american_football.nfl_teams import code_to_name
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating
+from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
 
 SPORT = "american_football"
-_CACHE_TTL_S = 3600 * 6
-_ratings_cache: dict[str, tuple[float, dict]] = {}
+SOURCE = "kairos_elo_engine"
+_DB_FRESHNESS_HOURS = 6.0
 
 
 def get_team_ratings(seasons: tuple[str, ...] = ("2024", "2025")) -> dict[str, float]:
-    """Computes (or returns cached) Elo ratings from real regular-season
-    NFL games for the given seasons. Fail-closed: {} if the scraper
-    fails entirely; a game whose team code isn't recognized is skipped
-    (never guesses a team identity)."""
-    cache_key = ",".join(seasons)
-    cached = _ratings_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
-        return cached[1]
+    """Computes (or reads fresh-enough from DB) Elo ratings from real
+    regular-season NFL games for the given seasons. Fail-closed: {} if
+    the scraper fails entirely; a game whose team code isn't recognized
+    is skipped (never guesses a team identity)."""
+    cached = get_current_ratings(SPORT, source=SOURCE, max_age_hours=_DB_FRESHNESS_HOURS)
+    if cached is not None:
+        return cached
 
     try:
         raw_games = nflverse_scraper.get_games(seasons=seasons)
@@ -59,10 +56,7 @@ def get_team_ratings(seasons: tuple[str, ...] = ("2024", "2025")) -> dict[str, f
             "a_won": g["home_won"],
             "source": "nflverse",
         })
-    ratings = compute_and_persist_elo(SPORT, games) if games else {}
-
-    _ratings_cache[cache_key] = (time.monotonic(), ratings)
-    return ratings
+    return compute_and_persist_elo(SPORT, games) if games else {}
 
 
 def get_team_rating(team_name: str) -> float | None:

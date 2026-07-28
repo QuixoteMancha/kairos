@@ -5,28 +5,26 @@ See `outer_apis/elo_engine.py` for why this is self-computed (no free
 pre-computed NBA Elo source exists, unlike tennis/football).
 """
 
-import time
 from typing import Any
 
 from outer_apis.scrapers.basketball import nba_stats_scraper
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating
+from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
 
 SPORT = "basketball"
-_CACHE_TTL_S = 3600 * 6
-_ratings_cache: dict[str, tuple[float, dict]] = {}
+SOURCE = "kairos_elo_engine"
+_DB_FRESHNESS_HOURS = 6.0
 
 
 def get_team_ratings(season: str = "2024-25") -> dict[str, float]:
-    """Computes (or returns cached) Elo ratings for every NBA team that
-    played in `season`, chronologically from real game results.
+    """Computes (or reads fresh-enough from DB) Elo ratings for every NBA
+    team that played in `season`, chronologically from real game results.
 
     Fail-closed: {} if the scraper fails entirely. A single unparseable
     game is skipped (see nba_stats_scraper), never fabricated.
     """
-    cache_key = season
-    cached = _ratings_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
-        return cached[1]
+    cached = get_current_ratings(SPORT, source=SOURCE, max_age_hours=_DB_FRESHNESS_HOURS)
+    if cached is not None:
+        return cached
 
     try:
         raw_rows = nba_stats_scraper.get_season_games(season=season)
@@ -34,10 +32,7 @@ def get_team_ratings(season: str = "2024-25") -> dict[str, float]:
         raw_rows = []
 
     games = _pair_games(raw_rows)
-    ratings = compute_and_persist_elo(SPORT, games) if games else {}
-
-    _ratings_cache[cache_key] = (time.monotonic(), ratings)
-    return ratings
+    return compute_and_persist_elo(SPORT, games) if games else {}
 
 
 def get_team_rating(team_name: str) -> float | None:

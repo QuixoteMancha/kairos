@@ -10,7 +10,7 @@ multi-sport-capable, see kairos-team-sports-tables-and-research-2026-07-21
 memory).
 """
 
-import time
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,10 +19,10 @@ from peewee import EXCLUDED
 from outer_apis.scrapers.football import clubelo_scraper
 from database.db import init_db_historical
 from database.historical.team_sports.teamrating import TeamRating
+from database.historical.team_sports.writer import get_current_ratings_detailed
 
-_CACHE_TTL_S = 3600 * 6  # 6h — Elo ratings update weekly-ish (post-matchday), no need to re-scrape often.
-_ratings_cache: dict[str, tuple[float, list[dict]]] = {}
-
+_DB_FRESHNESS_HOURS = 6.0  # Elo ratings update weekly-ish (post-matchday), no need to re-scrape often.
+SOURCE = "clubelo"
 SPORT = "football"
 
 
@@ -37,17 +37,13 @@ def get_team_ratings(top_n: int | None = None) -> list[dict[str, Any]]:
         List of {"team_name", "country", "elo", "level"} dicts, sorted by
         Elo descending. Fail-closed: [] on any failure.
     """
-    cache_key = "current"
-    cached = _ratings_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
-        result = cached[1]
-    else:
+    result = get_current_ratings_detailed(SPORT, source=SOURCE, max_age_hours=_DB_FRESHNESS_HOURS)
+    if result is None:
         try:
             result = clubelo_scraper.get_current_ratings()
         except Exception:
             result = []
         result.sort(key=lambda t: t["elo"], reverse=True)
-        _ratings_cache[cache_key] = (time.monotonic(), result)
 
         # Persiste al historial SOLO en fetch fresco (no en cache hits).
         if result:
@@ -94,9 +90,12 @@ def _save_ratings_snapshot(teams: list[dict[str, Any]]) -> None:
                 "league": t.get("country") or "",
                 "elo": t["elo"],
                 "n_games": 0,  # not provided by this endpoint (ClubElo's per-club history endpoint has it, this snapshot endpoint doesn't)
-                "source": "clubelo",
+                "source": SOURCE,
                 "updated_at": now.isoformat(),
-                "extra_json": "{}",
+                # level se persiste acá (antes siempre "{}") para que
+                # get_current_ratings_detailed() pueda reconstruirlo sin
+                # perder el campo al leer de vuelta desde la DB.
+                "extra_json": json.dumps({"level": t.get("level")}),
             }
             for t in teams
         ]
@@ -110,6 +109,7 @@ def _save_ratings_snapshot(teams: list[dict[str, Any]]) -> None:
                         TeamRating.league: EXCLUDED.league,
                         TeamRating.elo: EXCLUDED.elo,
                         TeamRating.updated_at: EXCLUDED.updated_at,
+                        TeamRating.extra_json: EXCLUDED.extra_json,
                     },
                 )
                 .execute()

@@ -22,29 +22,25 @@ first (ClubElo, real European coverage) and falls back to
 in practice that's every MLS team today.
 """
 
-import time
-
 from outer_apis.scrapers.football import mls_scraper
 from outer_apis.scrapers.football.mls_teams import canonical_name
-from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating
+from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating, get_current_ratings
 
 SPORT = "football"  # SAME bucket as ClubElo -- see module docstring, no name collisions
 SOURCE = "mls_elo"
-_CACHE_TTL_S = 3600 * 6
-_ratings_cache: dict[str, tuple[float, dict]] = {}
+_DB_FRESHNESS_HOURS = 6.0
 
 
 def get_team_ratings(days_back: int = 365) -> dict[str, float]:
-    """Computes (or returns cached) Elo ratings from real completed MLS
-    games over the last `days_back` days (default ~1 season+, MLS plays
-    Feb-Nov). Fail-closed: {} if the scraper fails entirely; a game
-    whose team name isn't in the static ESPN->canonical mapping is
-    skipped (never guesses a team identity, e.g. a future
+    """Computes (or reads fresh-enough from DB) Elo ratings from real
+    completed MLS games over the last `days_back` days (default ~1
+    season+, MLS plays Feb-Nov). Fail-closed: {} if the scraper fails
+    entirely; a game whose team name isn't in the static ESPN->canonical
+    mapping is skipped (never guesses a team identity, e.g. a future
     expansion/rebrand not yet added to mls_teams.py)."""
-    cache_key = str(days_back)
-    cached = _ratings_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
-        return cached[1]
+    cached = get_current_ratings(SPORT, source=SOURCE, max_age_hours=_DB_FRESHNESS_HOURS)
+    if cached is not None:
+        return cached
 
     try:
         raw_games = mls_scraper.get_completed_games(days_back=days_back)
@@ -66,10 +62,7 @@ def get_team_ratings(days_back: int = 365) -> dict[str, float]:
             "a_won": g["home_score"] > g["away_score"],
             "source": SOURCE,
         })
-    ratings = compute_and_persist_elo(SPORT, games, rating_source=SOURCE) if games else {}
-
-    _ratings_cache[cache_key] = (time.monotonic(), ratings)
-    return ratings
+    return compute_and_persist_elo(SPORT, games, rating_source=SOURCE) if games else {}
 
 
 def get_team_rating(team_name: str) -> float | None:

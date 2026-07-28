@@ -2,12 +2,34 @@
 Shared Elo-computation + persistence logic for basketball/baseball/hockey
 (the 3 sports with NO pre-computed rating source, unlike tennis/football
 — see outer_apis/elo_engine.py docstring). Each sport's facade
-(outer_apis/basketball_ratings.py, outer_apis/baseball_ratings.py,
-outer_apis/hockey_ratings.py) converts its own scraper's raw game shape into a
+(outer_apis/sports/basketball/ratings.py, outer_apis/sports/baseball/ratings.py,
+outer_apis/sports/hockey/ratings.py) converts its own scraper's raw game shape into a
 common `{"date", "team_a", "team_b", "a_won"}` list and calls
 `compute_and_persist_elo` here, instead of tripling this logic 3x.
-"""
 
+DB-BACKED FRESHNESS CHECK (2026-07-28, ver memoria
+kairos-tennis-brightdata-db-cache-2026-07-28 -- mismo patrón aplicado acá
+después de encontrarlo primero en tenis): cada uno de los 5 módulos de
+ratings de deportes en equipo (baseball/basketball/hockey/
+american_football/soccer+mls) tenía su PROPIO dict en memoria
+(`_ratings_cache`, TTL 6h) como único gate contra un fetch en vivo a su
+fuente externa (MLB Stats/NBA Stats/NHL Stats/nflverse/ClubElo/ESPN).
+Igual que en tenis, ese cache vivía solo en RAM del proceso y se vaciaba
+en cada reinicio del contenedor, mientras `TeamRating` (tabla de
+ESTADO ACTUAL, un row por equipo, se actualiza en cada fetch fresco) se
+escribía religiosamente pero nunca se leía de vuelta. Estos scrapers NO
+pasan por BrightData (a diferencia de Flashscore), así que esto no era la
+causa del pico de tráfico de proxy investigado, pero es el mismo
+desperdicio estructural contra las APIs externas de cada deporte.
+
+`get_current_ratings()`/`get_current_ratings_detailed()` reemplazan esos
+5 dicts: consultan `TeamRating` (SQLite WAL + índice único por
+(sport, name_norm), milisegundos) antes de que cada facade decida si
+fetchear en vivo -- None si no hay filas o si la más reciente
+`updated_at` es más vieja que el umbral, forzando el fetch real solo
+entonces."""
+
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +39,85 @@ from outer_apis import elo_engine
 from database.db import init_db_historical
 from database.historical.team_sports.teamrating import TeamRating
 from database.historical.team_sports.teammatchhistory import TeamMatchHistory
+
+
+def _parse_updated_at(value: str) -> datetime:
+    """`TeamRating.updated_at` se guarda como VARCHAR ISO-8601 (sic, no
+    DATETIME -- ver docstring de TeamRating), siempre escrito con
+    `datetime.now(timezone.utc).isoformat()` (ver `_persist_ratings`/
+    `_save_ratings_snapshot`), así que `fromisoformat` ya trae tzinfo=UTC
+    -- pero se normaliza explícito por si alguna fila vieja quedó naive,
+    mismo tipo de gotcha de tzinfo que ya causó bugs reales en este
+    proyecto (ver limitarb_monitor_worker)."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def get_current_ratings(sport: str, source: str | None = None, max_age_hours: float = 6.0) -> dict[str, float] | None:
+    """Lee `{team_name: elo}` desde TeamRating si la fila más reciente
+    (por `updated_at`) tiene menos de `max_age_hours` -- None si no hay
+    filas para (sport[, source]), o si están vencidas (fuerza fetch en
+    vivo en ese caso). `source` filtra cuando el mismo `sport` bucket lo
+    comparten 2 fuentes distintas (ej. "football" = ClubElo + MLS, ver
+    outer_apis/sports/soccer/mls_ratings.py) -- sin esto, MLS leería
+    también los ratings de ClubElo y viceversa.
+
+    Fail-closed: cualquier error de DB o de parseo de fecha devuelve
+    None (fuerza fetch en vivo, nunca sirve datos a medio parsear)."""
+    try:
+        init_db_historical()
+        query = TeamRating.select().where(TeamRating.sport == sport)
+        if source is not None:
+            query = query.where(TeamRating.source == source)
+        rows = list(query)
+        if not rows:
+            return None
+
+        newest = max(_parse_updated_at(r.updated_at) for r in rows)
+        age_hours = (datetime.now(timezone.utc) - newest).total_seconds() / 3600.0
+        if age_hours > max_age_hours:
+            return None
+
+        return {r.name: r.elo for r in rows}
+    except Exception:
+        return None
+
+
+def get_current_ratings_detailed(sport: str, source: str | None = None, max_age_hours: float = 6.0) -> list[dict[str, Any]] | None:
+    """Misma idea que `get_current_ratings` pero devuelve la forma más
+    rica que necesita `outer_apis/sports/soccer/ratings.py`
+    ({"team_name","country","elo","level"}, ordenado por elo desc) en vez
+    de un dict simple -- `level` se reconstruye desde `extra_json` si
+    `_save_ratings_snapshot` lo persistió ahí; None si esa fila es vieja
+    (persistencias previas a este cambio no lo tenían, comportamiento
+    igual de fail-closed: level=None, nunca fabricado)."""
+    try:
+        init_db_historical()
+        query = TeamRating.select().where(TeamRating.sport == sport)
+        if source is not None:
+            query = query.where(TeamRating.source == source)
+        rows = list(query)
+        if not rows:
+            return None
+
+        newest = max(_parse_updated_at(r.updated_at) for r in rows)
+        age_hours = (datetime.now(timezone.utc) - newest).total_seconds() / 3600.0
+        if age_hours > max_age_hours:
+            return None
+
+        result = []
+        for r in rows:
+            try:
+                level = json.loads(r.extra_json).get("level")
+            except Exception:
+                level = None
+            result.append({"team_name": r.name, "country": r.league, "elo": r.elo, "level": level})
+        result.sort(key=lambda t: t["elo"], reverse=True)
+        return result
+    except Exception:
+        return None
 
 
 def find_team_rating(sport: str, short_name: str) -> float | None:
