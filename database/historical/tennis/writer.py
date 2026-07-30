@@ -19,6 +19,7 @@ from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
 from database.historical.tennis.tennisservecalibration import TennisServeCalibration
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
+from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
 
 
 def _now():
@@ -209,3 +210,99 @@ def save_head_to_head_snapshot(player_a: str, player_b: str, h2h: dict[str, Any]
         )
     except Exception:
         pass
+
+
+def save_surface_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
+    """Persiste historial de TennisExplorer (con superficie real por
+    partido, ver outer_apis/scrapers/tennis/tennisexplorer_scraper.py).
+    Dedup por (player_name, opponent_name, match_date, surface) -- mismo
+    criterio que save_match_history, evita duplicar el mismo partido en
+    fetches sucesivos que se solapan en rango de fechas."""
+    if not matches:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        for m in matches:
+            opponent = m.get("opponent")
+            match_date = m.get("match_date")
+            surface = m.get("surface")
+            if not opponent or not match_date or not surface:
+                continue
+            exists = TennisSurfaceMatchHistory.select().where(
+                (TennisSurfaceMatchHistory.player_name == player_name)
+                & (TennisSurfaceMatchHistory.opponent_name == opponent)
+                & (TennisSurfaceMatchHistory.match_date == match_date)
+                & (TennisSurfaceMatchHistory.surface == surface)
+            ).exists()
+            if exists:
+                continue
+            TennisSurfaceMatchHistory.create(
+                player_name=player_name,
+                opponent_name=opponent,
+                match_date=match_date,
+                surface=surface,
+                result=m.get("result"),
+                score=m.get("score"),
+                tournament=m.get("tournament"),
+                source="tennisexplorer",
+                fetched_at=fetched_at,
+            )
+    except Exception:
+        pass
+
+
+def get_recent_surface_match_history(
+    player_name: str, max_age_hours: float = 24.0, lookback_days: int = 183,
+) -> list[dict[str, Any]] | None:
+    """DB-first: partidos reales de `player_name` con superficie, dentro
+    de los últimos `lookback_days` (~6 meses por default, ver
+    outer_apis/sports/tennis/surface_form.py), SOLO si hay al menos una
+    fila fetcheada dentro de `max_age_hours` (evita re-scrapear
+    TennisExplorer en cada llamada del mismo scan, mismo patrón DB-first
+    que get_recent_match_history para tenis/Flashscore).
+
+    Fail-closed: None si no hay ninguna fila para el jugador, o si la más
+    reciente está más vieja que `max_age_hours` (el llamador debe
+    refetchear en vivo en ese caso) -- nunca sirve una ventana vacía
+    fingiendo que es una respuesta válida de "sin partidos"."""
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        init_db_historical()
+        latest = (
+            TennisSurfaceMatchHistory.select()
+            .where(TennisSurfaceMatchHistory.player_name == player_name)
+            .order_by(TennisSurfaceMatchHistory.fetched_at.desc())
+            .first()
+        )
+        if latest is None:
+            return None
+
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - fetched_at) > timedelta(hours=max_age_hours):
+            return None
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).date().isoformat()
+        rows = (
+            TennisSurfaceMatchHistory.select()
+            .where(
+                (TennisSurfaceMatchHistory.player_name == player_name)
+                & (TennisSurfaceMatchHistory.match_date >= cutoff)
+            )
+            .order_by(TennisSurfaceMatchHistory.match_date.desc())
+        )
+        return [
+            {
+                "opponent": r.opponent_name,
+                "match_date": r.match_date,
+                "surface": r.surface,
+                "result": r.result,
+                "score": r.score,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return None

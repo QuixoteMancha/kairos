@@ -230,11 +230,13 @@ def init_db_historical() -> None:
     from database.historical.team_sports import TeamRating, TeamMatchHistory, TeamHeadToHead
     from database.historical.tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+        TennisSurfaceMatchHistory,
     )
 
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+        TennisSurfaceMatchHistory,
         TeamMatchHistory, TeamHeadToHead,
     ], safe=True)

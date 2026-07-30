@@ -75,6 +75,15 @@ _MIN_OBS_PER_BUCKET = 5  # fail-closed: a bucket with fewer real match-observati
 _CACHE_TTL_S = 6 * 3600  # 6h — this is an expensive multi-fetch+cross-reference call, cache aggressively.
 _calibration_cache: dict[str, tuple[float, dict]] = {}
 
+# Superficie splits the already-thin charted-match sample further, so a
+# lower min-observation floor is used than the tour-generic table's
+# _MIN_OBS_PER_BUCKET (5) -- still fail-closed (a bucket below this is
+# OMITTED, never fabricated), just calibrated for the smaller real sample
+# size expected per (tour, surface, bucket) combination. Documented
+# honestly as a looser confidence bar than the tour-generic table.
+_MIN_OBS_PER_BUCKET_SURFACE = 3
+_surface_calibration_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
 
 def _bucket_for_rank(rank: int) -> tuple[int, int]:
     for lo, hi in _RANK_BUCKETS:
@@ -164,4 +173,85 @@ def calibrate_serve_pct_by_bucket(tour: str) -> dict[tuple[int, int], dict[str, 
     if result:
         save_serve_calibration_snapshot(tour, result)
 
+    return result
+
+
+def calibrate_serve_pct_by_bucket_surface(tour: str, surface: str) -> dict[tuple[int, int], dict[str, Any]]:
+    """Same as `calibrate_serve_pct_by_bucket`, but split further by
+    surface ("Clay"/"Hard"/"Grass") — cross-references
+    `match_charting_scraper.get_match_surfaces` (match_id -> Surface)
+    against `get_serve_basics`'s per-match rows.
+
+    2026-07-30: built because a pure rank-bucket p_serve treats a
+    dominant-server profile the same on clay and grass, which real tennis
+    doesn't -- serve dominance compresses on clay (slower bounce, longer
+    rallies) and expands on grass (low bounce, serve-friendly).
+
+    Fail-closed: a bucket with fewer than `_MIN_OBS_PER_BUCKET_SURFACE`
+    charted matches on that specific surface is OMITTED (never
+    interpolated/fabricated) -- caller (tennis_markov.py) falls back to
+    the tour-generic (non-surface) table for any bucket missing here, same
+    pattern as that table falling back to the static placeholder.
+
+    Returns {} entirely if either data source fails, or if `surface` is
+    empty/unrecognized text (no attempt to fuzzy-match a surface name)."""
+    tour = tour.upper()
+    if tour not in ("ATP", "WTA") or not surface:
+        return {}
+
+    cache_key = (tour, surface)
+    cached = _surface_calibration_cache.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) < _CACHE_TTL_S:
+        return cached[1]
+
+    chart_tour_code = "m" if tour == "ATP" else "w"
+    serve_rows = match_charting_scraper.get_serve_basics(chart_tour_code)
+    if not serve_rows:
+        return {}
+
+    match_surfaces = match_charting_scraper.get_match_surfaces(chart_tour_code)
+    if not match_surfaces:
+        return {}
+
+    # Keep only rows whose match_id is tagged with the requested surface.
+    surface_rows = [r for r in serve_rows if match_surfaces.get(r["match_id"]) == surface]
+    if not surface_rows:
+        return {}
+
+    per_player: dict[str, dict[str, int]] = {}
+    for row in surface_rows:
+        player = row["player"]
+        agg = per_player.setdefault(player, {"pts": 0, "pts_won": 0, "n_matches": 0})
+        agg["pts"] += row["pts"]
+        agg["pts_won"] += row["pts_won"]
+        agg["n_matches"] += 1
+
+    name_to_rank = _build_name_to_rank(tour)
+    if not name_to_rank:
+        return {}
+
+    bucket_sums: dict[tuple[int, int], dict[str, int]] = {
+        b: {"pts": 0, "pts_won": 0, "n_matches": 0, "n_players": 0} for b in _RANK_BUCKETS
+    }
+    for player, agg in per_player.items():
+        rank = _lookup_rank(player, name_to_rank)
+        if rank is None or rank <= 0:
+            continue
+        bucket = _bucket_for_rank(rank)
+        bucket_sums[bucket]["pts"] += agg["pts"]
+        bucket_sums[bucket]["pts_won"] += agg["pts_won"]
+        bucket_sums[bucket]["n_matches"] += agg["n_matches"]
+        bucket_sums[bucket]["n_players"] += 1
+
+    result: dict[tuple[int, int], dict[str, Any]] = {}
+    for bucket, sums in bucket_sums.items():
+        if sums["n_matches"] < _MIN_OBS_PER_BUCKET_SURFACE or sums["pts"] <= 0:
+            continue
+        result[bucket] = {
+            "p_serve": round(sums["pts_won"] / sums["pts"], 6),
+            "n_matches": sums["n_matches"],
+            "n_players": sums["n_players"],
+        }
+
+    _surface_calibration_cache[cache_key] = (time.monotonic(), result)
     return result

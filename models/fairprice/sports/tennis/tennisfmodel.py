@@ -41,6 +41,25 @@ MIN_H2H_MATCHES = 2  # fail-closed: fewer real meetings than this -> not enough 
 RECENT_FORM_LOOKBACK = 10
 H2H_LOOKBACK = 40
 
+# Weight for the set-sequence "resilience" signal (2026-07-30, see
+# kairos-tennis-surface-and-set-sequence-model-2026-07-30 memory): smaller
+# than FORM_WEIGHT/H2H_WEIGHT because it's a secondary, noisier signal
+# derived from a small per-player sample (comeback/closing tendency), not
+# a primary rating input. Final mix when everything is available:
+# ~65% rank(+surface) / 13% form / 13% h2h / 9% set-sequence resilience.
+SET_SEQUENCE_WEIGHT = 0.10
+SET_SEQUENCE_LOOKBACK = 30
+
+# Peso para "forma reciente EN ESTA superficie" (2026-07-30, punto 3 del
+# pedido explícito del usuario), vía outer_apis/sports/tennis/surface_form.py
+# (TennisExplorer, ~6 meses, MIN_MATCHES_ON_SURFACE real). Distinto de
+# FORM_WEIGHT (que es forma general, cualquier superficie) -- este es más
+# específico y por eso se le da un poco más de peso que al set-sequence,
+# pero sigue por debajo de form/h2h generales. Mix final cuando todo está
+# disponible: ~58% rank(+surface en p_serve) / 12% form general / 12% h2h
+# / 8% set-sequence / 10% forma en esta superficie.
+SURFACE_FORM_WEIGHT = 0.10
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -66,9 +85,10 @@ class TennisFModel(_SportFModel):
             return super().calculate_fair_price(market)
 
         tour = market.get('tour')
+        surface = market.get('surface')  # None if the tournament wasn't recognized, see kalshi/markets/tennis.py
 
         try:
-            fair_a = pre_match_win_prob(rank_a, rank_b, best_of=best_of, tour=tour)
+            fair_a = pre_match_win_prob(rank_a, rank_b, best_of=best_of, tour=tour, surface=surface)
         except ValueError:
             # defensive: pre_match_win_prob's own validation should never
             # trigger given the checks above, but never let an unexpected
@@ -78,6 +98,8 @@ class TennisFModel(_SportFModel):
 
         fair_a = self._blend_recent_form(fair_a, market)
         fair_a = self._blend_head_to_head(fair_a, market)
+        fair_a = self._blend_set_sequence_resilience(fair_a, market)
+        fair_a = self._blend_surface_form(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -114,3 +136,69 @@ class TennisFModel(_SportFModel):
 
         h2h_implied_a = h2h['a_wins'] / h2h['n_matches']
         return (1 - H2H_WEIGHT) * fair_a + H2H_WEIGHT * h2h_implied_a
+
+    @staticmethod
+    def _resilience_index(tendencies: dict) -> float:
+        """Promedio simple de las tendencias de secuencia de sets
+        disponibles (p_win_set1 siempre presente cuando `tendencies` no es
+        None; las 2 condicionales pueden faltar por sub-muestra, ver
+        `set_sequence_stats.get_set_tendencies`). Un índice más alto =
+        jugador/a que gana más sets en general Y remonta/cierra mejor."""
+        values = [v for v in (
+            tendencies['p_win_set1'],
+            tendencies['p_win_set2_after_losing_set1'],
+            tendencies['p_win_set2_after_winning_set1'],
+        ) if v is not None]
+        return sum(values) / len(values)
+
+    @staticmethod
+    def _blend_set_sequence_resilience(fair_a: float, market: dict) -> float:
+        """Blend de 2026-07-30 (ver kairos-tennis-surface-and-set-sequence-
+        model-2026-07-30 memory): dos jugadoras del mismo ranking pueden
+        tener capacidad de remontar/cerrar sets muy distinta -- esto lo
+        captura, sin tocar el Markov punto-por-punto (que no modela estado
+        de sets previos). Fail-closed: requiere ambos nombres Y ambas
+        tendencias con muestra suficiente (ver `_MIN_MATCHES` en
+        set_sequence_stats.py), si no, no ajusta nada."""
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.set_sequence_stats import get_set_tendencies
+
+        tendencies_a = get_set_tendencies(name_a, n=SET_SEQUENCE_LOOKBACK)
+        tendencies_b = get_set_tendencies(name_b, n=SET_SEQUENCE_LOOKBACK)
+        if tendencies_a is None or tendencies_b is None:
+            return fair_a  # fail-closed: need both, real data, or skip.
+
+        resilience_a = TennisFModel._resilience_index(tendencies_a)
+        resilience_b = TennisFModel._resilience_index(tendencies_b)
+        resilience_implied_a = clamp01(0.5 + (resilience_a - resilience_b) / 2)
+        return (1 - SET_SEQUENCE_WEIGHT) * fair_a + SET_SEQUENCE_WEIGHT * resilience_implied_a
+
+    @staticmethod
+    def _blend_surface_form(fair_a: float, market: dict) -> float:
+        """Forma reciente (~6 meses) en la superficie ESPECÍFICA de este
+        partido -- distinto de `_blend_recent_form` (forma general, todas
+        las superficies mezcladas). Fail-closed: requiere `surface`
+        conocida (ver outer_apis/scrapers/tennis/tournament_surface.py) Y
+        ambos nombres Y muestra suficiente de ambos jugadores en esa
+        superficie puntual (ver MIN_MATCHES_ON_SURFACE), si no, no ajusta
+        nada."""
+        surface = market.get('surface')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not surface or not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.surface_form import get_recent_form_by_surface
+
+        tour = market.get('tour')
+        form_a = get_recent_form_by_surface(name_a, surface, tour=tour)
+        form_b = get_recent_form_by_surface(name_b, surface, tour=tour)
+        if form_a is None or form_b is None:
+            return fair_a  # fail-closed: need both, real data, or skip.
+
+        surface_form_implied_a = clamp01(0.5 + (form_a['win_rate'] - form_b['win_rate']) / 2)
+        return (1 - SURFACE_FORM_WEIGHT) * fair_a + SURFACE_FORM_WEIGHT * surface_form_implied_a

@@ -79,6 +79,12 @@ def _bucket_for_rank(rank: int) -> tuple[int, int]:
 
 _CALIBRATED_CACHE: dict[str, dict[tuple[int, int], float]] = {}
 
+# Surface-specific calibration (2026-07-30, see kairos-tennis-surface-and-
+# set-sequence-model-2026-07-30 memory): separate cache keyed by
+# (tour, surface), since it's a strictly smaller/thinner real sample than
+# the tour-generic table and shouldn't ever be conflated with it.
+_SURFACE_CALIBRATED_CACHE: dict[tuple[str, str], dict[tuple[int, int], float]] = {}
+
 
 def _get_calibrated_table(tour: str) -> dict[tuple[int, int], float]:
     """Real p_serve-by-bucket for one tour ("ATP"/"WTA"), blended with the
@@ -110,19 +116,54 @@ def _get_calibrated_table(tour: str) -> dict[tuple[int, int], float]:
     return table
 
 
-def p_serve_for_rank(rank: int, tour: str | None = None) -> float:
+def _get_surface_calibrated_table(tour: str, surface: str) -> dict[tuple[int, int], float]:
+    """Real p_serve-by-bucket for one (tour, surface) pair. Fail-closed:
+    a network/scraper failure -> {} (empty, NOT the static placeholder —
+    the caller, `p_serve_for_rank`, is responsible for falling back to the
+    tour-generic table per-bucket, which itself falls back to the static
+    placeholder; this function never mixes those fallback layers itself)."""
+    cache_key = (tour, surface)
+    if cache_key in _SURFACE_CALIBRATED_CACHE:
+        return _SURFACE_CALIBRATED_CACHE[cache_key]
+
+    table: dict[tuple[int, int], float] = {}
+    try:
+        from outer_apis.sports.tennis import serve_stats as tennis_serve_stats
+
+        real = tennis_serve_stats.calibrate_serve_pct_by_bucket_surface(tour, surface)
+        for bucket, data in real.items():
+            table[bucket] = data["p_serve"]
+    except Exception:
+        pass
+
+    _SURFACE_CALIBRATED_CACHE[cache_key] = table
+    return table
+
+
+def p_serve_for_rank(rank: int, tour: str | None = None, surface: str | None = None) -> float:
     """Look up p_serve for a given ranking.
 
-    If `tour` is "ATP" or "WTA", uses the real calibrated table for that
-    tour (falling back per-bucket to the static placeholder, see
-    `_get_calibrated_table`). If `tour` is None/unrecognized, uses the
-    static placeholder directly WITHOUT attempting live calibration —
-    fail-closed: guessing which tour's curve to use (mixing ATP/WTA, which
-    have measurably different real p_serve, see memory) would be worse
-    than honestly falling back to the generic placeholder.
+    Fallback chain (2026-07-30, surface added): if `surface` is given AND
+    `tour` is "ATP"/"WTA", tries the surface-specific calibrated table for
+    that bucket FIRST (serve dominance genuinely differs by surface — it
+    compresses on clay, expands on grass); if that bucket has no real
+    surface-specific sample (see `_MIN_OBS_PER_BUCKET_SURFACE`), falls back
+    to the tour-generic calibrated table for that bucket; if THAT is also
+    missing, falls back to the static placeholder. `surface=None` (unknown
+    tournament, see `outer_apis/scrapers/tennis/tournament_surface.py`)
+    skips straight to the tour-generic table, same behavior as before this
+    change. `tour=None`/unrecognized uses the static placeholder directly
+    WITHOUT attempting any live calibration — fail-closed: guessing which
+    tour's curve to use (mixing ATP/WTA, which have measurably different
+    real p_serve, see memory) would be worse than honestly falling back to
+    the generic placeholder.
     """
     bucket = _bucket_for_rank(rank)
     if tour in ("ATP", "WTA"):
+        if surface:
+            surface_table = _get_surface_calibrated_table(tour, surface)
+            if bucket in surface_table:
+                return surface_table[bucket]
         table = _get_calibrated_table(tour)
         return table.get(bucket, _DEFAULT_P_SERVE)
     return _BUCKET_P_SERVE.get(bucket, _DEFAULT_P_SERVE)
@@ -366,12 +407,20 @@ def _p_win_match_from_sets(sets_a: int, sets_b: int, best_of: int) -> float:
     return total
 
 
-def pre_match_win_prob(rank_a: int, rank_b: int, best_of: int = 3, tour: str | None = None) -> float:
+def pre_match_win_prob(
+    rank_a: int, rank_b: int, best_of: int = 3, tour: str | None = None, surface: str | None = None,
+) -> float:
     """P(player A wins the match) BEFORE the match starts, from rankings alone.
 
     `tour`: "ATP"/"WTA" uses the real calibrated p_serve table for that
     tour (see `p_serve_for_rank`); None/unrecognized uses the static
     placeholder rather than guessing which tour's curve applies.
+
+    `surface` (2026-07-30): "Clay"/"Hard"/"Grass"/None, passed straight
+    through to `p_serve_for_rank` — see that function's docstring for the
+    fallback chain (surface-specific -> tour-generic -> static
+    placeholder). `None` (unknown tournament) behaves exactly as before
+    this parameter existed.
 
     Raises `ValueError` if `rank_a`/`rank_b` are not positive integers, or if
     `best_of` is not 3 or 5.
@@ -409,8 +458,8 @@ def pre_match_win_prob(rank_a: int, rank_b: int, best_of: int = 3, tour: str | N
     if best_of not in (3, 5):
         raise ValueError(f"best_of must be 3 or 5, got {best_of!r}")
 
-    pa_serve = p_serve_for_rank(rank_a, tour=tour)
-    pb_serve = p_serve_for_rank(rank_b, tour=tour)
+    pa_serve = p_serve_for_rank(rank_a, tour=tour, surface=surface)
+    pb_serve = p_serve_for_rank(rank_b, tour=tour, surface=surface)
 
     pa_game = _p_win_game(pa_serve)
     pb_game = _p_win_game(pb_serve)

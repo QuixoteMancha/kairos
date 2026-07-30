@@ -34,6 +34,7 @@ import unicodedata
 from typing import Any
 
 from outer_apis.sports.tennis import rankings as tennis_rankings
+from outer_apis.scrapers.tennis.tournament_surface import surface_from_rules_secondary
 
 _RANKING_LOOKUP_DEPTH = 500
 _FUZZY_MATCH_CUTOFF = 0.85
@@ -122,6 +123,13 @@ def build_tennis_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         rank_a = _lookup_rank(names[0], name_to_rank)
         rank_b = _lookup_rank(names[1], name_to_rank)
 
+        # Superficie (2026-07-30): extraída de rules_secondary vía tabla
+        # estática torneo->superficie, ver outer_apis/scrapers/tennis/
+        # tournament_surface.py. Fail-closed: None si el torneo no está en
+        # la tabla -- TennisFModel debe tratarlo como "desconocida", nunca
+        # asumir una superficie por default.
+        surface = surface_from_rules_secondary(legs[0]["raw"].get("rules_secondary"))
+
         result.append({
             "id": event_ticker,
             "type": "tennis",
@@ -138,6 +146,7 @@ def build_tennis_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
             "player_a_name": names[0],
             "player_b_name": names[1],
             "tour": tour,
+            "surface": surface,
             "best_of": _BEST_OF,
             "close_time": legs[0].get("close_time"),
         })

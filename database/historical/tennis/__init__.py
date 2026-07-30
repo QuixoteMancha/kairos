@@ -24,13 +24,17 @@ from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
 from database.historical.tennis.tennisservecalibration import TennisServeCalibration
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
+from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
 from database.historical.tennis.writer import (
     save_rankings_snapshot, save_serve_calibration_snapshot,
     save_match_history, save_head_to_head_snapshot,
+    save_surface_match_history, get_recent_surface_match_history,
 )
 
 __all__ = [
     "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHeadToHead",
+    "TennisSurfaceMatchHistory",
     "save_rankings_snapshot", "save_serve_calibration_snapshot",
     "save_match_history", "save_head_to_head_snapshot",
+    "save_surface_match_history", "get_recent_surface_match_history",
 ]

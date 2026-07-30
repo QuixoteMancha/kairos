@@ -89,3 +89,30 @@ def get_serve_basics(tour: str) -> list[dict[str, Any]]:
         result.append({"match_id": match_id, "player": player, "pts": pts, "pts_won": pts_won})
 
     return result
+
+
+def get_match_surfaces(tour: str) -> dict[str, str]:
+    """match_id -> Surface ("Clay"/"Hard"/"Grass"/...), from
+    `charting-{tour}-matches.csv`. Used to cross-reference against
+    `get_serve_basics`'s per-match rows (same `match_id`) for
+    surface-specific p_serve calibration -- see
+    `outer_apis/sports/tennis/serve_stats.py::calibrate_serve_pct_by_bucket_surface`.
+
+    Fail-closed: {} if the fetch/parse fails, or if a row is missing
+    match_id/Surface (never fabricates a surface for an unparseable row)."""
+    if tour not in ("m", "w"):
+        return {}
+
+    rows = _fetch_csv(f"charting-{tour}-matches.csv")
+    if rows is None:
+        return {}
+
+    result: dict[str, str] = {}
+    for row in rows:
+        match_id = row.get("match_id")
+        surface = row.get("Surface")
+        if not match_id or not surface:
+            continue
+        result[match_id] = surface.strip()
+
+    return result
