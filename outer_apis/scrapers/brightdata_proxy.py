@@ -123,7 +123,7 @@ def request_via_proxy_with_ip_retry(make_session_fn, request_fn, *, verbose: boo
             print("[brightdata_proxy] possible IP-auth issue but no api_token/zone configured, not retrying")
         return resp
 
-    _ensure_ip_whitelisted(config["api_token"], config["zone"], verbose=verbose)
+    ensure_ip_whitelisted(config["api_token"], config["zone"], verbose=verbose)
 
     session2 = make_session_fn()
     try:
@@ -163,11 +163,19 @@ def _get_public_ip() -> str | None:
     return None
 
 
-def _ensure_ip_whitelisted(api_token: str, zone: str, *, verbose: bool = False) -> bool:
+def ensure_ip_whitelisted(api_token: str, zone: str, *, verbose: bool = False) -> bool:
     """Fail-closed: any failure (can't get public IP, API error) returns
     False (no change made) rather than raising -- a whitelist refresh
     failure shouldn't crash the scraper, it just means the retry above
-    won't help this time."""
+    won't help this time.
+
+    Made PUBLIC (2026-07-30, was `_ensure_ip_whitelisted`) so
+    `workers/brightdata_ip_watcher_worker.py` can call it proactively on a
+    schedule, not just reactively from `request_via_proxy_with_ip_retry`
+    on a failed request -- same rationale as the pre-rebuild
+    `run_brightdata_ip_watcher_worker` (see commit `4c2ccd7`, rescued and
+    adapted to this repo's current `workers/`-as-separate-container
+    pattern instead of the old in-process-thread pattern)."""
     with _lock:
         current_ip = _get_public_ip()
         if not current_ip:

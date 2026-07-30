@@ -30,6 +30,22 @@ services:
       # schema/conexión ya estén listos cuando se construya esa pieza.
       - kairos_data_historical:/data_historical
 
+  brightdata_ip_watcher_worker:
+    image: kairos:latest
+    container_name: kairos_brightdata_ip_watcher_worker
+    build: .
+    command: ["python", "-m", "workers.brightdata_ip_watcher_worker"]
+    env_file:
+      - .env
+    environment:
+      # 5min -- ver workers/brightdata_ip_watcher_worker.py. No necesita
+      # ningún volumen (no toca DB, solo la API de BrightData + servicios
+      # públicos de IP).
+      BRIGHTDATA_WATCHER_INTERVAL_SECONDS: "300"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+
   mls_worker:
     image: kairos:latest
     container_name: kairos_mls_worker
