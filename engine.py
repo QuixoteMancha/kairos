@@ -2,6 +2,7 @@ from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import build_tennis_markets
+from database.historical.tennis.matchtracking import register_scanned_matches
 from outer_apis.sports.tennis.match_history import prefetch_player_histories
 from outer_apis.kalshi.markets.football import build_football_markets
 from outer_apis.kalshi.markets.team_sport import build_team_sport_markets
@@ -51,6 +52,16 @@ class Kairos:
         for series in _TENNIS_SERIES:
             tennis_legs.extend(kalshi_api.get_markets(series_ticker=series))
         tennis_markets = build_tennis_markets(tennis_legs)
+
+        # Registro de TODO partido de tenis detectado en este scan, sin
+        # importar si LimitArb encuentra edge o no (2026-07-31, pedido
+        # explícito del usuario -- ver database/historical/tennis/
+        # tennisscannedmatch.py). Antes del filtro de edge a propósito:
+        # LimitArbSignal solo loggea cuando ya se superaron los umbrales
+        # mínimos, esto es la muestra completa/sin sesgo para calibración
+        # futura del modelo de volatilidad. Fail-closed internamente
+        # (nunca tumba el scan), idempotente por market_id.
+        register_scanned_matches(tennis_markets)
 
         # Parallel prefetch (thread pool, see outer_apis/tennis_match_history.py):
         # TennisFModel needs Flashscore recent-form/head-to-head data per

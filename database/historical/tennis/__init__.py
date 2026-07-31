@@ -27,6 +27,12 @@ from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
 from database.historical.tennis.tennisabstractelo import TennisAbstractElo, TennisAbstractYelo
 from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
+from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
+from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
+from database.historical.tennis.matchtracking import (
+    register_scanned_match, register_scanned_matches, get_open_scanned_matches,
+    save_probability_tick, mark_match_settled,
+)
 from database.historical.tennis.writer import (
     save_rankings_snapshot, save_serve_calibration_snapshot,
     save_match_history, save_head_to_head_snapshot,
@@ -50,4 +56,7 @@ __all__ = [
     "save_tennisabstract_career_splits", "get_current_career_splits",
     "save_tennisabstract_h2h", "get_current_tennisabstract_h2h",
     "get_all_career_splits_for_surface", "get_latest_rankings", "get_all_surface_matches",
+    "TennisScannedMatch", "TennisMatchProbabilityTick",
+    "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
+    "save_probability_tick", "mark_match_settled",
 ]
