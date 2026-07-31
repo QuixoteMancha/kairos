@@ -6,6 +6,12 @@ a Flashscore vía BrightData. Objetivo del rediseño: sobrevivir a un
 reinicio del contenedor sin disparar un refetch masivo (el cache viejo
 vivía solo en RAM y se vaciaba con cada restart).
 
+2026-07-31: la frescura pasó de ventana rodante de horas a borde de
+calendario UTC (00:00 GMT) -- ver
+database/historical/tennis/writer.py::_last_midnight_utc. Los tests de
+"stale" usan un timestamp de AYER (antes del último borde de medianoche
+UTC), no "hace N horas", para reflejar el nuevo diseño correctamente.
+
 Usa la DB SQLite temporal/aislada de tests/conftest.py -- nunca la DB real.
 Mockea SOLO el scraper (flashscore_scraper), nunca pega a Flashscore/
 BrightData real."""
@@ -13,6 +19,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+from database.historical.tennis.writer import _last_midnight_utc
 
 import pytest
 
@@ -46,18 +54,27 @@ def test_get_recent_match_history_returns_none_when_no_rows():
 
 def test_get_recent_match_history_returns_fresh_rows():
     _insert_match("Sinner J.", fetched_at=datetime.now(timezone.utc) - timedelta(minutes=5))
-    result = get_recent_match_history("Sinner J.", max_age_hours=1.0)
+    result = get_recent_match_history("Sinner J.")
     assert result is not None
     assert len(result) == 1
     assert result[0]["oponente"] == "Opponent A"
     assert result[0]["resultado"] == "W"
 
 
+def test_get_recent_match_history_fresh_even_hours_old_if_fetched_today():
+    """Con el borde de calendario (2026-07-31), una fila de HOY sigue
+    fresca aunque tenga varias horas -- ya no es una ventana rodante de 1h."""
+    fetched_at = _last_midnight_utc() + timedelta(hours=5)  # hoy, 05:00 GMT
+    _insert_match("Sinner J.", fetched_at=fetched_at)
+    assert get_recent_match_history("Sinner J.") is not None
+
+
 def test_get_recent_match_history_none_when_stale():
-    """Fila real pero vieja (más de max_age_hours) -- debe forzar fetch en
-    vivo, no servir un dato desactualizado indefinidamente."""
-    _insert_match("Alcaraz C.", fetched_at=datetime.now(timezone.utc) - timedelta(hours=5))
-    assert get_recent_match_history("Alcaraz C.", max_age_hours=1.0) is None
+    """Fila real pero de ANTES del borde de medianoche UTC de hoy -- debe
+    forzar fetch en vivo, no servir un dato de ayer indefinidamente."""
+    fetched_at_yesterday = _last_midnight_utc() - timedelta(minutes=1)
+    _insert_match("Alcaraz C.", fetched_at=fetched_at_yesterday)
+    assert get_recent_match_history("Alcaraz C.") is None
 
 
 def test_fetch_and_cache_skips_live_fetch_when_db_is_fresh():
@@ -98,10 +115,10 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
 
 
 def test_fetch_and_cache_refetches_when_db_stale():
-    """Dato en DB pero viejo -- sí debe volver a pegarle a Flashscore
-    (la frescura de 1h se respeta, no queda pegado a un dato añejo para
-    siempre)."""
-    _insert_match("Swiatek I.", fetched_at=datetime.now(timezone.utc) - timedelta(hours=3))
+    """Dato en DB pero de ayer (antes del borde de medianoche UTC de hoy)
+    -- sí debe volver a pegarle a Flashscore, no queda pegado a un dato
+    de un día natural anterior para siempre."""
+    _insert_match("Swiatek I.", fetched_at=_last_midnight_utc() - timedelta(minutes=1))
     fake_matches = [{"fecha": "2026-07-28", "oponente": "Sabalenka A.", "resultado": "W",
                       "score": "6-2 6-1", "source": "flashscore"}]
 

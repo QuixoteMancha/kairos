@@ -127,11 +127,41 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
         pass
 
 
-def get_recent_match_history(player_name: str, max_age_hours: float = 1.0, limit: int = 40) -> list[dict[str, Any]] | None:
+def _last_midnight_utc():
+    """Borde de calendario UTC más reciente (00:00:00 GMT de HOY).
+
+    2026-07-31, cambio de diseño explícito del usuario: los partidos de
+    tenis se resuelven "de un día para otro" (nunca hay torneos de
+    top-100 jugándose a las 00:00 GMT), así que el chequeo de frescura de
+    `get_recent_match_history` pasó de una ventana rodante de horas
+    (`now - fetched_at < N horas`, la fila se volvía stale a una hora
+    distinta cada día según cuándo se hizo el último fetch) a un borde
+    fijo de calendario: "¿se fetcheó HOY (desde las 00:00 GMT), sí o no?".
+    Esto evita el problema real encontrado el 2026-07-30 con
+    BrightData caído: con una ventana rodante de 1h, cada intento fallido
+    de refresh mantenía la fila "stale" indefinidamente, generando un
+    reintento contra Flashscore en CADA llamada sin ninguna posibilidad de
+    éxito. Con el borde de calendario, si ya se intentó/logró hoy no se
+    reintenta hasta mañana a las 00:00 GMT -- como máximo 1 intento
+    (exitoso o no) por jugador por día natural."""
+    now = datetime.now(timezone.utc)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_recent_match_history(player_name: str, max_age_hours: float | None = None, limit: int = 40) -> list[dict[str, Any]] | None:
     """Lee el historial de partidos ya persistido para `player_name` si
-    está lo bastante fresco -- None si no hay filas, o si la fila más
-    reciente (`fetched_at`) tiene más de `max_age_hours` (fuerza un fetch
-    en vivo en ese caso).
+    ya se fetcheó hoy (desde las 00:00 GMT más reciente, ver
+    `_last_midnight_utc` -- reemplaza la ventana rodante de horas usada
+    antes del 2026-07-31) -- None si no hay filas, o si la fila más
+    reciente (`fetched_at`) es de ANTES del borde de hoy (fuerza un fetch
+    en vivo en ese caso, como máximo una vez por día natural UTC).
+
+    `max_age_hours`: parámetro legacy, ignorado si es None (default) --
+    se mantiene por compatibilidad de firma, pero el chequeo real ya no es
+    una ventana rodante. Si se pasa un valor explícito, se respeta como
+    ventana rodante ADICIONAL (más estricta que el borde diario) para
+    casos que necesiten frescura más agresiva que "una vez al día" -- hoy
+    ningún caller la usa así, pero no se rompe la firma existente.
 
     Reemplaza el cache en memoria que existía en
     outer_apis/tennis_match_history.py (`_recent_matches_cache`): ese
@@ -166,9 +196,14 @@ def get_recent_match_history(player_name: str, max_age_hours: float = 1.0, limit
         if latest is None:
             return None
 
-        age_hours = (_now() - latest.fetched_at).total_seconds() / 3600.0
-        if age_hours > max_age_hours:
-            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+
+        if fetched_at < _last_midnight_utc():
+            return None  # no se fetcheó todavía hoy -- fuerza fetch en vivo
+        if max_age_hours is not None and (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None  # ventana rodante adicional explícita, más estricta que el borde diario
 
         rows = (
             TennisMatchHistory

@@ -63,7 +63,15 @@ from database.historical.tennis.writer import (
     save_match_history, save_head_to_head_snapshot, get_recent_match_history,
 )
 
-_DB_FRESHNESS_HOURS = 1.0
+
+# 2026-07-31 (cambio de diseño explícito del usuario): la frescura de
+# `get_recent_match_history` ya NO es una ventana rodante de horas -- es
+# un borde de calendario UTC (00:00 GMT), ver
+# database/historical/tennis/writer.py::_last_midnight_utc para el
+# razonamiento completo. `max_age_hours=None` (default de la función)
+# usa ese borde diario; no se pasa nada explícito acá porque el borde
+# diario YA es el comportamiento correcto para este caller.
+
 # Single canonical fetch depth per player: get_recent_form/get_head_to_head
 # both slice from this ONE cached list instead of each doing their own
 # separately-cached fetch at a different depth (that used to double the
@@ -82,7 +90,7 @@ DEFAULT_PREFETCH_WORKERS = 16
 
 
 def _fetch_and_cache(player_name: str) -> list[dict]:
-    db_matches = get_recent_match_history(player_name, max_age_hours=_DB_FRESHNESS_HOURS, limit=_MAX_DEPTH)
+    db_matches = get_recent_match_history(player_name, limit=_MAX_DEPTH)
     if db_matches is not None:
         return db_matches
 
