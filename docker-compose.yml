@@ -29,6 +29,34 @@ services:
       # todavía (sin collector/worker wireado) -- montado para que el
       # schema/conexión ya estén listos cuando se construya esa pieza.
       - kairos_data_historical:/data_historical
+      # Disco externo (/mnt/storage2 en la mini-pc, confirmado por el
+      # usuario 2026-07-31) montado read-only -- el motor solo CONSULTA
+      # la data archivada (ver outer_apis/sports/tennis/
+      # volatility_calibration.py), nunca escribe ahí (eso lo hace
+      # únicamente tennis_history_archiver_worker).
+      - /mnt/storage2/kairos_archive:/archive:ro
+
+  tennis_history_archiver_worker:
+    image: kairos:latest
+    container_name: kairos_tennis_history_archiver_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_history_archiver_worker"]
+    env_file:
+      - .env
+    environment:
+      # 1h -- ver workers/tennis_history_archiver_worker.py, el chequeo
+      # de tamaño de disco no necesita alta frecuencia.
+      TENNIS_ARCHIVER_INTERVAL_SECONDS: "3600"
+      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+      TENNIS_ARCHIVE_DB_PATH: "/archive/kairos_tennis_archive.db"
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data_historical:/data_historical
+      # Este es el ÚNICO servicio con permiso de ESCRITURA en el disco
+      # externo -- todo lo demás lo monta read-only.
+      - /mnt/storage2/kairos_archive:/archive
 
   brightdata_ip_watcher_worker:
     image: kairos:latest
