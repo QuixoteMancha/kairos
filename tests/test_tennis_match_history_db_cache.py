@@ -114,6 +114,30 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
     assert result2[0]["oponente"] == "Zverev A."
 
 
+def test_get_recent_match_history_fresh_when_todays_match_already_stored_even_if_checked_yesterday():
+    """Segundo pedido explícito del usuario (2026-07-31): si el partido
+    más reciente GUARDADO ya es de hoy, no hace falta un fetch en vivo
+    aunque el último chequeo (`fetched_at`) haya sido ayer -- no puede
+    existir un partido "más nuevo" del que ya tenemos."""
+    fetched_at_yesterday = _last_midnight_utc() - timedelta(hours=2)
+    today_str = _last_midnight_utc().date().isoformat()
+    _insert_match("Gauff C.", fetched_at=fetched_at_yesterday, match_date=today_str)
+
+    result = get_recent_match_history("Gauff C.")
+    assert result is not None
+    assert result[0]["oponente"] == "Opponent A"
+
+
+def test_get_recent_match_history_stale_when_neither_checked_today_nor_have_todays_match():
+    """Contraparte: chequeado ayer Y el partido más reciente guardado
+    también es de ayer -- ahí sí debe forzar el fetch en vivo."""
+    fetched_at_yesterday = _last_midnight_utc() - timedelta(hours=2)
+    yesterday_str = (_last_midnight_utc() - timedelta(days=1)).date().isoformat()
+    _insert_match("Rybakina E.", fetched_at=fetched_at_yesterday, match_date=yesterday_str)
+
+    assert get_recent_match_history("Rybakina E.") is None
+
+
 def test_fetch_and_cache_refetches_when_db_stale():
     """Dato en DB pero de ayer (antes del borde de medianoche UTC de hoy)
     -- sí debe volver a pegarle a Flashscore, no queda pegado a un dato

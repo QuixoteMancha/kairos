@@ -181,10 +181,35 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
     primero), para que el caller no tenga que distinguir si el dato vino
     de la DB o de un fetch en vivo.
 
+    ADEMÁS (2026-07-31, segundo pedido explícito del usuario -- "antes de
+    hacer fetch de todo se debe verificar si hay un nuevo match con
+    respecto a la fecha del último match guardado en base"): incluso si
+    ya pasó el borde de medianoche desde el último fetch, si el partido
+    más reciente YA GUARDADO en DB (`match_date`, no `fetched_at`) es de
+    HOY, no hace falta un fetch en vivo -- lógicamente no puede existir un
+    partido "más nuevo" del que ya tenemos, sin importar cuándo se hizo el
+    último chequeo. Esto es un segundo camino a la frescura, independiente
+    del borde diario: cualquiera de los dos (chequeado hoy, O ya tenemos
+    el resultado de hoy) alcanza para servir desde DB.
+
     Fail-closed: cualquier error de DB devuelve None (fuerza fetch en vivo,
     nunca sirve una lista vacía fabricada como si fuera "sin historial")."""
     try:
         init_db_historical()
+        today_str = _last_midnight_utc().date().isoformat()
+
+        latest_match = (
+            TennisMatchHistory
+            .select(TennisMatchHistory.match_date)
+            .where(TennisMatchHistory.player_name == player_name)
+            .order_by(TennisMatchHistory.match_date.desc())
+            .limit(1)
+            .first()
+        )
+        if latest_match is None:
+            return None
+        already_have_todays_match = latest_match.match_date >= today_str
+
         latest = (
             TennisMatchHistory
             .select(TennisMatchHistory.fetched_at)
@@ -200,8 +225,9 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
         if fetched_at.tzinfo is None:
             fetched_at = fetched_at.replace(tzinfo=timezone.utc)
 
-        if fetched_at < _last_midnight_utc():
-            return None  # no se fetcheó todavía hoy -- fuerza fetch en vivo
+        checked_today = fetched_at >= _last_midnight_utc()
+        if not checked_today and not already_have_todays_match:
+            return None  # ni se chequeó hoy, ni ya tenemos el resultado de hoy -- fuerza fetch en vivo
         if max_age_hours is not None and (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
             return None  # ventana rodante adicional explícita, más estricta que el borde diario
 
