@@ -129,7 +129,7 @@ def get_archived_observed_volatility(
     """Volatilidad observada real, SOLO de la DB de archivo ("data
     histórica"). Fail-closed: None si el disco externo no está montado."""
     try:
-        _ensure_archive_db_initialized()
+        _ensure_archive_db_initialized(create_if_missing=False)  # lector: nunca crea el archivo, ver docstring
     except ArchiveNotMountedError:
         return None
     return _mean_observed_volatility(

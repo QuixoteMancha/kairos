@@ -76,9 +76,29 @@ class ArchiveNotMountedError(Exception):
     externo real."""
 
 
-def _ensure_archive_db_initialized() -> None:
+def _ensure_archive_db_initialized(create_if_missing: bool = True) -> None:
+    """`create_if_missing=False` (usado por los LECTORES de solo consulta,
+    ver `outer_apis/sports/tennis/volatility_calibration.py`): si el
+    archivo de la DB de archivo todavía no existe, levanta
+    `ArchiveNotMountedError` SIN intentar crearlo -- bug real encontrado
+    2026-07-31: el contenedor `kairos` monta `/archive` como READ-ONLY
+    (correcto, solo `tennis_history_archiver_worker` debe escribir ahí),
+    así que cualquier intento de `sqlite3.connect()` en modo creación
+    sobre un mount read-only fallaba con "unable to open database file"
+    en vez de devolver limpiamente "todavía no hay nada archivado".
+
+    `create_if_missing=True` (default, usado por el archivador -- el
+    único servicio con permiso de escritura real): comportamiento
+    original, crea el archivo/tablas si no existen."""
     if db_archive.database is not None:
         return
+
+    if not create_if_missing and not os.path.exists(ARCHIVE_DB_PATH):
+        raise ArchiveNotMountedError(
+            f"{ARCHIVE_DB_PATH} todavía no existe -- el archivador no corrió todavía "
+            f"(normal si la DB activa nunca llegó al umbral de archivado)."
+        )
+
     parent = os.path.dirname(ARCHIVE_DB_PATH)
     try:
         os.makedirs(parent, exist_ok=True)
