@@ -75,6 +75,14 @@ SURFACE_FORM_WEIGHT = 0.10
 TENNISABSTRACT_ELO_WEIGHT = 0.30
 TENNISABSTRACT_YELO_WEIGHT = 0.15
 
+# Win% de PARTIDO real (no proxy de Elo) por superficie, carrera completa
+# -- ver outer_apis/sports/tennis/tennisabstract_player_stats.py. Peso
+# menor que TENNISABSTRACT_ELO_WEIGHT a propósito: está correlacionado
+# con el Elo por superficie (misma fuente, señal parcialmente redundante),
+# pero sigue aportando algo distinto -- es la tasa de victoria de PARTIDO
+# real, no una calificación derivada.
+TENNISABSTRACT_CAREER_SURFACE_WEIGHT = 0.10
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -117,6 +125,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_surface_form(fair_a, market)
         fair_a = self._blend_tennisabstract_elo(fair_a, market)
         fair_a = self._blend_tennisabstract_season_form(fair_a, market)
+        fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -140,10 +149,23 @@ class TennisFModel(_SportFModel):
 
     @staticmethod
     def _blend_head_to_head(fair_a: float, market: dict) -> float:
+        """2026-07-31: preferido el H2H REAL de Tennis Abstract (rivales
+        frecuentes, ver outer_apis/sports/tennis/tennisabstract_player_stats.py)
+        cuando el matchup figura ahí -- mejor calidad/muestra que el H2H
+        derivado de Flashscore/TennisExplorer (`match_history.get_head_to_head`,
+        ventana acotada por lookback). Si el matchup no está en la lista
+        de rivales frecuentes de TA (jugadores que casi no se enfrentaron
+        no aparecen ahí), cae al camino anterior sin cambios."""
         name_a = market.get('player_a_name')
         name_b = market.get('player_b_name')
         if not name_a or not name_b:
             return fair_a
+
+        from outer_apis.sports.tennis.tennisabstract_player_stats import get_h2h_vs
+
+        ta_h2h = get_h2h_vs(name_a, name_b)
+        if ta_h2h is not None and ta_h2h.get('meetings', 0) >= MIN_H2H_MATCHES and ta_h2h.get('win_pct') is not None:
+            return (1 - H2H_WEIGHT) * fair_a + H2H_WEIGHT * ta_h2h['win_pct']
 
         from outer_apis.sports.tennis.match_history import get_head_to_head
 
@@ -271,3 +293,26 @@ class TennisFModel(_SportFModel):
 
         yelo_implied_a = clamp01(elo_implied_win_prob(form_a['yelo'], form_b['yelo']))
         return (1 - TENNISABSTRACT_YELO_WEIGHT) * fair_a + TENNISABSTRACT_YELO_WEIGHT * yelo_implied_a
+
+    @staticmethod
+    def _blend_tennisabstract_career_surface_winpct(fair_a: float, market: dict) -> float:
+        """Win% de PARTIDO real (no Elo) de cada jugador/a en la
+        superficie de este partido, sobre su carrera completa (ver
+        outer_apis/sports/tennis/tennisabstract_player_stats.py).
+        Fail-closed: requiere `surface` conocida Y ambos nombres con datos
+        de esa superficie en Tennis Abstract, si no, no ajusta nada."""
+        surface = market.get('surface')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not surface or not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.tennisabstract_player_stats import get_career_win_pct_by_surface
+
+        split_a = get_career_win_pct_by_surface(name_a, surface)
+        split_b = get_career_win_pct_by_surface(name_b, surface)
+        if split_a is None or split_b is None or split_a.get('win_pct') is None or split_b.get('win_pct') is None:
+            return fair_a  # fail-closed: need both, real data, or skip.
+
+        winpct_implied_a = clamp01(0.5 + (split_a['win_pct'] - split_b['win_pct']) / 2)
+        return (1 - TENNISABSTRACT_CAREER_SURFACE_WEIGHT) * fair_a + TENNISABSTRACT_CAREER_SURFACE_WEIGHT * winpct_implied_a

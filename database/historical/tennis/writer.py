@@ -479,3 +479,127 @@ def get_current_tennisabstract_yelo(tour: str, max_age_hours: float = _TA_ELO_FR
         return {r.player_name: {"yelo": r.yelo, "wins": r.wins, "losses": r.losses} for r in rows}
     except Exception:
         return None
+
+
+from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
+
+_TA_PLAYER_STATS_FRESHNESS_HOURS = 24 * 7  # 1 semana -- career splits/H2H cambian muy lento partido a partido
+
+
+def save_tennisabstract_career_splits(player_name: str, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        to_insert = [
+            {
+                "player_name": player_name, "surface": r["surface"],
+                "matches": r.get("matches"), "wins": r.get("wins"), "losses": r.get("losses"),
+                "win_pct": r.get("win_pct"), "hold_pct": r.get("hold_pct"),
+                "break_pct": r.get("break_pct"), "ace_pct": r.get("ace_pct"), "df_pct": r.get("df_pct"),
+                "fetched_at": fetched_at,
+            }
+            for r in rows if r.get("surface")
+        ]
+        if to_insert:
+            TennisAbstractCareerSplit.insert_many(to_insert).execute()
+    except Exception:
+        pass
+
+
+def get_current_career_splits(player_name: str, max_age_hours: float = _TA_PLAYER_STATS_FRESHNESS_HOURS) -> list[dict[str, Any]] | None:
+    """DB-first, frescura POR JUGADOR (2026-07-31, pedido explícito del
+    usuario: "solo cuando se necesiten actualizar los datos de algún
+    player" -- cada jugador tiene su propio reloj de frescura, no uno
+    global para toda la tabla). Fail-closed: None si no hay filas para
+    ESTE jugador o están stale."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisAbstractCareerSplit
+            .select(TennisAbstractCareerSplit.fetched_at)
+            .where(TennisAbstractCareerSplit.player_name == player_name)
+            .order_by(TennisAbstractCareerSplit.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None
+
+        rows = (
+            TennisAbstractCareerSplit
+            .select()
+            .where((TennisAbstractCareerSplit.player_name == player_name)
+                   & (TennisAbstractCareerSplit.fetched_at == latest.fetched_at))
+        )
+        return [
+            {
+                "surface": r.surface, "matches": r.matches, "wins": r.wins, "losses": r.losses,
+                "win_pct": r.win_pct, "hold_pct": r.hold_pct, "break_pct": r.break_pct,
+                "ace_pct": r.ace_pct, "df_pct": r.df_pct,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return None
+
+
+def save_tennisabstract_h2h(player_name: str, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        to_insert = [
+            {
+                "player_name": player_name, "opponent_name": r["opponent"], "meetings": r["meetings"],
+                "wins": r.get("wins"), "losses": r.get("losses"), "win_pct": r.get("win_pct"),
+                "fetched_at": fetched_at,
+            }
+            for r in rows if r.get("opponent") and r.get("meetings") is not None
+        ]
+        if to_insert:
+            TennisAbstractH2H.insert_many(to_insert).execute()
+    except Exception:
+        pass
+
+
+def get_current_tennisabstract_h2h(player_name: str, max_age_hours: float = _TA_PLAYER_STATS_FRESHNESS_HOURS) -> list[dict[str, Any]] | None:
+    """DB-first, frescura POR JUGADOR -- mismo criterio que get_current_career_splits."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisAbstractH2H
+            .select(TennisAbstractH2H.fetched_at)
+            .where(TennisAbstractH2H.player_name == player_name)
+            .order_by(TennisAbstractH2H.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None
+
+        rows = (
+            TennisAbstractH2H
+            .select()
+            .where((TennisAbstractH2H.player_name == player_name)
+                   & (TennisAbstractH2H.fetched_at == latest.fetched_at))
+        )
+        return [
+            {"opponent": r.opponent_name, "meetings": r.meetings, "wins": r.wins,
+             "losses": r.losses, "win_pct": r.win_pct}
+            for r in rows
+        ]
+    except Exception:
+        return None

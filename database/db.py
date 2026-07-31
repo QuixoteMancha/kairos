@@ -231,6 +231,7 @@ def init_db_historical() -> None:
     from database.historical.tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
+        TennisAbstractCareerSplit, TennisAbstractH2H,
     )
 
     db_historical.connect(reuse_if_open=True)
@@ -238,5 +239,6 @@ def init_db_historical() -> None:
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
+        TennisAbstractCareerSplit, TennisAbstractH2H,
         TeamMatchHistory, TeamHeadToHead,
     ], safe=True)
