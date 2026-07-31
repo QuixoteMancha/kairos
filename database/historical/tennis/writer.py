@@ -20,6 +20,7 @@ from database.historical.tennis.tennisservecalibration import TennisServeCalibra
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
+from database.historical.tennis.tennisabstractelo import TennisAbstractElo, TennisAbstractYelo
 
 
 def _now():
@@ -365,5 +366,116 @@ def get_recent_surface_match_history(
             }
             for r in rows
         ]
+    except Exception:
+        return None
+
+
+_TA_ELO_FRESHNESS_HOURS = 24 * 4  # 4 días -- el sitio se actualiza "semanalmente(ish)", ver docstring
+
+
+def save_tennisabstract_elo_snapshot(tour: str, rows: list[dict[str, Any]]) -> None:
+    """Snapshot semanal, una fila nueva por fetch fresco (mismo criterio
+    que save_rankings_snapshot) -- no upsert, es una serie temporal."""
+    if not rows:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        to_insert = [
+            {
+                "player_name": r["player"], "tour": tour, "elo": r["elo"],
+                "h_elo": r.get("h_elo"), "c_elo": r.get("c_elo"), "g_elo": r.get("g_elo"),
+                "atp_rank": r.get("atp_rank"), "fetched_at": fetched_at,
+            }
+            for r in rows if r.get("player") and r.get("elo") is not None
+        ]
+        if to_insert:
+            TennisAbstractElo.insert_many(to_insert).execute()
+    except Exception:
+        pass
+
+
+def get_current_tennisabstract_elo(tour: str, max_age_hours: float = _TA_ELO_FRESHNESS_HOURS) -> dict[str, dict[str, Any]] | None:
+    """DB-first: {player_name: {"elo","h_elo","c_elo","g_elo","atp_rank"}}
+    de la fila MÁS RECIENTE por jugador, solo si el fetch más reciente de
+    la tabla completa está dentro de `max_age_hours`. Fail-closed: None si
+    no hay filas o están stale (fuerza fetch en vivo)."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisAbstractElo
+            .select(TennisAbstractElo.fetched_at)
+            .where(TennisAbstractElo.tour == tour)
+            .order_by(TennisAbstractElo.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None
+
+        rows = (
+            TennisAbstractElo
+            .select()
+            .where((TennisAbstractElo.tour == tour) & (TennisAbstractElo.fetched_at == latest.fetched_at))
+        )
+        return {
+            r.player_name: {"elo": r.elo, "h_elo": r.h_elo, "c_elo": r.c_elo, "g_elo": r.g_elo, "atp_rank": r.atp_rank}
+            for r in rows
+        }
+    except Exception:
+        return None
+
+
+def save_tennisabstract_yelo_snapshot(tour: str, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        to_insert = [
+            {
+                "player_name": r["player"], "tour": tour, "yelo": r["yelo"],
+                "wins": r.get("wins"), "losses": r.get("losses"), "fetched_at": fetched_at,
+            }
+            for r in rows if r.get("player") and r.get("yelo") is not None
+        ]
+        if to_insert:
+            TennisAbstractYelo.insert_many(to_insert).execute()
+    except Exception:
+        pass
+
+
+def get_current_tennisabstract_yelo(tour: str, max_age_hours: float = _TA_ELO_FRESHNESS_HOURS) -> dict[str, dict[str, Any]] | None:
+    """DB-first: {player_name: {"yelo","wins","losses"}}, mismo patrón que
+    get_current_tennisabstract_elo."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisAbstractYelo
+            .select(TennisAbstractYelo.fetched_at)
+            .where(TennisAbstractYelo.tour == tour)
+            .order_by(TennisAbstractYelo.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None
+
+        rows = (
+            TennisAbstractYelo
+            .select()
+            .where((TennisAbstractYelo.tour == tour) & (TennisAbstractYelo.fetched_at == latest.fetched_at))
+        )
+        return {r.player_name: {"yelo": r.yelo, "wins": r.wins, "losses": r.losses} for r in rows}
     except Exception:
         return None

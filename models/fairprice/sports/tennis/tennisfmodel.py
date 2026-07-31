@@ -60,6 +60,21 @@ SET_SEQUENCE_LOOKBACK = 30
 # / 8% set-sequence / 10% forma en esta superficie.
 SURFACE_FORM_WEIGHT = 0.10
 
+# Pesos para Tennis Abstract (Jeff Sackmann, 2026-07-31, investigación +
+# construcción a pedido explícito del usuario): Elo real POR JUGADOR
+# (carrera + por superficie: hElo/cElo/gElo), y Elo de la TEMPORADA en
+# curso ("yElo"). Metodológicamente más sólido que el sistema propio de
+# buckets de ranking de tennis_markov.py -- por eso se le da el peso más
+# alto de todos los blends existentes, no uno "modesto" como form/h2h/
+# set-sequence. TENNISABSTRACT_ELO_WEIGHT (carrera+superficie, la fuente
+# de mayor calidad y muestra) pesa más que TENNISABSTRACT_YELO_WEIGHT
+# (temporada en curso, más ruidoso por ventana más corta pero capta
+# forma reciente que el Elo de carrera diluye). Pesos iniciales
+# razonados, NO calibrados todavía contra resultados reales -- mismo
+# criterio que W_EDGE/W_VOLATILITY en strategies/limit_arb.py.
+TENNISABSTRACT_ELO_WEIGHT = 0.30
+TENNISABSTRACT_YELO_WEIGHT = 0.15
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -100,6 +115,8 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_head_to_head(fair_a, market)
         fair_a = self._blend_set_sequence_resilience(fair_a, market)
         fair_a = self._blend_surface_form(fair_a, market)
+        fair_a = self._blend_tennisabstract_elo(fair_a, market)
+        fair_a = self._blend_tennisabstract_season_form(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -202,3 +219,55 @@ class TennisFModel(_SportFModel):
 
         surface_form_implied_a = clamp01(0.5 + (form_a['win_rate'] - form_b['win_rate']) / 2)
         return (1 - SURFACE_FORM_WEIGHT) * fair_a + SURFACE_FORM_WEIGHT * surface_form_implied_a
+
+    @staticmethod
+    def _blend_tennisabstract_elo(fair_a: float, market: dict) -> float:
+        """Elo real por jugador (Tennis Abstract/Jeff Sackmann), carrera +
+        por superficie (hElo/cElo/gElo, ver
+        outer_apis/sports/tennis/tennisabstract_elo.py). Reemplaza
+        conceptualmente al sistema propio de buckets de ranking en calidad
+        de dato -- por eso tiene el peso más alto de todos los blends.
+        Fail-closed: requiere `tour` conocido Y ambos nombres matcheen en
+        la tabla de Tennis Abstract, si no, no ajusta nada (nunca fabrica
+        un Elo por analogía de ranking)."""
+        tour = market.get('tour')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not tour or not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.tennisabstract_elo import get_elo, elo_implied_win_prob
+
+        surface = market.get('surface')
+        elo_a = get_elo(name_a, tour, surface=surface)
+        elo_b = get_elo(name_b, tour, surface=surface)
+        if elo_a is None or elo_b is None:
+            return fair_a  # fail-closed: need both, real data, or skip.
+
+        elo_implied_a = clamp01(elo_implied_win_prob(elo_a, elo_b))
+        return (1 - TENNISABSTRACT_ELO_WEIGHT) * fair_a + TENNISABSTRACT_ELO_WEIGHT * elo_implied_a
+
+    @staticmethod
+    def _blend_tennisabstract_season_form(fair_a: float, market: dict) -> float:
+        """yElo (Elo de la temporada EN CURSO, no de carrera) -- captura
+        forma reciente de una manera metodológicamente más sólida que un
+        win-rate naive de los últimos N partidos (ver `_blend_recent_form`,
+        que sigue existiendo en paralelo porque usa una fuente/ventana
+        distinta -- Flashscore, 10 partidos más recientes sin importar
+        temporada). Fail-closed: requiere `tour` conocido Y ambos nombres
+        matcheen en la tabla de yElo, si no, no ajusta nada."""
+        tour = market.get('tour')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not tour or not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.tennisabstract_elo import get_season_form, elo_implied_win_prob
+
+        form_a = get_season_form(name_a, tour)
+        form_b = get_season_form(name_b, tour)
+        if form_a is None or form_b is None:
+            return fair_a  # fail-closed: need both, real data, or skip.
+
+        yelo_implied_a = clamp01(elo_implied_win_prob(form_a['yelo'], form_b['yelo']))
+        return (1 - TENNISABSTRACT_YELO_WEIGHT) * fair_a + TENNISABSTRACT_YELO_WEIGHT * yelo_implied_a
