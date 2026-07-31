@@ -11,8 +11,14 @@ real-time rankings/calibration/match-history shouldn't fail just because
 writing the historical record failed).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+# Ventana por default para get_all_surface_matches -- más amplia que los
+# 6 meses de surface_form.py (LOOKBACK_DAYS=183) a propósito: el stat de
+# "winrate vs grupo de rivales similares" (style_peer_group.py) necesita
+# la mayor muestra real posible, no solo forma reciente.
+LOOKBACK_DAYS_DEFAULT = 365.0
 
 from database.db import init_db_historical
 from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
@@ -603,3 +609,113 @@ def get_current_tennisabstract_h2h(player_name: str, max_age_hours: float = _TA_
         ]
     except Exception:
         return None
+
+
+def get_all_career_splits_for_surface(surface: str, max_age_days: float = 30.0) -> dict[str, dict[str, Any]]:
+    """Bulk read: {player_name: {surface, matches, wins, losses, win_pct,
+    hold_pct, break_pct, ace_pct, df_pct}} para TODOS los jugadores que
+    tengan una fila de `TennisAbstractCareerSplit` en `surface` -- la fila
+    MÁS RECIENTE por jugador si hay más de una (nunca mezcla snapshots
+    viejos de un jugador con nuevos de otro).
+
+    Usado para armar el "pool" de candidatos de
+    outer_apis/sports/tennis/style_peer_group.py -- este pool crece
+    orgánicamente con el tiempo a medida que más jugadores aparecen en
+    escaneos reales (cada uno se fetchea la primera vez que aparece en un
+    mercado real, nunca se pre-carga todo el circuito de una vez).
+
+    `max_age_days`: filas más viejas que esto se ignoran (evita usar el
+    perfil de estilo de un jugador cuyo career-split no se refrescó en
+    mucho tiempo, aunque siga siendo razonablemente estable dato a dato).
+
+    Fail-closed: {} si no hay filas o falla la query -- nunca fabrica un
+    pool de candidatos."""
+    try:
+        init_db_historical()
+        cutoff = _now() - timedelta(days=max_age_days)
+        rows = (
+            TennisAbstractCareerSplit
+            .select()
+            .where((TennisAbstractCareerSplit.surface == surface)
+                   & (TennisAbstractCareerSplit.fetched_at >= cutoff))
+            .order_by(TennisAbstractCareerSplit.fetched_at.desc())
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            if r.player_name in result:
+                continue  # ya se guardó la fila más reciente de este jugador (orden desc)
+            result[r.player_name] = {
+                "surface": r.surface, "matches": r.matches, "wins": r.wins, "losses": r.losses,
+                "win_pct": r.win_pct, "hold_pct": r.hold_pct, "break_pct": r.break_pct,
+                "ace_pct": r.ace_pct, "df_pct": r.df_pct,
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def get_latest_rankings(tour: str, max_age_days: float = 14.0) -> dict[str, int]:
+    """Bulk read: {player_name: ranking} para el snapshot MÁS RECIENTE de
+    `TennisPlayerRanking` de ese tour (todas las filas de un mismo fetch
+    comparten el mismo `fetched_at`, ver save_rankings_snapshot -- alcanza
+    con el máximo global de la tabla para ese tour, no hace falta agrupar
+    por jugador). Esta tabla YA se puebla en cada scan real (ver
+    outer_apis/sports/tennis/rankings.py -> outer_apis/kalshi/markets/tennis.py),
+    esto es lectura pura, sin fetch nuevo.
+
+    Fail-closed: {} si no hay filas, el snapshot más reciente es más
+    viejo que `max_age_days`, o falla la query."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisPlayerRanking
+            .select(TennisPlayerRanking.fetched_at)
+            .where(TennisPlayerRanking.tour == tour)
+            .order_by(TennisPlayerRanking.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return {}
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).days > max_age_days:
+            return {}
+
+        rows = (
+            TennisPlayerRanking
+            .select()
+            .where((TennisPlayerRanking.tour == tour) & (TennisPlayerRanking.fetched_at == latest.fetched_at))
+        )
+        return {r.player_name: r.ranking for r in rows}
+    except Exception:
+        return {}
+
+
+def get_all_surface_matches(player_name: str, surface: str, lookback_days: float = LOOKBACK_DAYS_DEFAULT) -> list[dict[str, Any]]:
+    """Lectura RAW de `TennisSurfaceMatchHistory` para `player_name` en
+    `surface`, dentro de `lookback_days` -- a diferencia de
+    `get_recent_surface_match_history`, NO tiene gate de frescura de
+    `fetched_at` (esto es un stat derivado secundario, usar lo que ya
+    esté en DB sin forzar/bloquear por un chequeo de "se refrescó hoy").
+
+    Fail-closed: [] si no hay filas o falla la query."""
+    try:
+        init_db_historical()
+        cutoff = (_now() - timedelta(days=lookback_days)).date().isoformat()
+        rows = (
+            TennisSurfaceMatchHistory
+            .select()
+            .where(
+                (TennisSurfaceMatchHistory.player_name == player_name)
+                & (TennisSurfaceMatchHistory.surface == surface)
+                & (TennisSurfaceMatchHistory.match_date >= cutoff)
+            )
+        )
+        return [
+            {"opponent": r.opponent_name, "match_date": r.match_date, "result": r.result}
+            for r in rows
+        ]
+    except Exception:
+        return []

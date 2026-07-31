@@ -83,6 +83,18 @@ TENNISABSTRACT_YELO_WEIGHT = 0.15
 # real, no una calificación derivada.
 TENNISABSTRACT_CAREER_SURFACE_WEIGHT = 0.10
 
+# Winrate contra grupo de rivales de estilo+ranking similar al rival
+# actual (2026-07-31, pedido explícito del usuario -- ver
+# outer_apis/sports/tennis/style_peer_group.py). Pensado específicamente
+# para cuando NO hay H2H directo real disponible (MIN_H2H_MATCHES no
+# alcanzado en ninguna fuente) -- en ese caso este blend es la única
+# aproximación a "cómo le va este jugador contra un rival de este
+# perfil" que tenemos. Peso modesto: es una aproximación de 2 pasos
+# (similaridad de estilo + ranking, no el rival real) sobre un pool de
+# candidatos que además crece orgánicamente con el tiempo (puede estar
+# vacío/chico al principio).
+STYLE_PEER_GROUP_WEIGHT = 0.10
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -126,6 +138,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_tennisabstract_elo(fair_a, market)
         fair_a = self._blend_tennisabstract_season_form(fair_a, market)
         fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
+        fair_a = self._blend_style_peer_group(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -316,3 +329,55 @@ class TennisFModel(_SportFModel):
 
         winpct_implied_a = clamp01(0.5 + (split_a['win_pct'] - split_b['win_pct']) / 2)
         return (1 - TENNISABSTRACT_CAREER_SURFACE_WEIGHT) * fair_a + TENNISABSTRACT_CAREER_SURFACE_WEIGHT * winpct_implied_a
+
+    @staticmethod
+    def _has_direct_h2h(name_a: str, name_b: str) -> bool:
+        """True si existe H2H directo real y suficiente (>= MIN_H2H_MATCHES)
+        de CUALQUIERA de las 2 fuentes que usa `_blend_head_to_head`
+        (Tennis Abstract rivales frecuentes, o Flashscore/TennisExplorer).
+        Usado para decidir si aplica el blend de grupo de rivales por
+        estilo -- ese blend está pensado explícitamente para el caso SIN
+        historial directo (pedido explícito del usuario), no para sumarse
+        encima de un H2H real ya fuerte."""
+        from outer_apis.sports.tennis.tennisabstract_player_stats import get_h2h_vs
+
+        ta_h2h = get_h2h_vs(name_a, name_b)
+        if ta_h2h is not None and ta_h2h.get('meetings', 0) >= MIN_H2H_MATCHES:
+            return True
+
+        from outer_apis.sports.tennis.match_history import get_head_to_head
+
+        h2h = get_head_to_head(name_a, name_b, lookback=H2H_LOOKBACK)
+        return h2h is not None and h2h['n_matches'] >= MIN_H2H_MATCHES
+
+    @staticmethod
+    def _blend_style_peer_group(fair_a: float, market: dict) -> float:
+        """Winrate de cada jugador/a contra el grupo de rivales de
+        estilo+ranking similar al RIVAL actual (ver
+        outer_apis/sports/tennis/style_peer_group.py) -- SOLO se aplica
+        cuando NO hay H2H directo real suficiente entre ambos (pedido
+        explícito del usuario: "esto es justamente para cuando no hay
+        encuentros previos entre 2 players"). Fail-closed: requiere
+        `surface`/`tour`/rankings de ambos Y grupos de rivales armables
+        con muestra suficiente para ambos lados, si no, no ajusta nada."""
+        surface = market.get('surface')
+        tour = market.get('tour')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        rank_a = market.get('player_a_rank')
+        rank_b = market.get('player_b_rank')
+        if not surface or not tour or not name_a or not name_b:
+            return fair_a
+
+        if TennisFModel._has_direct_h2h(name_a, name_b):
+            return fair_a  # ya hay H2H real, no hace falta el proxy de grupo de rivales.
+
+        from outer_apis.sports.tennis.style_peer_group import get_winrate_vs_peer_group
+
+        stat_a = get_winrate_vs_peer_group(name_a, name_b, rank_b, surface, tour)
+        stat_b = get_winrate_vs_peer_group(name_b, name_a, rank_a, surface, tour)
+        if stat_a is None or stat_b is None:
+            return fair_a  # fail-closed: need both sides, real data, or skip.
+
+        peer_implied_a = clamp01(0.5 + (stat_a['win_rate'] - stat_b['win_rate']) / 2)
+        return (1 - STYLE_PEER_GROUP_WEIGHT) * fair_a + STYLE_PEER_GROUP_WEIGHT * peer_implied_a

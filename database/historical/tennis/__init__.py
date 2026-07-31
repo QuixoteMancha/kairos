@@ -35,6 +35,7 @@ from database.historical.tennis.writer import (
     save_tennisabstract_yelo_snapshot, get_current_tennisabstract_yelo,
     save_tennisabstract_career_splits, get_current_career_splits,
     save_tennisabstract_h2h, get_current_tennisabstract_h2h,
+    get_all_career_splits_for_surface, get_latest_rankings, get_all_surface_matches,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "save_tennisabstract_yelo_snapshot", "get_current_tennisabstract_yelo",
     "save_tennisabstract_career_splits", "get_current_career_splits",
     "save_tennisabstract_h2h", "get_current_tennisabstract_h2h",
+    "get_all_career_splits_for_surface", "get_latest_rankings", "get_all_surface_matches",
 ]
