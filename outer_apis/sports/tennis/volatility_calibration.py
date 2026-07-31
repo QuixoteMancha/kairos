@@ -33,6 +33,21 @@ from database.historical.tennis.archive_db import (
 MIN_MATCHES_FOR_STAT = 5  # fail-closed: menos partidos resueltos que esto -> sin estadística confiable
 DEFAULT_RECENT_WEIGHT = 0.8  # pedido explícito: más peso a la data reciente (activa) que a la archivada
 
+# Mismos bordes que `models/volatility/sports/tennis/tennis_markov.py::_RANK_BUCKETS`
+# -- duplicados a propósito (mismo criterio que
+# `outer_apis/sports/tennis/serve_stats.py`: este módulo no depende del
+# paquete `models/`, cada uno mantiene su propia copia literal).
+_RANK_BUCKETS: list[tuple[int, int]] = [
+    (1, 10), (11, 20), (21, 50), (51, 100), (101, 200), (201, 100_000),
+]
+
+
+def _bucket_for_rank(rank: int) -> tuple[int, int]:
+    for lo, hi in _RANK_BUCKETS:
+        if lo <= rank <= hi:
+            return (lo, hi)
+    return _RANK_BUCKETS[-1] if rank > _RANK_BUCKETS[-1][1] else _RANK_BUCKETS[0]
+
 
 def _match_volatility(prices: list[float]) -> float | None:
     """Desviación estándar poblacional del camino de precio real de UN
@@ -46,7 +61,30 @@ def _match_volatility(prices: list[float]) -> float | None:
     return variance ** 0.5
 
 
-def _mean_observed_volatility(match_model, tick_model, surface: str | None, tour: str | None) -> dict[str, Any] | None:
+def _matchup_buckets_match(match, fav_bucket: tuple[int, int] | None, dog_bucket: tuple[int, int] | None) -> bool:
+    """True si el partido histórico `match` tiene una favorita (menor
+    ranking numérico = mejor) en `fav_bucket` y una no-favorita en
+    `dog_bucket` -- o si no se pidió filtro de bucket (None), en cuyo
+    caso siempre matchea. Fail-closed: un partido sin ranking guardado
+    para alguno de los 2 jugadores nunca matchea un filtro de bucket
+    (nunca se asume un nivel que no se registró)."""
+    if fav_bucket is None and dog_bucket is None:
+        return True
+    ra, rb = match.player_a_rank_at_match, match.player_b_rank_at_match
+    if ra is None or rb is None:
+        return False
+    fav_rank, dog_rank = (ra, rb) if ra <= rb else (rb, ra)
+    if fav_bucket is not None and _bucket_for_rank(fav_rank) != fav_bucket:
+        return False
+    if dog_bucket is not None and _bucket_for_rank(dog_rank) != dog_bucket:
+        return False
+    return True
+
+
+def _mean_observed_volatility(
+    match_model, tick_model, surface: str | None, tour: str | None,
+    fav_bucket: tuple[int, int] | None = None, dog_bucket: tuple[int, int] | None = None,
+) -> dict[str, Any] | None:
     query = match_model.select().where(match_model.winner.is_null(False))  # solo partidos ya resueltos
     if surface:
         query = query.where(match_model.surface == surface)
@@ -55,6 +93,8 @@ def _mean_observed_volatility(match_model, tick_model, surface: str | None, tour
 
     volatilities: list[float] = []
     for match in query:
+        if not _matchup_buckets_match(match, fav_bucket, dog_bucket):
+            continue
         prices = [
             t.market_price_a for t in
             tick_model.select().where(tick_model.match == match)
@@ -73,24 +113,33 @@ def _mean_observed_volatility(match_model, tick_model, surface: str | None, tour
     }
 
 
-def get_recent_observed_volatility(surface: str | None = None, tour: str | None = None) -> dict[str, Any] | None:
+def get_recent_observed_volatility(
+    surface: str | None = None, tour: str | None = None,
+    fav_bucket: tuple[int, int] | None = None, dog_bucket: tuple[int, int] | None = None,
+) -> dict[str, Any] | None:
     """Volatilidad observada real, SOLO de la DB activa ("data nueva")."""
     init_db_historical()
-    return _mean_observed_volatility(TennisScannedMatch, TennisMatchProbabilityTick, surface, tour)
+    return _mean_observed_volatility(TennisScannedMatch, TennisMatchProbabilityTick, surface, tour, fav_bucket, dog_bucket)
 
 
-def get_archived_observed_volatility(surface: str | None = None, tour: str | None = None) -> dict[str, Any] | None:
+def get_archived_observed_volatility(
+    surface: str | None = None, tour: str | None = None,
+    fav_bucket: tuple[int, int] | None = None, dog_bucket: tuple[int, int] | None = None,
+) -> dict[str, Any] | None:
     """Volatilidad observada real, SOLO de la DB de archivo ("data
     histórica"). Fail-closed: None si el disco externo no está montado."""
     try:
         _ensure_archive_db_initialized()
     except ArchiveNotMountedError:
         return None
-    return _mean_observed_volatility(ArchivedTennisScannedMatch, ArchivedTennisMatchProbabilityTick, surface, tour)
+    return _mean_observed_volatility(
+        ArchivedTennisScannedMatch, ArchivedTennisMatchProbabilityTick, surface, tour, fav_bucket, dog_bucket,
+    )
 
 
 def get_weighted_observed_volatility(
     surface: str | None = None, tour: str | None = None, recent_weight: float = DEFAULT_RECENT_WEIGHT,
+    fav_bucket: tuple[int, int] | None = None, dog_bucket: tuple[int, int] | None = None,
 ) -> dict[str, Any] | None:
     """Combina data reciente (activa) + histórica (archivada), dándole
     más peso a la reciente (`recent_weight`, default 0.8 -- NO es un
@@ -104,8 +153,8 @@ def get_weighted_observed_volatility(
     suficiente. Si solo una fuente tiene datos, se devuelve esa sola
     (documentado en `sources_used`), sin fabricar una combinación con una
     fuente inexistente."""
-    recent = get_recent_observed_volatility(surface, tour)
-    archived = get_archived_observed_volatility(surface, tour)
+    recent = get_recent_observed_volatility(surface, tour, fav_bucket, dog_bucket)
+    archived = get_archived_observed_volatility(surface, tour, fav_bucket, dog_bucket)
 
     if recent is None and archived is None:
         return None
@@ -122,3 +171,33 @@ def get_weighted_observed_volatility(
         "recent_weight": recent_weight,
         "sources_used": "both",
     }
+
+
+def get_empirical_volatility_for_matchup(
+    rank_a: int | None, rank_b: int | None, surface: str | None, tour: str | None,
+) -> dict[str, Any] | None:
+    """Punto de entrada pensado para `TennisVModel` (2026-07-31, pedido
+    explícito del usuario: usar los datos tick-by-tick + stats de los
+    jugadores -- ranking al momento del partido -- para calcular
+    volatilidad histórica real en vez de/además de la simulación Monte
+    Carlo). Arma el bucket de favorita/no-favorita del NUEVO partido a
+    partir de `rank_a`/`rank_b` y busca la volatilidad real observada en
+    partidos históricos con el mismo (tour, superficie, bucket
+    favorita, bucket no-favorita).
+
+    Fail-closed: None si falta cualquier dato de entrada, o si no hay
+    `MIN_MATCHES_FOR_STAT` partidos históricos reales con ese perfil
+    exacto -- el llamador (TennisVModel) debe caer a la simulación en
+    ese caso, nunca inventar un número."""
+    if not isinstance(rank_a, int) or isinstance(rank_a, bool) or rank_a <= 0:
+        return None
+    if not isinstance(rank_b, int) or isinstance(rank_b, bool) or rank_b <= 0:
+        return None
+    if not surface or tour not in ("ATP", "WTA"):
+        return None
+
+    fav_rank, dog_rank = (rank_a, rank_b) if rank_a <= rank_b else (rank_b, rank_a)
+    fav_bucket = _bucket_for_rank(fav_rank)
+    dog_bucket = _bucket_for_rank(dog_rank)
+
+    return get_weighted_observed_volatility(surface=surface, tour=tour, fav_bucket=fav_bucket, dog_bucket=dog_bucket)

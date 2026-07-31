@@ -4,7 +4,22 @@ heuristic used by the other sports (see `_base.py`) — tennis is the one
 sport in this package with a mathematically tractable scoring structure
 (game/set/match derived analytically from p_serve), so it gets a dedicated
 model rather than sharing `_SportVModelBase`.
-"""
+
+EMPIRICAL VOLATILITY (2026-07-31, pedido explícito del usuario): con
+`TennisScannedMatch`/`TennisMatchProbabilityTick` (ver
+`database/historical/tennis/matchtracking.py` y el worker
+`tennis_match_tick_worker.py`) ya registrando TODO partido escaneado con
+su camino de precio real tick-by-tick, ahora se puede calcular
+volatilidad HISTÓRICA REAL (no simulada) para partidos con perfil similar
+(mismo tour+superficie+bucket de ranking favorita/no-favorita, ver
+`outer_apis/sports/tennis/volatility_calibration.py`), en vez de asumir
+siempre la simulación Markov/Monte Carlo.
+
+Se intenta PRIMERO el camino empírico; si no hay `MIN_MATCHES_FOR_STAT`
+partidos históricos reales con ese perfil exacto (fail-closed, esperable
+casi siempre al principio -- la colección de ticks recién arrancó
+2026-07-31), cae a la simulación de siempre, sin cambios. Nunca deja de
+producir un número por falta de historia real."""
 
 from models.volatility import safe_price, clamp01
 from .tennis_markov import p_serve_for_rank, simulate_win_prob_volatility
@@ -41,8 +56,30 @@ class TennisVModel:
         # falls back to the generic static placeholder rather than
         # guessing which tour's curve applies.
         tour = market.get("tour")
+        surface = market.get("surface")
 
-        pa_serve = p_serve_for_rank(rank_a, tour=tour)
-        pb_serve = p_serve_for_rank(rank_b, tour=tour)
+        empirical = self._empirical_volatility(rank_a, rank_b, surface, tour)
+        if empirical is not None:
+            return clamp01(empirical)
+
+        # Bug real encontrado y arreglado 2026-07-31: esta llamada nunca
+        # pasaba `surface` pese a que p_serve_for_rank ya lo soporta desde
+        # el 2026-07-30 (fallback surface -> tour-genérico -> estático) --
+        # quedó desalineada al extender esa firma. Ahora sí se pasa.
+        pa_serve = p_serve_for_rank(rank_a, tour=tour, surface=surface)
+        pb_serve = p_serve_for_rank(rank_b, tour=tour, surface=surface)
         volatility = simulate_win_prob_volatility(pa_serve, pb_serve, best_of=best_of)
         return clamp01(volatility)
+
+    @staticmethod
+    def _empirical_volatility(rank_a: int, rank_b: int, surface: str | None, tour: str | None) -> float | None:
+        """Fail-closed a None ante CUALQUIER problema (incluida la
+        importación misma, que toca DB) -- la volatilidad simulada nunca
+        debe dejar de calcularse por un fallo en la consulta empírica."""
+        try:
+            from outer_apis.sports.tennis.volatility_calibration import get_empirical_volatility_for_matchup
+
+            result = get_empirical_volatility_for_matchup(rank_a, rank_b, surface, tour)
+            return result["mean_volatility"] if result is not None else None
+        except Exception:
+            return None
