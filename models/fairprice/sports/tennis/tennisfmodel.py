@@ -105,6 +105,14 @@ STYLE_PEER_GROUP_WEIGHT = 0.10
 # un número derivado de datos.
 INJURY_RISK_DISCOUNT = 0.05
 
+# Avance de rondas en el torneo actual (2026-08-01, pedido explícito del
+# usuario -- "el ranking puede ser engañoso, el avance de rondas
+# demuestra que el nivel va mejorando"). Peso modesto: es una muestra muy
+# chica (partidos de ESTA semana, típicamente 0-4 rondas) y parcialmente
+# correlacionada con yElo/forma de temporada ya blended -- no calibrado,
+# igual que el resto.
+TOURNAMENT_MOMENTUM_WEIGHT = 0.10
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -150,6 +158,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
         fair_a = self._blend_style_peer_group(fair_a, market)
         fair_a = self._apply_injury_risk_discount(fair_a, market)
+        fair_a = self._blend_tournament_momentum(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -418,3 +427,28 @@ class TennisFModel(_SportFModel):
         discount_a = INJURY_RISK_DISCOUNT if (risk_a and risk_a.get('flagged')) else 0.0
         discount_b = INJURY_RISK_DISCOUNT if (risk_b and risk_b.get('flagged')) else 0.0
         return clamp01(fair_a - discount_a + discount_b)
+
+    @staticmethod
+    def _blend_tournament_momentum(fair_a: float, market: dict) -> float:
+        """Rondas ganadas SEGUIDAS en el torneo actual, como proxy de
+        forma reciente independiente del ranking (ver
+        outer_apis/sports/tennis/tournament_momentum.py). Fail-closed:
+        requiere `tournament` conocido Y ambos nombres, si no matchea o
+        no hay datos reales de ninguno de los 2, no ajusta nada."""
+        tournament = market.get('tournament')
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not tournament or not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.tournament_momentum import (
+            get_current_tournament_round_wins, get_momentum_implied_win_prob,
+        )
+
+        rounds_a = get_current_tournament_round_wins(name_a, tournament)
+        rounds_b = get_current_tournament_round_wins(name_b, tournament)
+        momentum_implied_a = get_momentum_implied_win_prob(rounds_a, rounds_b)
+        if momentum_implied_a is None:
+            return fair_a
+
+        return (1 - TOURNAMENT_MOMENTUM_WEIGHT) * fair_a + TOURNAMENT_MOMENTUM_WEIGHT * momentum_implied_a

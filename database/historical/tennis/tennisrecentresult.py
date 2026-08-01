@@ -28,4 +28,12 @@ class TennisRecentResult(HistoricalBaseModel):
     opponent_name = CharField()
     subject_won = BooleanField()
     retired_or_walkover = BooleanField()  # True SOLO si el sujeto (no el rival) se retiró/no se presentó
+    # Agregado 2026-08-01 (pedido explícito del usuario -- "avance de
+    # rondas" como señal de forma actual, ver
+    # outer_apis/sports/tennis/tournament_momentum.py). Columna nueva
+    # sobre tabla ya existente -- requiere ALTER TABLE manual, ver
+    # database/db.py::init_db_historical. Texto crudo de Tennis Abstract
+    # ("R32", "QF", "SF", "F", etc.), nullable para filas de antes de este
+    # cambio.
+    round = CharField(null=True)
     fetched_at = DateTimeField()

@@ -252,3 +252,4 @@ def init_db_historical() -> None:
     # ya existiera en producción -- create_tables(safe=True) no la agrega
     # sola, ver _add_column_if_missing arriba.
     _add_column_if_missing(db_historical, "tennis_scanned_match", "tournament", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "tennis_recent_result", "round", "VARCHAR(255)")

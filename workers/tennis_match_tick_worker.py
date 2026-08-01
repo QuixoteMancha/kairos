@@ -46,6 +46,7 @@ def _rebuild_market_dict(scanned: dict, market_a: dict | None, market_b: dict | 
         "player_b_name": scanned["player_b_name"],
         "tour": scanned["tour"],
         "surface": scanned["surface"],
+        "tournament": scanned.get("tournament"),
         "best_of": scanned["best_of"],
     }
 

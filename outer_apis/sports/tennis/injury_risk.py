@@ -20,24 +20,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from database.historical.tennis.writer import get_recent_results, save_recent_results
-from outer_apis.scrapers.tennis import tennisabstract_player_scraper
+from outer_apis.sports.tennis.recent_results_cache import fetch_and_cache as _fetch_and_cache
 
 INJURY_LOOKBACK_DAYS = 45  # ventana en la que un retiro/walkover real se considera "riesgo vigente"
-
-
-def _fetch_and_cache(player_name: str) -> list[dict[str, Any]]:
-    cached = get_recent_results(player_name)
-    if cached is not None:
-        return cached
-
-    try:
-        rows = tennisabstract_player_scraper.get_recent_results(player_name)
-    except Exception:
-        rows = []
-    if rows:
-        save_recent_results(player_name, rows)
-    return rows
 
 
 def get_injury_risk_flag(player_name: str, lookback_days: int = INJURY_LOOKBACK_DAYS) -> dict[str, Any] | None:

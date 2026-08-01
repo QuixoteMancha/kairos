@@ -126,7 +126,7 @@ def get_open_scanned_matches(max_age_days: float = 3.0) -> list[dict[str, Any]]:
         return [
             {
                 "market_id": r.market_id, "ticker_a": r.ticker_a, "ticker_b": r.ticker_b,
-                "tour": r.tour, "surface": r.surface,
+                "tour": r.tour, "surface": r.surface, "tournament": r.tournament,
                 "player_a_name": r.player_a_name, "player_b_name": r.player_b_name,
                 "player_a_rank": r.player_a_rank_at_match, "player_b_rank": r.player_b_rank_at_match,
                 "best_of": r.best_of, "close_time": r.close_time,

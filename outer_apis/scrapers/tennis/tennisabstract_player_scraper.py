@@ -212,9 +212,13 @@ def get_recent_results(player_name: str, n: int = 15) -> list[dict[str, Any]]:
     walkover de Svitolina el 2026-06-21 en Bad Homburg).
 
     Returns:
-        Lista de {"date" (ISO), "tournament", "opponent", "subject_won",
-        "retired_or_walkover"} -- más reciente primero (mismo orden que
-        Tennis Abstract lo publica).
+        Lista de {"date" (ISO), "tournament", "round", "opponent",
+        "subject_won", "retired_or_walkover"} -- más reciente primero
+        (mismo orden que Tennis Abstract lo publica). `round` (2026-08-01,
+        pedido explícito del usuario -- "avance de rondas" como señal de
+        forma actual, ver outer_apis/sports/tennis/tournament_momentum.py)
+        es el texto crudo tal como lo publica Tennis Abstract ("R32",
+        "QF", "SF", "F", etc.), sin normalizar acá.
         Fail-closed: se saltea cualquier fila sin resultado todavía
         (partido programado/en curso, sin "d." en el texto) o sin fecha
         parseable -- nunca fabrica un resultado."""
@@ -234,6 +238,7 @@ def get_recent_results(player_name: str, n: int = 15) -> list[dict[str, Any]]:
 
         date = _parse_date(_clean_cell(cells_raw[0]))
         tournament = _clean_cell(cells_raw[1])
+        round_name = _clean_cell(cells_raw[3])
         matchup_html = cells_raw[6]
         score = _clean_cell(cells_raw[7])
 
@@ -258,8 +263,8 @@ def get_recent_results(player_name: str, n: int = 15) -> list[dict[str, Any]]:
         retired_or_walkover = (not subject_won) and bool(re.search(r"\bRET\b|\bW/?O\b", score.upper()))
 
         result.append({
-            "date": date, "tournament": tournament, "opponent": opponent,
-            "subject_won": subject_won, "retired_or_walkover": retired_or_walkover,
+            "date": date, "tournament": tournament, "round": round_name or None,
+            "opponent": opponent, "subject_won": subject_won, "retired_or_walkover": retired_or_walkover,
         })
         if len(result) >= n:
             break

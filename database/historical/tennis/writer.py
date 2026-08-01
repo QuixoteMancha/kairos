@@ -785,7 +785,7 @@ def save_recent_results(player_name: str, rows: list[dict[str, Any]]) -> None:
                 continue
             TennisRecentResult.create(
                 player_name=player_name, match_date=date, tournament=r.get("tournament"),
-                opponent_name=opponent, subject_won=r.get("subject_won", False),
+                round=r.get("round"), opponent_name=opponent, subject_won=r.get("subject_won", False),
                 retired_or_walkover=r.get("retired_or_walkover", False), fetched_at=fetched_at,
             )
     except Exception:
@@ -821,7 +821,8 @@ def get_recent_results(player_name: str, max_age_hours: float = _TA_RECENT_RESUL
         )
         return [
             {
-                "date": r.match_date, "tournament": r.tournament, "opponent": r.opponent_name,
+                "date": r.match_date, "tournament": r.tournament, "round": r.round,
+                "opponent": r.opponent_name,
                 "subject_won": r.subject_won, "retired_or_walkover": r.retired_or_walkover,
             }
             for r in rows
