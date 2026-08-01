@@ -101,6 +101,33 @@ def test_populate_weather_handles_partial_fetch_failure():
     assert all(r.temperature_c is None for r in rows)
 
 
+def test_create_weather_row_retries_on_database_locked():
+    """Bug real de producción 2026-08-01: contención de escritura con
+    otros workers (tick worker/archivador) sobre la misma DB histórica."""
+    import peewee
+    from outer_apis.sports.tennis.match_weather import _create_weather_row_with_retry
+
+    m = _make_match("MLOCK", "Washington")
+    call_count = {"n": 0}
+    real_create = TennisMatchWeather.create
+
+    def flaky_create(**kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise peewee.OperationalError("database is locked")
+        return real_create(**kwargs)
+
+    with patch("outer_apis.sports.tennis.match_weather.TennisMatchWeather.create", side_effect=flaky_create), \
+         patch("outer_apis.sports.tennis.match_weather.time.sleep"):
+        _create_weather_row_with_retry(
+            match=m, phase="before", observed_at=datetime.now(timezone.utc),
+            temperature_c=20.0, humidity_pct=50.0, wind_kmh=5.0, fetched_at=datetime.now(timezone.utc),
+        )
+
+    assert call_count["n"] == 3
+    assert TennisMatchWeather.select().where(TennisMatchWeather.match == m).count() == 1
+
+
 def test_populate_weather_for_all_resolved_matches_aggregate():
     _make_match("M6", "Washington")
     _make_match("M7", "Unknown Tourney")

@@ -24,8 +24,11 @@ clave)."""
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any
+
+import peewee
 
 from database.db import init_db_historical
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
@@ -35,8 +38,31 @@ from outer_apis.scrapers.tennis.tournament_location import get_location
 from outer_apis.scrapers.weather import open_meteo
 
 
+_DB_LOCK_RETRIES = 3
+_DB_LOCK_RETRY_DELAY_S = 0.5
+
+
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _create_weather_row_with_retry(**kwargs) -> None:
+    """Bug real encontrado en producción 2026-08-01: `TennisMatchWeather`
+    vive en `db_historical`, la misma DB que escriben concurrentemente
+    `tennis_match_tick_worker` y `tennis_history_archiver_worker` -- bajo
+    carga, SQLite (incluso en WAL) puede devolver "database is locked"
+    para una escritura puntual que compite con otro proceso. Reintenta
+    unas pocas veces con un delay corto antes de darse por vencido -- la
+    alternativa (dejar que la excepción se propague) descartaba filas de
+    clima real por una contención transitoria, no por un fallo real."""
+    for attempt in range(_DB_LOCK_RETRIES):
+        try:
+            TennisMatchWeather.create(**kwargs)
+            return
+        except peewee.OperationalError as e:
+            if "database is locked" not in str(e) or attempt == _DB_LOCK_RETRIES - 1:
+                raise
+            time.sleep(_DB_LOCK_RETRY_DELAY_S * (attempt + 1))
 
 
 def _phase_timestamps(match: TennisScannedMatch) -> dict[str, datetime] | None:
@@ -98,7 +124,7 @@ def populate_weather_for_match(match: TennisScannedMatch) -> dict[str, Any]:
             continue
 
         weather = open_meteo.get_weather_at(lat, lon, when)
-        TennisMatchWeather.create(
+        _create_weather_row_with_retry(
             match=match, phase=phase, observed_at=when,
             temperature_c=(weather or {}).get("temperature_c"),
             humidity_pct=(weather or {}).get("humidity_pct"),
