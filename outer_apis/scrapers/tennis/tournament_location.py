@@ -15,6 +15,7 @@ from __future__ import annotations
 # extract_tournament_name() de ese módulo.
 _LOCATION_BY_TOURNAMENT: dict[str, tuple[float, float]] = {
     "washington": (38.9072, -77.0369),
+    "memphis": (35.1495, -90.0490),
     "los cabos": (22.8905, -109.9167),
     "citi open": (38.9072, -77.0369),
     "canadian open": (43.6532, -79.3832),

@@ -26,6 +26,7 @@ import re
 _SURFACE_BY_TOURNAMENT: dict[str, str] = {
     # Hard court (temporada norteamericana de verano / indoor)
     "washington": "Hard",
+    "memphis": "Hard",
     "los cabos": "Hard",
     "citi open": "Hard",
     "canadian open": "Hard",
