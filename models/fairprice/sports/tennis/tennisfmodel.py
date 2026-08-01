@@ -95,6 +95,16 @@ TENNISABSTRACT_CAREER_SURFACE_WEIGHT = 0.10
 # vacío/chico al principio).
 STYLE_PEER_GROUP_WEIGHT = 0.10
 
+# Descuento FIJO (no un blend logístico como el resto) si un jugador
+# tuvo un retiro/no-presentación real dentro de los últimos 45 días
+# (2026-07-31, pedido explícito del usuario -- caso real: Svitolina con
+# lesión de cadera confirmada). Deliberadamente chico y sin calibrar --
+# no hay forma honesta de saber "cuántos puntos vale" un walkover de
+# hace 3 semanas sin datos reales de cuántos partidos post-lesión se
+# ganan/pierden. Es una heurística de riesgo, documentada como tal, no
+# un número derivado de datos.
+INJURY_RISK_DISCOUNT = 0.05
+
 
 class TennisFModel(_SportFModel):
     """Fail-closed: if player_a_rank/player_b_rank aren't present/valid
@@ -139,6 +149,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_tennisabstract_season_form(fair_a, market)
         fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
         fair_a = self._blend_style_peer_group(fair_a, market)
+        fair_a = self._apply_injury_risk_discount(fair_a, market)
 
         fair_a = clamp01(fair_a)
         return {'fair_a_price': fair_a, 'fair_b_price': 1.0 - fair_a}
@@ -381,3 +392,29 @@ class TennisFModel(_SportFModel):
 
         peer_implied_a = clamp01(0.5 + (stat_a['win_rate'] - stat_b['win_rate']) / 2)
         return (1 - STYLE_PEER_GROUP_WEIGHT) * fair_a + STYLE_PEER_GROUP_WEIGHT * peer_implied_a
+
+    @staticmethod
+    def _apply_injury_risk_discount(fair_a: float, market: dict) -> float:
+        """Descuento fijo (no un blend) si alguno de los 2 jugadores tuvo
+        un retiro/no-presentación real en los últimos 45 días (ver
+        outer_apis/sports/tennis/injury_risk.py). Si AMBOS lo tuvieron,
+        los descuentos se cancelan (ninguno tiene ventaja relativa por
+        esto). Fail-closed: sin nombres, o sin datos reales de ninguno de
+        los 2 (`get_injury_risk_flag` devuelve None), no ajusta nada --
+        None es explícitamente distinto de {"flagged": False}, que sí es
+        una respuesta real de "sin evidencia de lesión reciente"."""
+        name_a = market.get('player_a_name')
+        name_b = market.get('player_b_name')
+        if not name_a or not name_b:
+            return fair_a
+
+        from outer_apis.sports.tennis.injury_risk import get_injury_risk_flag
+
+        risk_a = get_injury_risk_flag(name_a)
+        risk_b = get_injury_risk_flag(name_b)
+        if risk_a is None and risk_b is None:
+            return fair_a
+
+        discount_a = INJURY_RISK_DISCOUNT if (risk_a and risk_a.get('flagged')) else 0.0
+        discount_b = INJURY_RISK_DISCOUNT if (risk_b and risk_b.get('flagged')) else 0.0
+        return clamp01(fair_a - discount_a + discount_b)

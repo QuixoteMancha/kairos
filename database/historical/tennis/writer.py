@@ -488,6 +488,7 @@ def get_current_tennisabstract_yelo(tour: str, max_age_hours: float = _TA_ELO_FR
 
 
 from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
+from database.historical.tennis.tennisrecentresult import TennisRecentResult
 
 _TA_PLAYER_STATS_FRESHNESS_HOURS = 24 * 7  # 1 semana -- career splits/H2H cambian muy lento partido a partido
 
@@ -719,3 +720,73 @@ def get_all_surface_matches(player_name: str, surface: str, lookback_days: float
         ]
     except Exception:
         return []
+
+
+_TA_RECENT_RESULTS_FRESHNESS_HOURS = 24  # 1 día -- señal de lesión debe estar razonablemente al día, no 1 semana
+
+
+def save_recent_results(player_name: str, rows: list[dict[str, Any]]) -> None:
+    """Dedupe por (player_name, match_date, opponent_name) -- un partido
+    real no cambia una vez jugado, evita duplicar en cada refresh."""
+    if not rows:
+        return
+    try:
+        init_db_historical()
+        fetched_at = _now()
+        for r in rows:
+            date = r.get("date")
+            opponent = r.get("opponent")
+            if not date or not opponent:
+                continue
+            exists = TennisRecentResult.select().where(
+                (TennisRecentResult.player_name == player_name)
+                & (TennisRecentResult.match_date == date)
+                & (TennisRecentResult.opponent_name == opponent)
+            ).exists()
+            if exists:
+                continue
+            TennisRecentResult.create(
+                player_name=player_name, match_date=date, tournament=r.get("tournament"),
+                opponent_name=opponent, subject_won=r.get("subject_won", False),
+                retired_or_walkover=r.get("retired_or_walkover", False), fetched_at=fetched_at,
+            )
+    except Exception:
+        pass
+
+
+def get_recent_results(player_name: str, max_age_hours: float = _TA_RECENT_RESULTS_FRESHNESS_HOURS) -> list[dict[str, Any]] | None:
+    """DB-first, frescura POR JUGADOR. Fail-closed: None si no hay filas
+    para este jugador o la más reciente está stale (fuerza fetch en vivo)."""
+    try:
+        init_db_historical()
+        latest = (
+            TennisRecentResult
+            .select(TennisRecentResult.fetched_at)
+            .where(TennisRecentResult.player_name == player_name)
+            .order_by(TennisRecentResult.fetched_at.desc())
+            .limit(1)
+            .first()
+        )
+        if latest is None:
+            return None
+        fetched_at = latest.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
+            return None
+
+        rows = (
+            TennisRecentResult
+            .select()
+            .where(TennisRecentResult.player_name == player_name)
+            .order_by(TennisRecentResult.match_date.desc())
+        )
+        return [
+            {
+                "date": r.match_date, "tournament": r.tournament, "opponent": r.opponent_name,
+                "subject_won": r.subject_won, "retired_or_walkover": r.retired_or_walkover,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return None

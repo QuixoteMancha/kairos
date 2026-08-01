@@ -232,7 +232,7 @@ def init_db_historical() -> None:
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
-        TennisScannedMatch, TennisMatchProbabilityTick,
+        TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
     )
 
     db_historical.connect(reuse_if_open=True)
@@ -241,6 +241,6 @@ def init_db_historical() -> None:
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
-        TennisScannedMatch, TennisMatchProbabilityTick,
+        TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TeamMatchHistory, TeamHeadToHead,
     ], safe=True)
