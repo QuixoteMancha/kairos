@@ -26,11 +26,29 @@ from database.historical.tennis.matchtracking import (
     get_open_scanned_matches, save_probability_tick, mark_match_settled,
 )
 from models.fairprice.sports.tennis.tennisfmodel import TennisFModel
+from outer_apis.sports.tennis.match_history import set_fetch_allowlist
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
 
 _fmodel = TennisFModel()
+
+# BUG REAL encontrado y corregido 2026-08-01 (reportado por el usuario:
+# "siguen habiendo muchos requests al proxy"): `match_history._fetch_allowlist`
+# es una variable global A NIVEL DE PROCESO -- `engine.py` la fija en cada
+# ciclo de scan (contenedor `kairos`), pero este worker corre en un
+# contenedor SEPARADO con su propia copia en None (default = sin
+# restricción). Como este worker llama `TennisFModel.calculate_fair_price`
+# para los ~55 partidos abiertos cada 60s, terminaba disparando fetch en
+# vivo para CUALQUIER jugador con caché stale (post 00:00 GMT), sin
+# importar si su partido era nuevo -- anulando por completo el filtro de
+# "solo fetch para partidos nuevos" pedido explícitamente por el usuario
+# (ver database/historical/tennis/matchtracking.py::filter_new_markets).
+# Fijar la allowlist vacía UNA VEZ al arrancar el proceso: este worker
+# nunca debe autorizar fetch en vivo -- su fair_a es "best effort" con lo
+# que ya esté cacheado, el fetch real es responsabilidad exclusiva del
+# ciclo de engine.py.
+set_fetch_allowlist(set())
 
 
 def _rebuild_market_dict(scanned: dict, market_a: dict | None, market_b: dict | None) -> dict:
