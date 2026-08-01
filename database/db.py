@@ -233,6 +233,7 @@ def init_db_historical() -> None:
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
+        TennisMatchWeather,
     )
 
     db_historical.connect(reuse_if_open=True)
@@ -242,5 +243,12 @@ def init_db_historical() -> None:
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
+        TennisMatchWeather,
         TeamMatchHistory, TeamHeadToHead,
     ], safe=True)
+
+    # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):
+    # `tournament` se agregó a TennisScannedMatch DESPUÉS de que la tabla
+    # ya existiera en producción -- create_tables(safe=True) no la agrega
+    # sola, ver _add_column_if_missing arriba.
+    _add_column_if_missing(db_historical, "tennis_scanned_match", "tournament", "VARCHAR(255)")

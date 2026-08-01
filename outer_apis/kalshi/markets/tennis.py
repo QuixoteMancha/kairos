@@ -34,7 +34,7 @@ import unicodedata
 from typing import Any
 
 from outer_apis.sports.tennis import rankings as tennis_rankings
-from outer_apis.scrapers.tennis.tournament_surface import surface_from_rules_secondary
+from outer_apis.scrapers.tennis.tournament_surface import surface_from_rules_secondary, extract_tournament_name
 
 _RANKING_LOOKUP_DEPTH = 500
 _FUZZY_MATCH_CUTOFF = 0.85
@@ -128,11 +128,18 @@ def build_tennis_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         # tournament_surface.py. Fail-closed: None si el torneo no está en
         # la tabla -- TennisFModel debe tratarlo como "desconocida", nunca
         # asumir una superficie por default.
-        surface = surface_from_rules_secondary(legs[0]["raw"].get("rules_secondary"))
+        rules_secondary = legs[0]["raw"].get("rules_secondary")
+        surface = surface_from_rules_secondary(rules_secondary)
+        # Nombre de torneo (2026-08-01, pedido explícito del usuario --
+        # necesario para el clima real del partido, ver
+        # outer_apis/sports/tennis/match_weather.py). Mismo extractor que
+        # ya usa surface_from_rules_secondary internamente.
+        tournament = extract_tournament_name(rules_secondary)
 
         result.append({
             "id": event_ticker,
             "type": "tennis",
+            "tournament": tournament,
             "current_a_price": legs[0]["current_a_price"],
             "current_b_price": legs[1]["current_a_price"],
             # Cross-ticket: each leg is its own Kalshi market/ticker (see

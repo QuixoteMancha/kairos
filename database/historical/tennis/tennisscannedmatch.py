@@ -42,6 +42,15 @@ class TennisScannedMatch(HistoricalBaseModel):
     ticker_b = CharField()
     tour = CharField()  # "ATP" | "WTA"
     surface = CharField(null=True)  # None si el torneo no se reconoció, ver tournament_surface.py
+    # Agregado 2026-08-01 (pedido explícito del usuario, para clima real
+    # del partido, ver outer_apis/sports/tennis/match_weather.py). Columna
+    # nueva sobre una tabla ya existente -- requiere ALTER TABLE manual
+    # (Peewee's create_tables(safe=True) NO agrega columnas a tablas ya
+    # creadas, ver database/db.py::init_db_historical docstring), no
+    # alcanza con solo declararla acá. Nullable: filas de antes de este
+    # cambio quedan con tournament=None, fail-closed (nunca se adivina el
+    # torneo de una fila vieja).
+    tournament = CharField(null=True)
     player_a_name = CharField()
     player_b_name = CharField()
     player_a_rank_at_match = IntegerField(null=True)

@@ -45,7 +45,8 @@ def register_scanned_match(market: dict[str, Any]) -> None:
             return
         TennisScannedMatch.create(
             market_id=market_id, ticker_a=ticker_a, ticker_b=ticker_b, tour=tour,
-            surface=market.get("surface"), player_a_name=name_a, player_b_name=name_b,
+            surface=market.get("surface"), tournament=market.get("tournament"),
+            player_a_name=name_a, player_b_name=name_b,
             player_a_rank_at_match=market.get("player_a_rank"),
             player_b_rank_at_match=market.get("player_b_rank"),
             best_of=best_of, close_time=market.get("close_time"), detected_at=_now(),

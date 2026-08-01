@@ -30,6 +30,7 @@ from database.historical.tennis.tennisabstractplayerstats import TennisAbstractC
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
 from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
 from database.historical.tennis.tennisrecentresult import TennisRecentResult
+from database.historical.tennis.tennismatchweather import TennisMatchWeather
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled,
@@ -62,4 +63,5 @@ __all__ = [
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
     "save_probability_tick", "mark_match_settled",
     "TennisRecentResult", "save_recent_results", "get_recent_results",
+    "TennisMatchWeather",
 ]
