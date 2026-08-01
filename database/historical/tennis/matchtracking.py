@@ -109,6 +109,43 @@ def save_probability_tick(market_id: str, market_price_a: float | None, model_fa
         pass
 
 
+def backfill_missing_tournaments(fetch_raw_market_fn) -> dict[str, Any]:
+    """Recupera `tournament` para partidos YA registrados ANTES de que
+    esa columna existiera (2026-08-01, pedido explícito del usuario --
+    sin esto, partidos ya resueltos como Osaka/Cocciaretto o Tabilo/
+    Shelton quedarían afuera del poblado de clima para siempre).
+
+    `fetch_raw_market_fn`: función `ticker -> dict crudo de Kalshi | None`
+    (inyectada para no acoplar este módulo de DB a `outer_apis.kalshi.client`
+    directamente, y para poder testear con un fake sin red real) --
+    típicamente `KalshiAPI().get_markets_by_tickers([ticker])[ticker]['raw']`.
+
+    Fail-closed por fila: si el ticker ya no devuelve nada (mercado
+    purgado) o `rules_secondary` no matchea el patrón esperado, esa fila
+    se saltea (queda con `tournament=None`, se puede reintentar después
+    si Kalshi vuelve a servir el dato), nunca se adivina."""
+    from outer_apis.scrapers.tennis.tournament_surface import extract_tournament_name
+
+    init_db_historical()
+    rows = list(TennisScannedMatch.select().where(TennisScannedMatch.tournament.is_null()))
+
+    updated = skipped = 0
+    for row in rows:
+        try:
+            raw = fetch_raw_market_fn(row.ticker_a)
+        except Exception:
+            raw = None
+        tournament = extract_tournament_name((raw or {}).get("rules_secondary")) if raw else None
+        if tournament is None:
+            skipped += 1
+            continue
+        row.tournament = tournament
+        row.save()
+        updated += 1
+
+    return {"total_missing": len(rows), "updated": updated, "skipped": skipped}
+
+
 def mark_match_settled(market_id: str, winner: str) -> None:
     """`winner`: 'a' | 'b'. Fail-closed: no hace nada si `market_id` no
     está registrado, `winner` no es 'a'/'b', o falla la escritura --
