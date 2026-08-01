@@ -55,6 +55,16 @@ _SERIES_TOUR = {
 _BEST_OF = 3
 
 _TITLE_RE = re.compile(r"^Will (.+?) win the .+ match\?$")
+# Ronda del torneo (2026-08-01, pedido explícito del usuario: backtest de
+# "en semifinales/finales el underdog infravalorado converge más" --
+# necesita filtrar por ronda). El título real confirmado en producción:
+# "Will {player} win the {A} vs {B}: {round} match?" -- ej. "... :
+# Semifinal match?". `rules_secondary` también la repite ("... Washington
+# Semifinal"), se usa como fallback si el título no matchea.
+_ROUND_RE = re.compile(r":\s*([\w\s]+?)\s*match\?\s*$")
+_ROUND_FALLBACK_RE = re.compile(
+    r"\b(Final|Semifinal|Quarterfinal|Round of \d+)\b", re.IGNORECASE,
+)
 
 
 def _extract_player_name(raw_market: dict) -> str | None:
@@ -66,6 +76,21 @@ def _extract_player_name(raw_market: dict) -> str | None:
         return sub_title.strip()
     title = raw_market.get("title") or ""
     m = _TITLE_RE.match(title.strip())
+    return m.group(1).strip() if m else None
+
+
+def _extract_round(raw_market: dict) -> str | None:
+    """Ronda del partido ('Semifinal', 'Final', 'Quarterfinal', 'Round of
+    32', etc.), del título real de Kalshi ('Will {player} win the {A} vs
+    {B}: {round} match?'), con fallback a `rules_secondary` si el título
+    no matchea el formato esperado. Fail-closed: None si ninguno matchea
+    -- nunca adivina una ronda."""
+    title = (raw_market.get("title") or "").strip()
+    m = _ROUND_RE.search(title)
+    if m:
+        return m.group(1).strip()
+    rules_secondary = raw_market.get("rules_secondary") or ""
+    m = _ROUND_FALLBACK_RE.search(rules_secondary)
     return m.group(1).strip() if m else None
 
 
@@ -135,11 +160,13 @@ def build_tennis_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         # outer_apis/sports/tennis/match_weather.py). Mismo extractor que
         # ya usa surface_from_rules_secondary internamente.
         tournament = extract_tournament_name(rules_secondary)
+        round_name = _extract_round(legs[0]["raw"])
 
         result.append({
             "id": event_ticker,
             "type": "tennis",
             "tournament": tournament,
+            "round": round_name,
             "current_a_price": legs[0]["current_a_price"],
             "current_b_price": legs[1]["current_a_price"],
             # Cross-ticket: each leg is its own Kalshi market/ticker (see

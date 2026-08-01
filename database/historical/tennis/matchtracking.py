@@ -90,6 +90,7 @@ def register_scanned_match(market: dict[str, Any]) -> None:
         TennisScannedMatch.create(
             market_id=market_id, ticker_a=ticker_a, ticker_b=ticker_b, tour=tour,
             surface=market.get("surface"), tournament=market.get("tournament"),
+            round=market.get("round"),
             player_a_name=name_a, player_b_name=name_b,
             player_a_rank_at_match=market.get("player_a_rank"),
             player_b_rank_at_match=market.get("player_b_rank"),
@@ -184,6 +185,41 @@ def backfill_missing_tournaments(fetch_raw_market_fn) -> dict[str, Any]:
             skipped += 1
             continue
         row.tournament = tournament
+        row.save()
+        updated += 1
+
+    return {"total_missing": len(rows), "updated": updated, "skipped": skipped}
+
+
+def backfill_missing_rounds(fetch_raw_market_fn) -> dict[str, Any]:
+    """Recupera `round` (Semifinal/Final/etc.) para partidos YA
+    registrados ANTES de que esa columna existiera -- mismo patrón que
+    `backfill_missing_tournaments` (2026-08-01, pedido explícito del
+    usuario: backtest de convergencia en semis/finales necesita esta
+    columna para partidos ya trackeados, no solo los nuevos).
+
+    `fetch_raw_market_fn`: función `ticker -> dict crudo de Kalshi | None`
+    (mismo contrato que `backfill_missing_tournaments`).
+
+    Fail-closed por fila: si el ticker ya no devuelve nada (mercado
+    purgado) o el título/rules_secondary no matchea el patrón esperado,
+    esa fila se saltea (queda con `round=None`), nunca se adivina."""
+    from outer_apis.kalshi.markets.tennis import _extract_round
+
+    init_db_historical()
+    rows = list(TennisScannedMatch.select().where(TennisScannedMatch.round.is_null()))
+
+    updated = skipped = 0
+    for row in rows:
+        try:
+            raw = fetch_raw_market_fn(row.ticker_a)
+        except Exception:
+            raw = None
+        round_name = _extract_round(raw) if raw else None
+        if round_name is None:
+            skipped += 1
+            continue
+        row.round = round_name
         row.save()
         updated += 1
 

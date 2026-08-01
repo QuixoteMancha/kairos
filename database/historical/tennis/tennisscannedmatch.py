@@ -51,6 +51,13 @@ class TennisScannedMatch(HistoricalBaseModel):
     # cambio quedan con tournament=None, fail-closed (nunca se adivina el
     # torneo de una fila vieja).
     tournament = CharField(null=True)
+    # Agregado 2026-08-01 (pedido explícito del usuario, para backtest de
+    # "en semifinales/finales el underdog infravalorado converge más" --
+    # ver database/historical/tennis/matchtracking.py::backfill_missing_rounds
+    # y scripts/semifinal_convergence_backtest.py). Misma limitación que
+    # `tournament`: columna nueva sobre tabla ya existente, requiere ALTER
+    # TABLE manual, nullable (filas viejas quedan None, nunca se adivina).
+    round = CharField(null=True)
     player_a_name = CharField()
     player_b_name = CharField()
     player_a_rank_at_match = IntegerField(null=True)

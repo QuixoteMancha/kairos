@@ -36,7 +36,7 @@ from database.historical.tennis.matchstats import has_match_stats, save_match_st
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled, backfill_missing_tournaments,
-    filter_new_markets,
+    backfill_missing_rounds, filter_new_markets,
 )
 from database.historical.tennis.writer import (
     save_recent_results, get_recent_results,
@@ -65,7 +65,7 @@ __all__ = [
     "TennisScannedMatch", "TennisMatchProbabilityTick",
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
     "save_probability_tick", "mark_match_settled", "backfill_missing_tournaments",
-    "filter_new_markets",
+    "backfill_missing_rounds", "filter_new_markets",
     "TennisRecentResult", "save_recent_results", "get_recent_results",
     "TennisMatchWeather",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
