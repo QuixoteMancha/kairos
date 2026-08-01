@@ -20,7 +20,8 @@ class BaseModel(Model):
 class LimitArbSignal(BaseModel):
     """One row per LimitArb opportunity reported (see
     strategies/limit_arb.py). Logged so the price_adjustment regression
-    weights (W_EDGE/W_VOLATILITY, currently fixed initial values 0.4/0.6)
+    weights (W_EDGE/W_VOLATILITY, currently fixed initial values 0.5/0.5
+    as of 2026-08-01, previously 0.4/0.6)
     can eventually be recalibrated against REAL outcomes instead of
     staying hand-picked forever.
 

@@ -63,11 +63,24 @@ from strategies.paper_trading import open_paper_trade
 MIN_VOLATILITY = 0.10
 MIN_RETURN_OPPORTUNITY = 0.02
 
-# Pesos iniciales de la regresión lineal del ajuste de precio de la pata
-# límite. Ver nota de diseño arriba — no calibrados todavía con datos
-# reales, son el punto de partida acordado.
-W_EDGE = 0.4
-W_VOLATILITY = 0.6
+# Fail-closed adicional (2026-08-01, pedido explícito del usuario): sin
+# al menos 2 puntos de diferencia de fair price contra el precio actual
+# de la favorita, no vale la pena armar el plan -- evita señales con edge
+# casi nulo que solo generan ruido/comisiones sin margen real. Distinto
+# de MIN_RETURN_OPPORTUNITY (que filtra sobre el profit total derivado
+# del price_adjustment, no sobre el edge crudo en sí).
+MIN_RAW_EDGE = 0.02
+
+# Pesos de la regresión lineal del ajuste de precio de la pata límite.
+# Cambiados de 0.4/0.6 a 0.5/0.5 el 2026-08-01 (pedido explícito del
+# usuario, verbalizado como "apuntar a la mitad de la volatilidad
+# esperada, promediado con el fair difference" -- exactamente un promedio
+# simple 50/50 en vez de la ponderación anterior). Sigue sin ser un valor
+# CALIBRADO contra resultados reales (ver scripts/calibration_report.py,
+# todavía sin las 50 muestras que necesita) -- es otro punto de partida
+# razonado a mano, documentado como tal.
+W_EDGE = 0.5
+W_VOLATILITY = 0.5
 
 
 class LimitArb:
@@ -180,6 +193,14 @@ class LimitArb:
             return None
 
         raw_edge = abs(fav_price - fav_fair)
+
+        if raw_edge < MIN_RAW_EDGE:
+            # Fail-closed (2026-08-01, pedido explícito del usuario): sin
+            # al menos MIN_RAW_EDGE de diferencia real de fair price, no
+            # se arma plan -- garantiza que las señales que sí pasan
+            # tengan margen real detrás, no solo ruido de precisión del
+            # modelo.
+            return None
 
         # Ajuste de precio vía regresión lineal (ver nota de diseño al
         # inicio del archivo). Acota estructuralmente el profit reportado
