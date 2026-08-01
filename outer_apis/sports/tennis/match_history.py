@@ -60,8 +60,29 @@ from typing import Any
 
 from outer_apis.scrapers.tennis import flashscore_scraper
 from database.historical.tennis.writer import (
-    save_match_history, save_head_to_head_snapshot, get_recent_match_history,
+    save_match_history, save_head_to_head_snapshot, get_recent_match_history, get_any_match_history,
 )
+
+# Allowlist de fetch en vivo (2026-08-01, pedido explícito del usuario):
+# solo hacer fetch de Flashscore para jugadores de partidos NUEVOS
+# detectados vía la API de Kalshi en el scan actual (ver
+# engine.py::run_service, database/historical/tennis/matchtracking.py::
+# filter_new_markets para el trade-off completo). `None` = sin
+# restricción (comportamiento de siempre, usado también por defecto en
+# todos los tests existentes que no configuran la allowlist). Un jugador
+# que NO está en la allowlist nunca toca la red -- se sirve lo último que
+# haya en DB aunque tenga días, o [] si nunca se fetcheó nada de él/ella."""
+_fetch_allowlist: set[str] | None = None
+
+
+def set_fetch_allowlist(names: set[str] | None) -> None:
+    """`None` desactiva la restricción (fetch libre, como antes de
+    2026-08-01). Un `set` (incluso vacío) restringe el fetch en vivo
+    exclusivamente a esos nombres -- pensado para llamarse UNA vez por
+    ciclo de scan, con los jugadores de los partidos nuevos detectados
+    ese ciclo."""
+    global _fetch_allowlist
+    _fetch_allowlist = names
 
 
 # 2026-07-31 (cambio de diseño explícito del usuario): la frescura de
@@ -93,6 +114,13 @@ def _fetch_and_cache(player_name: str) -> list[dict]:
     db_matches = get_recent_match_history(player_name, limit=_MAX_DEPTH)
     if db_matches is not None:
         return db_matches
+
+    if _fetch_allowlist is not None and player_name not in _fetch_allowlist:
+        # No autorizado a fetch en vivo este ciclo (no está en un partido
+        # nuevo, ver set_fetch_allowlist) -- servir lo último que haya en
+        # DB aunque esté stale, en vez de pegarle a Flashscore/BrightData.
+        stale = get_any_match_history(player_name, limit=_MAX_DEPTH)
+        return stale if stale is not None else []
 
     try:
         matches = flashscore_scraper.get_player_recent_matches(player_name, n=_MAX_DEPTH)

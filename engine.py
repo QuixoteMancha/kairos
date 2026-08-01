@@ -2,8 +2,8 @@ from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import build_tennis_markets
-from database.historical.tennis.matchtracking import register_scanned_matches
-from outer_apis.sports.tennis.match_history import prefetch_player_histories
+from database.historical.tennis.matchtracking import register_scanned_matches, filter_new_markets
+from outer_apis.sports.tennis.match_history import prefetch_player_histories, set_fetch_allowlist
 from outer_apis.kalshi.markets.football import build_football_markets
 from outer_apis.kalshi.markets.team_sport import build_team_sport_markets
 
@@ -53,6 +53,18 @@ class Kairos:
             tennis_legs.extend(kalshi_api.get_markets(series_ticker=series))
         tennis_markets = build_tennis_markets(tennis_legs)
 
+        # Detectar cuáles partidos son GENUINAMENTE nuevos (no registrados
+        # todavía) ANTES de registrarlos -- tiene que ser antes, porque
+        # register_scanned_matches es idempotente y después de correrla
+        # ya no se puede distinguir "nuevo" de "ya conocido". Ver
+        # database/historical/tennis/matchtracking.py::filter_new_markets
+        # para el trade-off completo (pedido explícito del usuario
+        # 2026-08-01: solo hacer fetch de Flashscore para partidos nuevos,
+        # no para todos los abiertos -- acepta forma/H2H potencialmente
+        # desactualizada para partidos ya conocidos, a cambio de bajar el
+        # consumo real de BrightData).
+        new_tennis_markets = filter_new_markets(tennis_markets)
+
         # Registro de TODO partido de tenis detectado en este scan, sin
         # importar si LimitArb encuentra edge o no (2026-07-31, pedido
         # explícito del usuario -- ver database/historical/tennis/
@@ -65,18 +77,26 @@ class Kairos:
 
         # Parallel prefetch (thread pool, see outer_apis/tennis_match_history.py):
         # TennisFModel needs Flashscore recent-form/head-to-head data per
-        # player, and Flashscore has no bulk endpoint (one proxied request
-        # per player). Fetching sequentially inside LimitArb's per-market
-        # loop below took several minutes for a full scan; warming the
-        # cache for every tennis player CONCURRENTLY here first means the
-        # per-market fair-price calls that follow hit an already-warm
-        # cache instead of blocking on live fetches one at a time.
+        # player, y Flashscore has no bulk endpoint (one proxied request
+        # per player). SOLO para jugadores de partidos NUEVOS (ver arriba)
+        # -- no para todos los jugadores de todos los partidos abiertos,
+        # pedido explícito del usuario para acotar el consumo de
+        # BrightData. El resto de los partidos (ya conocidos) usan lo que
+        # ya esté cacheado en DB, sin importar su antigüedad.
         tennis_player_names = [
             name
-            for market in tennis_markets
+            for market in new_tennis_markets
             for name in (market.get('player_a_name'), market.get('player_b_name'))
             if name
         ]
+        # Fija la allowlist ANTES de correr LimitArb/TennisFModel más
+        # abajo -- sin esto, los blends de forma reciente/H2H de
+        # TennisFModel igual dispararían un fetch en vivo (secuencial, más
+        # lento pero mismo costo de red) para jugadores de partidos viejos
+        # cuyo caché esté stale, anulando el ahorro de restringir el
+        # prefetch. set_fetch_allowlist(None) al final de este método NO
+        # es necesario -- se reasigna fresca en cada ciclo de scan.
+        set_fetch_allowlist(set(tennis_player_names))
         prefetch_player_histories(tennis_player_names)
 
         football_legs = []

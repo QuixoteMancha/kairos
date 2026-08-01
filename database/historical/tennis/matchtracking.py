@@ -22,6 +22,50 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def filter_new_markets(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Devuelve el subconjunto de `markets` cuyo `market_id` NO está
+    todavía en `TennisScannedMatch` -- pensado para llamarse ANTES de
+    `register_scanned_matches` (que es idempotente y los registraría a
+    todos, dejando esta distinción imposible de hacer después).
+
+    Pedido explícito del usuario (2026-08-01): solo hacer fetch de
+    Flashscore para jugadores de partidos NUEVOS detectados vía la API de
+    Kalshi, no para todos los jugadores de todos los partidos abiertos en
+    cada scan.
+
+    TRADE-OFF DOCUMENTADO (discutido explícitamente con el usuario antes
+    de implementar esto, decisión suya de proceder igual): Kalshi lista
+    partidos con varios días de anticipación -- verificado en producción
+    2026-08-01, de 55 partidos abiertos, 49 ya estaban registrados de
+    días anteriores y solo 6 eran nuevos ese día. Con este filtro, la
+    forma reciente/H2H de esos 49 partidos NO se refresca más una vez
+    que el partido deja de ser "nuevo" -- se congela en el estado del día
+    en que se registró por primera vez, incluso si el partido real es
+    varios días después. Esto reduce el consumo de BrightData
+    significativamente a cambio de fair-price potencialmente desactualizado
+    para partidos ya conocidos pero todavía no jugados. Aceptado
+    explícitamente por el usuario sobre la alternativa (caché diario por
+    jugador, sin importar antigüedad del partido) que sí mantenía todo al
+    día pero coincidía con el gasto real observado (~$1/día).
+
+    Fail-closed: si la consulta a DB falla, devuelve `markets` completo
+    (todos "nuevos") -- ante la duda, prefiere refrescar de más que
+    quedarse con datos frescos por error de un fallo de DB."""
+    try:
+        init_db_historical()
+        market_ids = [m.get("id") for m in markets if m.get("id")]
+        if not market_ids:
+            return []
+        existing_ids = {
+            r.market_id for r in
+            TennisScannedMatch.select(TennisScannedMatch.market_id)
+            .where(TennisScannedMatch.market_id.in_(market_ids))
+        }
+        return [m for m in markets if m.get("id") not in existing_ids]
+    except Exception:
+        return markets
+
+
 def register_scanned_match(market: dict[str, Any]) -> None:
     """Registra UN partido de tenis detectado en el scan, sin importar si
     tiene edge -- idempotente por `market_id` (si ya existe, no hace

@@ -259,6 +259,44 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
         return None
 
 
+def get_any_match_history(player_name: str, limit: int = 40) -> list[dict[str, Any]] | None:
+    """Lee lo que haya en `TennisMatchHistory` para `player_name` SIN
+    ningún chequeo de frescura -- a diferencia de
+    `get_recent_match_history`, esto sirve datos VIEJOS a propósito.
+
+    Usado exclusivamente cuando un jugador no está autorizado a un fetch
+    en vivo hoy (ver `outer_apis/sports/tennis/match_history.py::
+    set_fetch_allowlist`, pedido explícito del usuario 2026-08-01: solo
+    hacer fetch de Flashscore para partidos NUEVOS) -- en ese caso,
+    preferimos servir la última forma/H2H conocida (aunque tenga días) a
+    no tener nada, mientras seguimos siendo honestos en el código sobre
+    que puede estar desactualizada.
+
+    Fail-closed: None si no hay NINGUNA fila para este jugador (nunca
+    hubo un fetch exitoso) -- ahí sí el llamador no tiene nada que servir."""
+    try:
+        init_db_historical()
+        rows = (
+            TennisMatchHistory
+            .select()
+            .where(TennisMatchHistory.player_name == player_name)
+            .order_by(TennisMatchHistory.match_date.desc(), TennisMatchHistory.id.desc())
+            .limit(limit)
+        )
+        rows = list(rows)
+        if not rows:
+            return None
+        return [
+            {
+                "fecha": r.match_date, "oponente": r.opponent_name,
+                "resultado": r.result, "score": r.score, "source": r.source,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return None
+
+
 def save_head_to_head_snapshot(player_a: str, player_b: str, h2h: dict[str, Any]) -> None:
     """One new row per fresh h2h computation -- a snapshot (like
     calibration), since the underlying record can genuinely change as new
