@@ -20,13 +20,16 @@ docenas de partidos abiertos simultáneos, evita 1 request por partido."""
 
 import os
 import time
+from datetime import datetime, timezone
 
 from outer_apis.kalshi.client import KalshiAPI
 from database.historical.tennis.matchtracking import (
     get_open_scanned_matches, save_probability_tick, mark_match_settled,
 )
+from database.historical.tennis.matchstats import has_match_stats, save_match_stats
 from models.fairprice.sports.tennis.tennisfmodel import TennisFModel
 from outer_apis.sports.tennis.match_history import set_fetch_allowlist
+from outer_apis.scrapers.tennis.flashscore_scraper import find_match_id, get_match_statistics
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
@@ -69,6 +72,41 @@ def _rebuild_market_dict(scanned: dict, market_a: dict | None, market_b: dict | 
     }
 
 
+def _fetch_and_save_match_stats(scanned: dict) -> None:
+    """Fetch de estadísticas reales de Flashscore para un partido recién
+    resuelto (aces, 1er saque%, dobles faltas, break points, etc.) --
+    pedido explícito del usuario 2026-08-01: "cuando se detecte que un
+    partido terminó se debe hacer fetch de las stats". Identifica el
+    partido en Flashscore por coincidencia de nombres + fecha (+ torneo
+    como bonus, best-effort), ver `flashscore_scraper.find_match_id`.
+
+    Idempotente (`has_match_stats` primero) y best-effort: cualquier
+    fallo (no se encuentra el match en Flashscore, sin estadísticas
+    trackeadas para ese partido) se traga silenciosamente -- nunca tumba
+    un settlement ya confirmado por Kalshi, que es la fuente de verdad
+    real del resultado."""
+    market_id = scanned["market_id"]
+    if has_match_stats(market_id):
+        return
+    try:
+        close_time = scanned.get("close_time")
+        match_date = (
+            close_time[:10] if close_time
+            else datetime.now(timezone.utc).date().isoformat()
+        )
+        match_id = find_match_id(
+            scanned["player_a_name"], scanned["player_b_name"],
+            match_date, scanned.get("tournament"),
+        )
+        if not match_id:
+            return
+        stats = get_match_statistics(match_id)
+        if stats:
+            save_match_stats(market_id, match_id, stats)
+    except Exception as e:
+        print(f"[tennis_match_tick_worker] error fetch stats {market_id}: {e}")
+
+
 def _settlement_result(market: dict | None) -> str | None:
     """'yes' | 'no' | None -- lee `raw.result` real de Kalshi, mismo
     patrón que `limitarb_monitor_worker.py::_fetch_settlement_result`."""
@@ -109,6 +147,7 @@ def run_once() -> dict:
                 else:
                     winner = "b"
                 mark_match_settled(scanned["market_id"], winner)
+                _fetch_and_save_match_stats(scanned)
                 settled += 1
                 continue  # ya resolvió, no hace falta tick de probabilidad
 

@@ -151,6 +151,38 @@ def _parse_all_records(html: str) -> list[dict[str, Any]]:
     return [_parse_record(rb) for rb in raw_blocks[1:]]  # [0] es el encabezado
 
 
+def _extract_tournament_name(za_block: str) -> str | None:
+    """`za_block` es lo que sigue a un separador `~ZA÷` real, ej:
+    'ATP - SINGLES: Barcelona (Spain), clay¬ZEE÷...' -> 'Barcelona'.
+    Fail-closed: None si el formato no matchea (nunca adivina)."""
+    header = za_block.split("¬", 1)[0]
+    m = re.search(r":\s*(.+?)\s*\(", header)
+    if m:
+        return m.group(1).strip()
+    parts = header.split(":", 1)
+    if len(parts) == 2:
+        name = parts[1].split(",")[0].strip()
+        return name or None
+    return None
+
+
+def _parse_all_records_with_tournament(html: str) -> list[dict[str, Any]]:
+    """Igual que `_parse_all_records`, pero cada record incluye
+    `"tournament"` -- Flashscore agrupa los resultados de un jugador por
+    torneo, con un separador `~ZA÷{header del torneo}` antes de cada
+    grupo de records `~AA÷` (ver formato real en el docstring del
+    módulo). Necesario para `find_match_id` (matching por nombre+fecha+
+    torneo, pedido explícito del usuario 2026-08-01)."""
+    records: list[dict[str, Any]] = []
+    for za_block in html.split("~ZA÷")[1:]:
+        tournament = _extract_tournament_name(za_block)
+        for aa_block in za_block.split("~AA÷")[1:]:
+            rec = _parse_record(aa_block)
+            rec["tournament"] = tournament
+            records.append(rec)
+    return records
+
+
 # ── Matching de nombres ──────────────────────────────────────────────────────
 
 def _norm_name(name: str) -> str:
@@ -264,3 +296,150 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict]:
             break
 
     return out
+
+
+# ── Estadísticas reales de partido (2026-08-01, pedido explícito del usuario:
+# "cuando se detecte que un partido terminó se debe hacer fetch de las
+# stats") ────────────────────────────────────────────────────────────────
+
+_STATS_URL = "https://global.flashscore.ninja/2/x/feed/df_st_1_{match_id}"
+
+
+def find_match_id(
+    player_a_name: str, player_b_name: str, match_date: str, tournament: str | None = None,
+) -> str | None:
+    """Busca el `match_id` real de Flashscore para un partido YA JUGADO,
+    por coincidencia de AMBOS nombres + fecha (+ torneo como bonus,
+    best-effort, ver `_extract_tournament_name`) -- necesario para poder
+    pedir después las estadísticas vía `get_match_statistics`.
+
+    `match_date`: fecha ISO (YYYY-MM-DD), típicamente `close_time` de
+    Kalshi -- se acepta +/-1 día de margen porque el timestamp de cierre
+    del mercado no necesariamente cae en el mismo día calendario que
+    Flashscore registra según la zona horaria del torneo.
+
+    Busca primero por `player_a_name`; si Flashscore no lo encuentra
+    (nombre no indexado, típico de jugadores de bajo ranking), reintenta
+    anclado en `player_b_name` -- cualquiera de los 2 tiene el mismo
+    partido en su página de resultados.
+
+    Fail-closed: None si no se encuentra a ningún jugador, la request
+    falla, o ningún record matchea nombre+fecha con confianza suficiente
+    -- nunca adivina un match_id."""
+    found = search_player(player_a_name)
+    anchor_name, opponent_name = player_a_name, player_b_name
+    if not found:
+        found = search_player(player_b_name)
+        anchor_name, opponent_name = player_b_name, player_a_name
+    if not found:
+        return None
+
+    pid, slug = found
+    html = _fetch_results_page(pid, slug)
+    if not html:
+        return None
+
+    try:
+        target_date = datetime.fromisoformat(match_date).date() if isinstance(match_date, str) else None
+    except ValueError:
+        target_date = None
+    if target_date is None:
+        return None
+
+    best_match_id = None
+    best_score = 0.0
+    for rec in _parse_all_records_with_tournament(html):
+        if rec.get("status") != 3 or not rec.get("timestamp"):
+            continue  # solo partidos finalizados, con timestamp real
+
+        p1_fs, p2_fs = rec.get("p1_name", ""), rec.get("p2_name", "")
+        score_anchor_p1, score_anchor_p2 = _name_score(anchor_name, p1_fs), _name_score(anchor_name, p2_fs)
+        score_anchor = max(score_anchor_p1, score_anchor_p2)
+        if score_anchor < 0.6:
+            continue
+        opponent_fs = p2_fs if score_anchor_p1 >= score_anchor_p2 else p1_fs
+        score_opponent = _name_score(opponent_name, opponent_fs)
+        if score_opponent < 0.6:
+            continue
+
+        rec_date = datetime.fromtimestamp(rec["timestamp"], tz=UTC).date()
+        if abs((rec_date - target_date).days) > 1:
+            continue  # margen de +/-1 dia por husos horarios distintos
+
+        combined = score_anchor + score_opponent
+        if tournament and rec.get("tournament"):
+            if _norm_name(tournament) in _norm_name(rec["tournament"]) or \
+               _norm_name(rec["tournament"]) in _norm_name(tournament):
+                combined += 0.5  # bonus, no obligatorio -- el torneo puede no matchear textualmente
+
+        if combined > best_score:
+            best_score = combined
+            best_match_id = rec.get("match_id")
+
+    return best_match_id
+
+
+def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None, str | None]]] | None:
+    """Estadísticas reales de un partido ya jugado (aces, 1er saque%,
+    dobles faltas, break points salvados/convertidos, etc.), vía el feed
+    `df_st_1` de Flashscore.
+
+    Formato crudo (pipe-delimited, reverse-engineered 2026-08-01):
+    bloques separados por '¬~', cada bloque es uno de:
+      'SE÷{Match|Set N}'      -- nueva sección (partido completo o set individual)
+      'SF÷{categoría}'        -- Service/Return/Points/Games, informativo, no se guarda aparte
+      'SG÷{nombre}¬SH÷{p1}¬SI÷{p2}' -- una estadística real, valor jugador 1 y 2
+
+    Returns:
+        {"match": {stat_name: (p1_value, p2_value), ...}, "set_1": {...},
+        ...} -- valores como strings tal cual los da Flashscore (algunos
+        son porcentajes tipo "58% (31/53)", no siempre numéricos puros,
+        se guardan crudos a propósito). Fail-closed: None si falla la
+        request o el partido no tiene estadísticas trackeadas (común en
+        challenger/ITF de bajo nivel) -- nunca fabrica valores."""
+    url = _STATS_URL.format(match_id=match_id)
+    headers = {
+        "X-Fsign": "SW9D1eZo",
+        "Referer": "https://www.flashscore.com/",
+        "Accept": "*/*",
+    }
+
+    def _do_request(session):
+        return session.get(url, headers=headers, timeout=25, verify=False)
+
+    resp = brightdata_proxy.request_via_proxy_with_ip_retry(
+        brightdata_proxy.make_proxy_session, _do_request,
+    )
+    if resp is None or resp.status_code != 200:
+        return None
+    text = (resp.text or "").strip()
+    if not text or text == "0":
+        return None
+
+    sections: dict[str, dict[str, tuple[str | None, str | None]]] = {}
+    current_key: str | None = None
+    set_count = 0
+    for chunk in text.split("¬~"):
+        parts = chunk.split("¬")
+        head = parts[0]
+        if head.startswith("SE÷"):
+            label = head[len("SE÷"):].strip()
+            if label.lower() == "match":
+                current_key = "match"
+            else:
+                set_count += 1
+                current_key = f"set_{set_count}"
+            sections[current_key] = {}
+        elif head.startswith("SG÷") and current_key is not None:
+            name = head[len("SG÷"):].strip()
+            if not name:
+                continue
+            p1_val = p2_val = None
+            for p in parts[1:]:
+                if p.startswith("SH÷"):
+                    p1_val = p[len("SH÷"):]
+                elif p.startswith("SI÷"):
+                    p2_val = p[len("SI÷"):]
+            sections[current_key][name] = (p1_val, p2_val)
+
+    return sections if sections else None

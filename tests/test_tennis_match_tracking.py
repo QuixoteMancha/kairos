@@ -104,10 +104,17 @@ def test_tick_worker_winner_logic_and_batching():
     }
 
     with patch("workers.tennis_match_tick_worker.KalshiAPI") as mock_api_cls, \
-         patch.object(worker._fmodel, "calculate_fair_price", return_value={"fair_a_price": 0.6, "fair_b_price": 0.4}):
+         patch.object(worker._fmodel, "calculate_fair_price", return_value={"fair_a_price": 0.6, "fair_b_price": 0.4}), \
+         patch("workers.tennis_match_tick_worker.find_match_id", return_value=None) as mock_find_match_id:
         mock_api = mock_api_cls.return_value
         mock_api.get_markets_by_tickers.return_value = fake_cache
         result = worker.run_once()
+
+    # el partido que resolvió (W1) dispara el intento de fetch de stats
+    # (best-effort, ver _fetch_and_save_match_stats) -- acá no encuentra
+    # match_id (mockeado a None) así que no guarda nada, pero confirma
+    # que el settlement SIEMPRE intenta el fetch, sin tumbar el ciclo.
+    mock_find_match_id.assert_called_once()
 
     assert result["settled"] == 1
     assert result["ticked"] == 1
