@@ -211,3 +211,34 @@ def test_conditional_match_winrate_none_when_no_evaluable_cases():
     ):
         result = run_backtest()
     assert result["match_win_rate_after_favorite_wins_set1"] is None
+
+
+# ── match_win_rate_big_rank_gap_and_won_set1 ────────────────────────
+
+def test_big_rank_gap_included_when_gap_at_least_20():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 25, "score": "6-4 6-3", "minutes": 95,  # gap=20
+        }],
+    ):
+        result = run_backtest()
+    assert result["match_win_rate_big_rank_gap_and_won_set1_evaluable_cases"] == 1
+    assert result["match_win_rate_big_rank_gap_and_won_set1"] == 1.0
+    assert result["min_rank_gap_used"] == 20
+
+
+def test_small_rank_gap_excluded():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 24, "score": "6-4 6-3", "minutes": 95,  # gap=19
+        }],
+    ):
+        result = run_backtest()
+    assert result["match_win_rate_big_rank_gap_and_won_set1_evaluable_cases"] == 0
+    assert result["match_win_rate_big_rank_gap_and_won_set1"] is None

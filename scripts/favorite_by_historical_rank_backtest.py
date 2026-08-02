@@ -80,6 +80,7 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
         cases.append({
             "tourney_name": m["tourney_name"], "level": m["level"], "date": m["date"],
             "round": m["round"], "favorite_rank": favorite_rank, "underdog_rank": underdog_rank,
+            "rank_gap": underdog_rank - favorite_rank,
             "hit": hit, "set1_favorite_win": set1_favorite_win,
         })
 
@@ -110,6 +111,16 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
     match_hits_after_set1 = sum(1 for c in set1_won_by_favorite if c["hit"])
     match_after_set1_n = len(set1_won_by_favorite)
 
+    # Categorización adicional (2026-08-02, pedido explícito del
+    # usuario): mismo condicional de arriba, pero SOLO para partidos
+    # donde el favorito además supera al underdog por >= 20 puestos de
+    # ranking real -- ¿la brecha de ranking suma poder predictivo por
+    # encima de "ganó el set 1" solo?
+    _MIN_RANK_GAP = 20
+    big_gap_set1_won_by_favorite = [c for c in set1_won_by_favorite if c["rank_gap"] >= _MIN_RANK_GAP]
+    big_gap_hits = sum(1 for c in big_gap_set1_won_by_favorite if c["hit"])
+    big_gap_n = len(big_gap_set1_won_by_favorite)
+
     return {
         "years": f"{start_year}-{end_year}", "total_matches_fetched": len(matches),
         "excluded_no_rank": excluded_no_rank, "evaluable_cases": n, "hits": hits,
@@ -121,6 +132,10 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
         "match_win_rate_after_favorite_wins_set1": (
             round(match_hits_after_set1 / match_after_set1_n, 4) if match_after_set1_n else None
         ),
+        "match_win_rate_big_rank_gap_and_won_set1_evaluable_cases": big_gap_n,
+        "match_win_rate_big_rank_gap_and_won_set1_hits": big_gap_hits,
+        "match_win_rate_big_rank_gap_and_won_set1": round(big_gap_hits / big_gap_n, 4) if big_gap_n else None,
+        "min_rank_gap_used": _MIN_RANK_GAP,
         "by_level": by_level, "by_round": by_round,
         "caveat": (
             "SOLO ATP -- sin equivalente WTA del mismo autor. Ranking REAL "
@@ -129,7 +144,10 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
             "PRIMER SET (no necesariamente el partido). "
             "match_win_rate_after_favorite_wins_set1: CONDICIONAL -- de los "
             "partidos donde el favorito se llevó el set 1, % en que además "
-            "ganó el partido completo."
+            "ganó el partido completo. "
+            "match_win_rate_big_rank_gap_and_won_set1: mismo condicional, "
+            f"restringido a partidos con brecha de ranking real >= "
+            f"{_MIN_RANK_GAP} puestos."
         ),
     }
 
