@@ -305,6 +305,72 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict]:
 _STATS_URL = "https://global.flashscore.ninja/2/x/feed/df_st_1_{match_id}"
 
 
+def find_match_tournament(player_a_name: str, player_b_name: str, match_date: str) -> str | None:
+    """Recupera el nombre real del torneo de un partido YA JUGADO por
+    coincidencia de AMBOS nombres + fecha (mismo criterio de matching que
+    `find_match_id`, sin el bonus de torneo porque acá es justamente lo
+    que se busca) -- pedido explícito del usuario 2026-08-02, para
+    partidos donde `extract_tournament_name(rules_secondary)` de Kalshi
+    falló (típicamente Grand Slams, cuyo `rules_secondary` no sigue el
+    mismo formato que los torneos ATP/WTA regulares).
+
+    NO valida duplicados entre distintos partidos del mismo día -- eso
+    ya lo garantiza `find_match_id`/este mismo matching (nombre+fecha
+    real de AMBOS jugadores es prácticamente única para singles; dobles
+    tendría 4 nombres, fuera de alcance de este módulo que es
+    exclusivamente singles).
+
+    Fail-closed: None si no se encuentra a ningún jugador, la request
+    falla, o ningún record matchea nombre+fecha con confianza
+    suficiente."""
+    found = search_player(player_a_name)
+    anchor_name, opponent_name = player_a_name, player_b_name
+    if not found:
+        found = search_player(player_b_name)
+        anchor_name, opponent_name = player_b_name, player_a_name
+    if not found:
+        return None
+
+    pid, slug = found
+    html = _fetch_results_page(pid, slug)
+    if not html:
+        return None
+
+    try:
+        target_date = datetime.fromisoformat(match_date).date() if isinstance(match_date, str) else None
+    except ValueError:
+        target_date = None
+    if target_date is None:
+        return None
+
+    best_tournament = None
+    best_score = 0.0
+    for rec in _parse_all_records_with_tournament(html):
+        if rec.get("status") != 3 or not rec.get("timestamp"):
+            continue
+
+        p1_fs, p2_fs = rec.get("p1_name", ""), rec.get("p2_name", "")
+        score_anchor_p1, score_anchor_p2 = _name_score(anchor_name, p1_fs), _name_score(anchor_name, p2_fs)
+        score_anchor = max(score_anchor_p1, score_anchor_p2)
+        if score_anchor < 0.6:
+            continue
+        opponent_fs = p2_fs if score_anchor_p1 >= score_anchor_p2 else p1_fs
+        score_opponent = _name_score(opponent_name, opponent_fs)
+        if score_opponent < 0.6:
+            continue
+
+        rec_date = datetime.fromtimestamp(rec["timestamp"], tz=UTC).date()
+        if abs((rec_date - target_date).days) > 1:
+            continue
+
+        combined = score_anchor + score_opponent
+        if combined > best_score:
+            best_score = combined
+            best_tournament = rec.get("tournament")
+
+    return best_tournament
+
+
 def find_match_id(
     player_a_name: str, player_b_name: str, match_date: str, tournament: str | None = None,
 ) -> str | None:
