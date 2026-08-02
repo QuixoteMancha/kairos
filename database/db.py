@@ -134,9 +134,14 @@ def init_db() -> None:
     from database.accounting.papertrade import PaperTrade
     from database.accounting.paperaccount import PaperAccount
     from database.accounting.fillverification import FillVerification
+    from database.accounting.marketarbwebsocketsignal import MarketArbWebsocketSignal
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
+
+    # MarketArb websocket scanner (2026-08-02, pedido explícito del
+    # usuario) -- tabla nueva, no necesita ALTER TABLE.
+    db.create_tables([MarketArbWebsocketSignal], safe=True)
 
     # Paper-trading tables (2026-07-23, see strategies/paper_trading.py) --
     # brand-new tables, no ALTER TABLE migration needed (create_tables with
