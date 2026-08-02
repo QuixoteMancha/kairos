@@ -302,3 +302,61 @@ def test_underdog_comeback_rate_none_when_no_cases():
     assert result["underdog_comeback_rate_after_losing_set1"] is None
     for bucket in result["underdog_comeback_rate_by_rank_gap"].values():
         assert bucket["underdog_comeback_rate"] is None
+
+
+# ── favorite_comeback_rate_after_losing_set1 (caso simétrico) ──────
+
+def test_favorite_comeback_rate_when_favorite_recovers():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[
+            {  # underdog gana set1 (5-7), favorito (A, rank 5) remonta y gana el partido
+                "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+                "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+                "loser_name": "B", "loser_rank": 50, "score": "5-7 6-3 6-4", "minutes": 150,
+            },
+        ],
+    ):
+        result = run_backtest()
+    assert result["favorite_comeback_rate_after_losing_set1_evaluable_cases"] == 1
+    assert result["favorite_comeback_rate_after_losing_set1"] == 1.0
+
+
+def test_favorite_comeback_rate_when_underdog_holds_on():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[
+            {  # underdog (B) gana set1 Y el partido -- favorito no remonta
+                "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+                "surface": "Hard", "best_of": 3, "winner_name": "B", "winner_rank": 50,
+                "loser_name": "A", "loser_rank": 5, "score": "6-4 6-3", "minutes": 95,
+            },
+        ],
+    ):
+        result = run_backtest()
+    assert result["favorite_comeback_rate_after_losing_set1"] == 0.0
+
+
+def test_favorite_comeback_rate_by_rank_gap_buckets():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 155, "score": "5-7 6-3 6-4", "minutes": 150,
+        }],
+    ):
+        result = run_backtest()
+    buckets = result["favorite_comeback_rate_by_rank_gap"]
+    assert buckets["100+"]["n"] == 1
+    assert buckets["100+"]["favorite_comeback_rate"] == 1.0
+    assert buckets["0-20"]["n"] == 0
+
+
+def test_favorite_comeback_rate_none_when_no_cases():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[],
+    ):
+        result = run_backtest()
+    assert result["favorite_comeback_rate_after_losing_set1"] is None

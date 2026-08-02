@@ -152,6 +152,31 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
             "underdog_comeback_rate": round(b_underdog_wins / b_n, 4) if b_n else None,
         }
 
+    # Caso simétrico (2026-08-02, pedido explícito del usuario): cuando
+    # el UNDERDOG se lleva el set 1, ¿cuántas veces remonta el FAVORITO
+    # y termina ganando el partido igual? Distinto de la remontada del
+    # underdog de arriba -- acá el favorito arranca perdiendo.
+    set1_won_by_underdog = [c for c in set1_cases if not c["set1_favorite_win"]]
+    favorite_comeback_hits = sum(1 for c in set1_won_by_underdog if c["hit"])
+    favorite_comeback_n = len(set1_won_by_underdog)
+    favorite_comeback_rate = (
+        round(favorite_comeback_hits / favorite_comeback_n, 4) if favorite_comeback_n else None
+    )
+
+    favorite_comeback_by_rank_gap: dict[str, dict[str, Any]] = {}
+    for low, high in _RANK_GAP_BUCKETS:
+        label = f"{low}-{high}" if high is not None else f"{low}+"
+        bucket = [
+            c for c in set1_won_by_underdog
+            if c["rank_gap"] >= low and (high is None or c["rank_gap"] < high)
+        ]
+        b_n = len(bucket)
+        b_favorite_wins = sum(1 for c in bucket if c["hit"])
+        favorite_comeback_by_rank_gap[label] = {
+            "n": b_n, "favorite_comeback_hits": b_favorite_wins,
+            "favorite_comeback_rate": round(b_favorite_wins / b_n, 4) if b_n else None,
+        }
+
     return {
         "years": f"{start_year}-{end_year}", "total_matches_fetched": len(matches),
         "excluded_no_rank": excluded_no_rank, "evaluable_cases": n, "hits": hits,
@@ -171,6 +196,10 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
         "underdog_comeback_rate_after_losing_set1_hits": underdog_comeback_hits,
         "underdog_comeback_rate_after_losing_set1": underdog_comeback_rate,
         "underdog_comeback_rate_by_rank_gap": comeback_by_rank_gap,
+        "favorite_comeback_rate_after_losing_set1_evaluable_cases": favorite_comeback_n,
+        "favorite_comeback_rate_after_losing_set1_hits": favorite_comeback_hits,
+        "favorite_comeback_rate_after_losing_set1": favorite_comeback_rate,
+        "favorite_comeback_rate_by_rank_gap": favorite_comeback_by_rank_gap,
         "by_level": by_level, "by_round": by_round,
         "caveat": (
             "SOLO ATP -- sin equivalente WTA del mismo autor. Ranking REAL "
@@ -181,6 +210,9 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
             "el underdog, tras perder el set 1 contra el favorito, IGUAL "
             "ganó el partido -- riesgo real de apostar al favorito solo "
             "porque se llevó el set 1, para sizing de posición. "
+            "favorite_comeback_rate_after_losing_set1: caso simétrico -- % "
+            "de partidos donde el favorito, tras PERDER el set 1 contra el "
+            "underdog, remonta y gana el partido igual. "
             "match_win_rate_after_favorite_wins_set1: CONDICIONAL -- de los "
             "partidos donde el favorito se llevó el set 1, % en que además "
             "ganó el partido completo. "
