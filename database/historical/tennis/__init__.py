@@ -33,6 +33,7 @@ from database.historical.tennis.tennisrecentresult import TennisRecentResult
 from database.historical.tennis.tennismatchweather import TennisMatchWeather
 from database.historical.tennis.tennismatchstats import TennisMatchStats
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
+from database.historical.tennis.tennisplayerbio import TennisPlayerBio
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled, backfill_missing_tournaments,
@@ -69,4 +70,5 @@ __all__ = [
     "TennisRecentResult", "save_recent_results", "get_recent_results",
     "TennisMatchWeather",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
+    "TennisPlayerBio",
 ]

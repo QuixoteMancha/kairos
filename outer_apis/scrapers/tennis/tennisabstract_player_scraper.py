@@ -262,11 +262,59 @@ def get_recent_results(player_name: str, n: int = 15) -> list[dict[str, Any]]:
 
         retired_or_walkover = (not subject_won) and bool(re.search(r"\bRET\b|\bW/?O\b", score.upper()))
 
+        # Duración real del partido (2026-08-01, pedido explícito del
+        # usuario -- índice de fatiga, ver outer_apis/sports/tennis/
+        # fatigue.py). Columna 15 de la tabla, formato "H:MM" (ej.
+        # "2:15") -- ausente (celda vacía) en partidos sin stats
+        # completas (retiros/W.O., torneos de bajo nivel). Fail-closed:
+        # None si la celda está vacía o no matchea el formato, NUNCA se
+        # asume una duración por default.
+        duration_minutes = None
+        if len(cells_raw) > 15:
+            duration_raw = _clean_cell(cells_raw[15])
+            m = re.match(r"^(\d+):(\d{2})$", duration_raw)
+            if m:
+                duration_minutes = int(m.group(1)) * 60 + int(m.group(2))
+
         result.append({
             "date": date, "tournament": tournament, "round": round_name or None,
             "opponent": opponent, "subject_won": subject_won, "retired_or_walkover": retired_or_walkover,
+            "duration_minutes": duration_minutes,
         })
         if len(result) >= n:
             break
 
     return result
+
+
+def get_date_of_birth(player_name: str) -> str | None:
+    """Fecha de nacimiento real (ISO 'YYYY-MM-DD') desde la página de
+    bio de Tennis Abstract (`cgi-bin/player.cgi?p={slug}`, DISTINTA del
+    endpoint `.js` de arriba que solo trae tablas de stats, no bio) --
+    pedido explícito del usuario 2026-08-01 para el índice de fatiga
+    (jugadores 30+ toleran peor la fatiga acumulada).
+
+    La página embebe `var dob = YYYYMMDD;` en JS -- verificado real para
+    ATP (Alcaraz 20030505) y WTA (Shnaider 20040402, Osaka 19971016), sin
+    proxy (a diferencia de Flashscore, este endpoint no está bloqueado).
+
+    Fail-closed: None si el jugador no existe, la request falla, o el
+    patrón `var dob` no aparece -- nunca fabrica una fecha."""
+    slug = _slug_for_player(player_name)
+    if not slug:
+        return None
+    url = f"https://www.tennisabstract.com/cgi-bin/player.cgi?p={slug}"
+    try:
+        resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    m = re.search(r"var dob\s*=\s*(\d{8})", resp.text)
+    if not m:
+        return None
+    raw = m.group(1)
+    try:
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    except IndexError:
+        return None

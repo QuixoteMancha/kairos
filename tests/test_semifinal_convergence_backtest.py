@@ -1,10 +1,13 @@
 """Tests del backtest de convergencia en semifinales/finales (2026-08-01,
 hipótesis explícita del usuario, caso real motivador: Nakashima vs
-Fritz)."""
+Fritz). El gate de validez (fatiga/edad/lesión) se mockea en la mayoría
+de los tests -- ver `tests/test_tennis_fatigue_index.py` y
+`tests/test_tennis_player_age.py` para la lógica real de esas piezas."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +16,13 @@ from database.accounting.limitarbsignal import LimitArbSignal
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
 from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
 from scripts.semifinal_convergence_backtest import run_backtest
+
+_VALID_GATE = {
+    "valid": True, "injury_ok": True, "fatigue_ok": True, "age_ok": True,
+    "underdog_fatigue_index": 1.0, "favorite_fatigue_index": 2.0,
+    "underdog_age": 22, "favorite_age": 28,
+}
+_INVALID_GATE = {**_VALID_GATE, "valid": False}
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +66,13 @@ def _make_signal(market_id, dog_side, dog_price, raw_edge, avg_vol, created_at):
     )
 
 
+def _patched_gate(return_value=_VALID_GATE):
+    return patch(
+        "scripts.semifinal_convergence_backtest._check_validity_gate",
+        return_value=return_value,
+    )
+
+
 def test_ignores_non_sf_final_matches():
     _make_match("M1", "Quarterfinal")
     result = run_backtest()
@@ -88,7 +105,8 @@ def test_hit_when_price_converges_past_target():
         match=match, observed_at=signal_time + timedelta(minutes=30),
         market_price_a=0.42, model_fair_a=0.4,
     )
-    result = run_backtest()
+    with _patched_gate():
+        result = run_backtest()
     assert result["evaluable_cases"] == 1
     assert result["hits"] == 1
     assert result["cases"][0]["hit"] is True
@@ -103,7 +121,8 @@ def test_miss_when_price_never_converges():
         match=match, observed_at=signal_time + timedelta(minutes=30),
         market_price_a=0.14, model_fair_a=0.4,
     )
-    result = run_backtest()
+    with _patched_gate():
+        result = run_backtest()
     assert result["evaluable_cases"] == 1
     assert result["hits"] == 0
 
@@ -118,26 +137,52 @@ def test_dog_side_b_uses_complement_approximation():
         match=match, observed_at=signal_time + timedelta(minutes=10),
         market_price_a=0.40, model_fair_a=0.5,
     )
-    result = run_backtest()
+    with _patched_gate():
+        result = run_backtest()
     assert result["hits"] == 1
 
 
-def test_excludes_case_when_signal_price_above_25pct():
+def test_excludes_case_when_signal_price_above_40pct():
     _make_match("M9", "Final")
-    _make_signal("M9", "a", 0.30, 0.05, 0.10, _now() - timedelta(hours=1))
-    result = run_backtest()
+    _make_signal("M9", "a", 0.45, 0.05, 0.10, _now() - timedelta(hours=1))
+    with _patched_gate():
+        result = run_backtest()
     assert result["evaluable_cases"] == 0
-    assert result["excluded_signal_price_above_25pct"] == 1
+    assert result["excluded_signal_price_above_40pct"] == 1
+
+
+def test_allows_case_when_signal_price_equals_40pct():
+    match = _make_match("M11", "Final")
+    signal_time = _now() - timedelta(hours=1)
+    _make_signal("M11", "a", 0.40, 0.02, 0.10, signal_time)  # target=0.47
+    TennisMatchProbabilityTick.create(
+        match=match, observed_at=signal_time + timedelta(minutes=10),
+        market_price_a=0.50, model_fair_a=0.45,
+    )
+    with _patched_gate():
+        result = run_backtest()
+    assert result["evaluable_cases"] == 1
+    assert result["excluded_signal_price_above_40pct"] == 0
 
 
 def test_excludes_case_when_target_above_50pct():
     _make_match("M10", "Final")
-    # signal_price < 0.25 pasa el primer filtro, pero target = 0.22 + 0.40
+    # signal_price < 0.40 pasa el primer filtro, pero target = 0.22 + 0.40
     # + 0.30/2 = 0.77 -- por encima de 0.5, se excluye
     _make_signal("M10", "a", 0.22, 0.40, 0.30, _now() - timedelta(hours=1))
-    result = run_backtest()
+    with _patched_gate():
+        result = run_backtest()
     assert result["evaluable_cases"] == 0
     assert result["excluded_target_above_50pct"] == 1
+
+
+def test_excludes_case_when_validity_gate_fails():
+    _make_match("M12", "Final")
+    _make_signal("M12", "a", 0.22, 0.05, 0.10, _now() - timedelta(hours=1))
+    with _patched_gate(_INVALID_GATE):
+        result = run_backtest()
+    assert result["evaluable_cases"] == 0
+    assert result["excluded_validity_gate"] == 1
 
 
 def test_skips_match_without_underdog_signal():
@@ -150,7 +195,8 @@ def test_skips_match_without_underdog_signal():
 def test_skips_match_without_post_signal_ticks():
     _make_match("M8", "Semifinal")
     _make_signal("M8", "a", 0.20, 0.03, 0.2, _now())
-    result = run_backtest()
+    with _patched_gate():
+        result = run_backtest()
     assert result["evaluable_cases"] == 0
 
 
