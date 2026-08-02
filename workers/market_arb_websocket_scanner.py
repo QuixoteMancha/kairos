@@ -144,6 +144,12 @@ def _refresh_and_check(api: KalshiAPI, market: dict[str, Any]) -> None:
 
 
 async def run() -> None:
+    # Crea la tabla al arrancar, no de forma perezosa en el primer
+    # hallazgo -- bug real encontrado 2026-08-02: dado que el arb real
+    # es raro (0 casos en 6h de logs previos, ver conversación), la
+    # tabla nunca llegaba a crearse esperando el primer INSERT.
+    init_db()
+
     api = KalshiAPI()
     api.initialize()
 

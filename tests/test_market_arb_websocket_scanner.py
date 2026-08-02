@@ -151,3 +151,25 @@ def test_refresh_and_check_same_ticket_uses_current_b_from_same_leg():
     signal = MarketArbWebsocketSignal.get(MarketArbWebsocketSignal.market_id == "KXBTC15M-Y")
     assert signal.price_a == 0.30
     assert signal.price_b == 0.30
+
+
+def test_run_creates_db_table_at_startup_not_lazily():
+    """Bug real encontrado 2026-08-02: init_db() se llamaba solo dentro
+    de _refresh_and_check (lazy, en el primer hallazgo real) -- como el
+    arb real es raro, la tabla nunca se creaba. Ahora debe crearse al
+    arrancar run(), sin esperar ninguna oportunidad."""
+    import asyncio
+    from workers.market_arb_websocket_scanner import run
+
+    async def _empty_stream(tickers):
+        return
+        yield  # pragma: no cover -- hace de esto un generador async vacío
+
+    with patch("workers.market_arb_websocket_scanner.init_db") as mock_init_db, \
+         patch("workers.market_arb_websocket_scanner.KalshiAPI") as mock_api_cls, \
+         patch("workers.market_arb_websocket_scanner.build_market_registry", return_value={}), \
+         patch("workers.market_arb_websocket_scanner.stream_ticker_updates", side_effect=_empty_stream):
+        mock_api_cls.return_value = MagicMock()
+        asyncio.run(run())
+
+    mock_init_db.assert_called_once()

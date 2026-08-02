@@ -92,6 +92,26 @@ services:
     volumes:
       - kairos_data_historical:/data_historical
 
+  market_arb_websocket_scanner:
+    image: kairos:latest
+    container_name: kairos_market_arb_websocket_scanner
+    build: .
+    # 2026-08-02, pedido explícito del usuario: "que el scan vaya
+    # guardando las oportunidades market arb detectadas, mediante
+    # websocket". Necesita /data/secrets/kalshi_key.pem (credenciales
+    # reales de Kalshi, ver outer_apis/kalshi/auth.py) -- por eso monta
+    # `kairos_data` (alias de kairos_data_v2), NO
+    # kairos_data_historical. Solo lectura/registro, no coloca órdenes
+    # -- línea roja del proyecto sin cambios.
+    command: ["python", "-m", "workers.market_arb_websocket_scanner"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - kairos_data:/data
+
   mls_worker:
     image: kairos:latest
     container_name: kairos_mls_worker
