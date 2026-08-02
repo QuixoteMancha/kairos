@@ -211,9 +211,22 @@ def populate_weather_for_charted_match(match) -> dict[str, Any]:
     return {"skipped": False, "populated": True}
 
 
+# Rate limit real de Open-Meteo (2026-08-02, investigado tras pregunta
+# explícita del usuario -- NO se había tenido en cuenta al lanzar el
+# primer backfill de 7744 partidos): free tier documentado ~600
+# requests/minuto, 5000/hora, 10000/día. Este loop puede recorrer miles
+# de `ChartedMatch` de una sola corrida (a diferencia de
+# `populate_weather_for_all_resolved_matches`, que trabaja sobre un
+# puñado de partidos en vivo por ciclo) -- necesita throttle explícito,
+# no confiar en la latencia de red incidental como único freno.
+_OPEN_METEO_MIN_INTERVAL_S = 0.15  # ~400 req/min, con margen bajo 600/min
+
+
 def populate_weather_for_all_charted_matches() -> dict[str, Any]:
     """Recorre TODOS los `ChartedMatch` sin clima poblado -- mismo
-    patrón que `populate_weather_for_all_resolved_matches`."""
+    patrón que `populate_weather_for_all_resolved_matches`, con
+    throttle explícito (ver `_OPEN_METEO_MIN_INTERVAL_S`) porque acá el
+    volumen puede ser de miles de partidos en una sola corrida."""
     from database.historical.tennis.chartedmatch import ChartedMatch
 
     init_db_historical()
@@ -239,5 +252,6 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
         else:
             processed += 1
+            time.sleep(_OPEN_METEO_MIN_INTERVAL_S)  # solo tras un fetch real, no tras un skip (no pega la API)
 
     return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}

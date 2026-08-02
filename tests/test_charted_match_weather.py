@@ -90,10 +90,14 @@ def test_populate_all_charted_matches_aggregate():
     with patch(
         "outer_apis.sports.tennis.match_weather.open_meteo.get_weather_at",
         return_value={"temperature_c": 20.0, "humidity_pct": 40.0, "wind_kmh": 5.0},
-    ):
+    ), patch("outer_apis.sports.tennis.match_weather.time.sleep") as mock_sleep:
         result = populate_weather_for_all_charted_matches()
 
     assert result["total"] == 2
     assert result["processed"] == 1
     assert result["skipped"] == 1
     assert result["skip_reasons"] == {"torneo no reconocido: 'Nowhereville'": 1}
+    # throttle real de Open-Meteo (2026-08-02): solo se duerme tras un
+    # fetch real (CM2), NUNCA tras un skip que no pega la API (CM3) --
+    # dormir en un skip desperdiciaría tiempo sin necesidad real.
+    mock_sleep.assert_called_once()
