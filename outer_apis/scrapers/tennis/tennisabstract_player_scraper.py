@@ -280,6 +280,13 @@ def get_recent_results(player_name: str, n: int = 15) -> list[dict[str, Any]]:
             "date": date, "tournament": tournament, "round": round_name or None,
             "opponent": opponent, "subject_won": subject_won, "retired_or_walkover": retired_or_walkover,
             "duration_minutes": duration_minutes,
+            # Score real set-por-set (2026-08-02, pedido explícito del
+            # usuario -- necesario para saber si el favorito perdió el
+            # 1er set y si fue por tiebreak, ej. "6-4 7-6(5)"). Ya se
+            # calculaba internamente para detectar RET/W.O., ahora
+            # también se expone tal cual, sin parsear acá (cada caller
+            # decide qué necesita).
+            "score": score,
         })
         if len(result) >= n:
             break

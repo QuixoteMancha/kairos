@@ -59,6 +59,25 @@ def test_get_recent_results_detects_real_walkover_not_opponents():
     assert opponent_retired_row["retired_or_walkover"] is False  # el RIVAL se retiró, no el sujeto
 
 
+def test_get_recent_results_exposes_real_score():
+    """2026-08-02, pedido explícito del usuario -- necesario para saber
+    si el favorito perdió el 1er set y si fue por tiebreak."""
+    from outer_apis.scrapers.tennis import tennisabstract_player_scraper as scraper
+
+    fake_section = (
+        '<h1 id="recent-results-h">Recent Results</h1>'
+        '<table id="recent-results"><tbody>'
+        '<tr><td>21-Jun-2026</td><td>Bad Homburg</td><td>Clay</td><td>SF</td><td>1</td><td>50</td>'
+        '<td>(2)<b>Sinner</b> d. <a href="...">Alcaraz</a></td><td>7-6(5) 6-3</td></tr>'
+        '</tbody></table>'
+    )
+
+    with patch.object(scraper, "_fetch_player_js", return_value=fake_section):
+        results = scraper.get_recent_results("Jannik Sinner")
+
+    assert results[0]["score"] == "7-6(5) 6-3"
+
+
 def test_get_injury_risk_flag_none_without_any_data():
     with patch("outer_apis.sports.tennis.injury_risk._fetch_and_cache", return_value=[]):
         assert get_injury_risk_flag("Nobody") is None
