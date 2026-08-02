@@ -34,6 +34,12 @@ from database.historical.tennis.tennismatchweather import TennisMatchWeather
 from database.historical.tennis.tennismatchstats import TennisMatchStats
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from database.historical.tennis.tennisplayerbio import TennisPlayerBio
+from database.historical.tennis.chartedmatch import ChartedMatch
+from database.historical.tennis.chartedmatchstats import ChartedMatchStats
+from database.historical.tennis.chartedmatchimport import (
+    find_overlapping_scanned_match, save_charted_match, save_charted_match_stats,
+    import_or_merge_match,
+)
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled, backfill_missing_tournaments,
@@ -71,4 +77,7 @@ __all__ = [
     "TennisMatchWeather",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
     "TennisPlayerBio",
+    "ChartedMatch", "ChartedMatchStats",
+    "find_overlapping_scanned_match", "save_charted_match", "save_charted_match_stats",
+    "import_or_merge_match",
 ]
