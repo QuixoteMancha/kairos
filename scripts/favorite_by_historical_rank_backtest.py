@@ -121,6 +121,37 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
     big_gap_hits = sum(1 for c in big_gap_set1_won_by_favorite if c["hit"])
     big_gap_n = len(big_gap_set1_won_by_favorite)
 
+    # Winrate del UNDERDOG cuando pierde el set 1 -- pedido explícito
+    # del usuario 2026-08-02, para dimensionar el RIESGO real de apostar
+    # al favorito apenas se lleva el set 1 (sizing de posición: cuanto
+    # mayor la tasa de remontada del underdog, menor debería ser el
+    # tamaño de la apuesta al favorito). Es el complemento exacto de
+    # `match_win_rate_after_favorite_wins_set1` (favorito ganó el
+    # partido | favorito ganó set1) -- acá se nombra explícitamente
+    # desde la perspectiva del underdog para el diseño de estrategia.
+    underdog_comeback_hits = match_after_set1_n - match_hits_after_set1
+    underdog_comeback_rate = (
+        round(underdog_comeback_hits / match_after_set1_n, 4) if match_after_set1_n else None
+    )
+
+    # Desglose por brecha de ranking (buckets), para un sizing más fino
+    # que un único umbral de 20 -- ¿la tasa de remontada del underdog
+    # cae monótonamente a medida que crece la brecha de ranking real?
+    _RANK_GAP_BUCKETS = [(0, 20), (20, 50), (50, 100), (100, None)]
+    comeback_by_rank_gap: dict[str, dict[str, Any]] = {}
+    for low, high in _RANK_GAP_BUCKETS:
+        label = f"{low}-{high}" if high is not None else f"{low}+"
+        bucket = [
+            c for c in set1_won_by_favorite
+            if c["rank_gap"] >= low and (high is None or c["rank_gap"] < high)
+        ]
+        b_n = len(bucket)
+        b_underdog_wins = sum(1 for c in bucket if not c["hit"])
+        comeback_by_rank_gap[label] = {
+            "n": b_n, "underdog_comeback_hits": b_underdog_wins,
+            "underdog_comeback_rate": round(b_underdog_wins / b_n, 4) if b_n else None,
+        }
+
     return {
         "years": f"{start_year}-{end_year}", "total_matches_fetched": len(matches),
         "excluded_no_rank": excluded_no_rank, "evaluable_cases": n, "hits": hits,
@@ -136,12 +167,20 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
         "match_win_rate_big_rank_gap_and_won_set1_hits": big_gap_hits,
         "match_win_rate_big_rank_gap_and_won_set1": round(big_gap_hits / big_gap_n, 4) if big_gap_n else None,
         "min_rank_gap_used": _MIN_RANK_GAP,
+        "underdog_comeback_rate_after_losing_set1_evaluable_cases": match_after_set1_n,
+        "underdog_comeback_rate_after_losing_set1_hits": underdog_comeback_hits,
+        "underdog_comeback_rate_after_losing_set1": underdog_comeback_rate,
+        "underdog_comeback_rate_by_rank_gap": comeback_by_rank_gap,
         "by_level": by_level, "by_round": by_round,
         "caveat": (
             "SOLO ATP -- sin equivalente WTA del mismo autor. Ranking REAL "
             "al momento del partido, no aproximado. set1_favorite_win_rate: "
             "% de partidos donde el favorito por ranking se llevó el "
             "PRIMER SET (no necesariamente el partido). "
+            "underdog_comeback_rate_after_losing_set1: % de partidos donde "
+            "el underdog, tras perder el set 1 contra el favorito, IGUAL "
+            "ganó el partido -- riesgo real de apostar al favorito solo "
+            "porque se llevó el set 1, para sizing de posición. "
             "match_win_rate_after_favorite_wins_set1: CONDICIONAL -- de los "
             "partidos donde el favorito se llevó el set 1, % en que además "
             "ganó el partido completo. "
