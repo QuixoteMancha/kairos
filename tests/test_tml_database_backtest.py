@@ -168,3 +168,46 @@ def test_backtest_set1_excludes_walkovers():
         result = run_backtest()
     assert result["set1_evaluable_cases"] == 0
     assert result["set1_favorite_win_rate"] is None
+
+
+# ── match_win_rate_after_favorite_wins_set1 ─────────────────────────
+
+def test_conditional_match_winrate_after_set1_all_confirm():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "6-4 6-3", "minutes": 95,
+        }],
+    ):
+        result = run_backtest()
+    assert result["match_win_rate_after_favorite_wins_set1_evaluable_cases"] == 1
+    assert result["match_win_rate_after_favorite_wins_set1"] == 1.0
+
+
+def test_conditional_match_winrate_after_set1_favorite_chokes():
+    # el favorito (rank 5) gana el set 1 (6-4) pero termina PERDIENDO el
+    # partido (underdog, rank 50, remonta y gana) -- caso real posible.
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "B", "winner_rank": 50,
+            "loser_name": "A", "loser_rank": 5, "score": "4-6 6-3 6-4", "minutes": 150,
+        }],
+    ):
+        result = run_backtest()
+    # score winner-first: "4-6" -> match winner (B, underdog) LOST set 1
+    # -> set1 lo ganó el favorito (A) -- pero A perdio el partido.
+    assert result["match_win_rate_after_favorite_wins_set1_evaluable_cases"] == 1
+    assert result["match_win_rate_after_favorite_wins_set1"] == 0.0
+
+
+def test_conditional_match_winrate_none_when_no_evaluable_cases():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[],
+    ):
+        result = run_backtest()
+    assert result["match_win_rate_after_favorite_wins_set1"] is None

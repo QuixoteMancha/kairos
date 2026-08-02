@@ -102,18 +102,34 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
     set1_hits = sum(1 for c in set1_cases if c["set1_favorite_win"])
     set1_n = len(set1_cases)
 
+    # Condicional (2026-08-02, pedido explícito del usuario): de los
+    # casos donde el FAVORITO se llevó el set 1, ¿en qué % también ganó
+    # el partido? (distinto de `overall_hit_rate`, que promedia sobre
+    # TODOS los partidos sin condicionar en el resultado del set 1).
+    set1_won_by_favorite = [c for c in set1_cases if c["set1_favorite_win"]]
+    match_hits_after_set1 = sum(1 for c in set1_won_by_favorite if c["hit"])
+    match_after_set1_n = len(set1_won_by_favorite)
+
     return {
         "years": f"{start_year}-{end_year}", "total_matches_fetched": len(matches),
         "excluded_no_rank": excluded_no_rank, "evaluable_cases": n, "hits": hits,
         "overall_hit_rate": round(hits / n, 4) if n else None,
         "set1_evaluable_cases": set1_n, "set1_hits": set1_hits,
         "set1_favorite_win_rate": round(set1_hits / set1_n, 4) if set1_n else None,
+        "match_win_rate_after_favorite_wins_set1_evaluable_cases": match_after_set1_n,
+        "match_win_rate_after_favorite_wins_set1_hits": match_hits_after_set1,
+        "match_win_rate_after_favorite_wins_set1": (
+            round(match_hits_after_set1 / match_after_set1_n, 4) if match_after_set1_n else None
+        ),
         "by_level": by_level, "by_round": by_round,
         "caveat": (
             "SOLO ATP -- sin equivalente WTA del mismo autor. Ranking REAL "
             "al momento del partido, no aproximado. set1_favorite_win_rate: "
             "% de partidos donde el favorito por ranking se llevó el "
-            "PRIMER SET (no necesariamente el partido)."
+            "PRIMER SET (no necesariamente el partido). "
+            "match_win_rate_after_favorite_wins_set1: CONDICIONAL -- de los "
+            "partidos donde el favorito se llevó el set 1, % en que además "
+            "ganó el partido completo."
         ),
     }
 
