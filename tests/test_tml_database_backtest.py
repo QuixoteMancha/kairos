@@ -360,3 +360,68 @@ def test_favorite_comeback_rate_none_when_no_cases():
     ):
         result = run_backtest()
     assert result["favorite_comeback_rate_after_losing_set1"] is None
+
+
+# ── strategy_comparison (3 verificaciones pedidas explícitamente) ──
+
+def test_strategy_comparison_simple_matches_overall_hit_rate():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "6-4 6-3", "minutes": 95,
+        }],
+    ):
+        result = run_backtest()
+    strat = result["strategy_comparison"]
+    assert strat["1_simple_bet_favorite"]["win_rate"] == result["overall_hit_rate"]
+
+
+def test_strategy_comparison_double_down_matches_conditional_metric():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "6-4 6-3", "minutes": 95,
+        }],
+    ):
+        result = run_backtest()
+    strat = result["strategy_comparison"]
+    assert strat["2_double_down_if_favorite_wins_set1"]["win_rate"] == result["match_win_rate_after_favorite_wins_set1"]
+
+
+def test_strategy_comparison_exit_is_complement_of_favorite_comeback():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[
+            {  # favorito (A) pierde set1 pero remonta y gana -- retirarse hubiera sido un ERROR
+                "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+                "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+                "loser_name": "B", "loser_rank": 50, "score": "4-6 6-3 6-4", "minutes": 150,
+            },
+            {  # favorito (A) pierde set1 y pierde el partido -- retirarse hubiera sido CORRECTO
+                "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+                "surface": "Hard", "best_of": 3, "winner_name": "B", "winner_rank": 50,
+                "loser_name": "A", "loser_rank": 5, "score": "6-4 6-3", "minutes": 95,
+            },
+        ],
+    ):
+        result = run_backtest()
+    strat = result["strategy_comparison"]
+    exit_strategy = strat["3_exit_if_favorite_loses_set1"]
+    assert exit_strategy["evaluable_cases"] == 2
+    assert exit_strategy["win_rate"] == 0.5  # 1 de 2 veces el retiro fue la decision correcta
+
+
+def test_strategy_comparison_none_when_no_cases():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[],
+    ):
+        result = run_backtest()
+    strat = result["strategy_comparison"]
+    assert strat["1_simple_bet_favorite"]["win_rate"] is None
+    assert strat["2_double_down_if_favorite_wins_set1"]["win_rate"] is None
+    assert strat["3_exit_if_favorite_loses_set1"]["win_rate"] is None

@@ -135,6 +135,7 @@ def init_db() -> None:
     from database.accounting.paperaccount import PaperAccount
     from database.accounting.fillverification import FillVerification
     from database.accounting.marketarbwebsocketsignal import MarketArbWebsocketSignal
+    from database.accounting.set1entrysignal import Set1EntrySignal
 
     db.connect(reuse_if_open=True)
     db.create_tables([LimitArbSignal], safe=True)
@@ -142,6 +143,11 @@ def init_db() -> None:
     # MarketArb websocket scanner (2026-08-02, pedido explícito del
     # usuario) -- tabla nueva, no necesita ALTER TABLE.
     db.create_tables([MarketArbWebsocketSignal], safe=True)
+
+    # Set1EntrySignal (2026-08-02, pedido explícito del usuario --
+    # integración de strategies/set1_favorite_reaction.py con score en
+    # vivo real) -- tabla nueva.
+    db.create_tables([Set1EntrySignal], safe=True)
 
     # Paper-trading tables (2026-07-23, see strategies/paper_trading.py) --
     # brand-new tables, no ALTER TABLE migration needed (create_tables with

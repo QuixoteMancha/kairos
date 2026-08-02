@@ -57,6 +57,59 @@ def parse_set1_winner(score: str | None) -> str | None:
     return "winner" if winner_games > loser_games else "loser"
 
 
+def _build_strategy_comparison(
+    hits: int, n: int,
+    match_hits_after_set1: int, match_after_set1_n: int,
+    favorite_comeback_hits: int, favorite_comeback_n: int,
+) -> dict[str, Any]:
+    """3 verificaciones pedidas explícitamente por el usuario 2026-08-02
+    (mismo dataset, mismas métricas ya calculadas arriba, solo
+    re-empaquetadas como comparación directa de estrategia):
+
+    1. 'simple': apostar al favorito y sostener hasta el final del
+       partido -- tasa de acierto = `overall_hit_rate` (ya calculado).
+    2. 'double_down_on_set1_confirm': apostar al favorito, apostar DE
+       NUEVO al favorito si gana el set 1 -- como ambas apuestas son al
+       MISMO lado, el resultado final de la posición reforzada es
+       exactamente `match_win_rate_after_favorite_wins_set1` (cuando se
+       activa el refuerzo, ¿qué tan seguido termina ganando igual?).
+    3. 'exit_on_set1_loss': apostar al favorito, RETIRAR la apuesta si
+       pierde el set 1 -- el retiro fue la decisión CORRECTA cuando el
+       favorito efectivamente termina perdiendo el partido también
+       (si hubiera remontado, retirarse fue un error, se pierde la
+       ganancia). Tasa de acierto del retiro = 1 -
+       `favorite_comeback_rate_after_losing_set1`.
+
+    Fail-closed: cualquier tasa queda `None` si no hay casos evaluables
+    (nunca se fabrica un porcentaje de 0 muestras)."""
+    return {
+        "1_simple_bet_favorite": {
+            "description": "Apostar al favorito y sostener hasta el final del partido.",
+            "evaluable_cases": n,
+            "win_rate": round(hits / n, 4) if n else None,
+        },
+        "2_double_down_if_favorite_wins_set1": {
+            "description": (
+                "Apostar al favorito; si gana el set 1, apostar DE NUEVO "
+                "al favorito (misma dirección, posición reforzada)."
+            ),
+            "evaluable_cases": match_after_set1_n,
+            "win_rate": round(match_hits_after_set1 / match_after_set1_n, 4) if match_after_set1_n else None,
+        },
+        "3_exit_if_favorite_loses_set1": {
+            "description": (
+                "Apostar al favorito; RETIRAR la apuesta si el favorito "
+                "pierde el set 1 (stop-loss temprano)."
+            ),
+            "evaluable_cases": favorite_comeback_n,
+            "win_rate": (
+                round(1 - (favorite_comeback_hits / favorite_comeback_n), 4)
+                if favorite_comeback_n else None
+            ),
+        },
+    }
+
+
 def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT_END_YEAR) -> dict[str, Any]:
     matches = get_matches_range(start_year, end_year, levels=TOUR_LEVELS_250_PLUS)
 
@@ -201,6 +254,10 @@ def run_backtest(start_year: int = _DEFAULT_START_YEAR, end_year: int = _DEFAULT
         "favorite_comeback_rate_after_losing_set1": favorite_comeback_rate,
         "favorite_comeback_rate_by_rank_gap": favorite_comeback_by_rank_gap,
         "by_level": by_level, "by_round": by_round,
+        "strategy_comparison": _build_strategy_comparison(
+            hits, n, match_hits_after_set1, match_after_set1_n,
+            favorite_comeback_hits, favorite_comeback_n,
+        ),
         "caveat": (
             "SOLO ATP -- sin equivalente WTA del mismo autor. Ranking REAL "
             "al momento del partido, no aproximado. set1_favorite_win_rate: "
