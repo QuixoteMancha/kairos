@@ -1,4 +1,4 @@
-from peewee import CharField, DateField, IntegerField
+from peewee import CharField, DateField, DateTimeField, FloatField, IntegerField
 
 from database.historical.tennis.tennisscannedmatch import HistoricalBaseModel
 
@@ -46,3 +46,17 @@ class ChartedMatch(HistoricalBaseModel):
     surface = CharField(null=True)
     best_of = IntegerField(null=True)
     winner = CharField(null=True)  # 'p1' | 'p2' | None
+
+    # Clima (2026-08-02, pedido explícito del usuario -- ver
+    # outer_apis/sports/tennis/match_weather.py::populate_weather_for_charted_match).
+    # A DIFERENCIA de TennisMatchWeather (3 fases before/during/end, vía
+    # ticks reales de Kalshi), acá solo hay UNA fila -- Sackmann no da
+    # hora exacta de inicio (`Time` solo ~54% de los partidos) ni
+    # duración real, así que "durante"/"al final" se fabricarían sin
+    # base real. Un único snapshot representativo del día del partido
+    # (14:00 UTC fijo, documentado como proxy, NO la hora real de cada
+    # partido) es la única fase honesta que se puede poblar acá.
+    temperature_c = FloatField(null=True)
+    humidity_pct = FloatField(null=True)
+    wind_kmh = FloatField(null=True)
+    weather_fetched_at = DateTimeField(null=True)

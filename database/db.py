@@ -256,3 +256,10 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "tennis_scanned_match", "tournament", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_recent_result", "round", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_scanned_match", "round", "VARCHAR(255)")
+    # 2026-08-02, pedido explícito del usuario: clima para ChartedMatch
+    # (Match Charting Project) -- agregado DESPUÉS del import inicial de
+    # 7744 filas, requiere ALTER TABLE igual que los casos de arriba.
+    _add_column_if_missing(db_historical, "charted_match", "temperature_c", "REAL")
+    _add_column_if_missing(db_historical, "charted_match", "humidity_pct", "REAL")
+    _add_column_if_missing(db_historical, "charted_match", "wind_kmh", "REAL")
+    _add_column_if_missing(db_historical, "charted_match", "weather_fetched_at", "DATETIME")

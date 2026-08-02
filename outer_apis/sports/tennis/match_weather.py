@@ -159,4 +159,85 @@ def populate_weather_for_all_resolved_matches() -> dict[str, Any]:
         else:
             processed += 1
 
-    return {"total": matches.count(), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+    return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+
+
+# ── ChartedMatch (2026-08-02, pedido explícito del usuario) ────────────
+#
+# A DIFERENCIA de `TennisScannedMatch` (arriba, 3 fases via ticks reales
+# de Kalshi), un `ChartedMatch` (Match Charting Project de Sackmann) NO
+# tiene hora de inicio real ni duración real -- `Time` solo está
+# poblado en ~54% de los partidos del CSV, y ni siquiera ahí hay
+# duración. Fabricar "durante"/"al final" sin esos datos violaría el
+# principio de este proyecto de nunca inventar un dato. Se puebla UN
+# solo snapshot representativo por partido, a una hora fija documentada
+# (14:00 UTC del día real del partido) -- útil para ver clima típico del
+# día, NO el clima exacto en el momento en que se jugó cada punto.
+
+_CHARTED_MATCH_SNAPSHOT_HOUR_UTC = 14
+
+
+def populate_weather_for_charted_match(match) -> dict[str, Any]:
+    """Puebla el único snapshot de clima de un `ChartedMatch` si no lo
+    tiene todavía (idempotente vía `weather_fetched_at`). Fail-closed:
+    no escribe nada si el torneo no está en `tournament_location.py` o
+    si la request de clima falla -- deja `weather_fetched_at` en NULL,
+    reintentable después (no es un fallo permanente registrado como tal,
+    a diferencia de si escribiéramos ceros)."""
+    if match.weather_fetched_at is not None:
+        return {"skipped": True, "reason": "ya tiene clima"}
+
+    location = get_location(match.tournament)
+    if location is None:
+        return {"skipped": True, "reason": f"torneo no reconocido: {match.tournament!r}"}
+
+    lat, lon = location
+    when = datetime(
+        match.match_date.year, match.match_date.month, match.match_date.day,
+        _CHARTED_MATCH_SNAPSHOT_HOUR_UTC, tzinfo=timezone.utc,
+    )
+
+    weather = open_meteo.get_weather_at(lat, lon, when)
+    if weather is None:
+        return {"skipped": True, "reason": "clima real no disponible (fecha fuera de rango o request fallida)"}
+
+    init_db_historical()
+    match.temperature_c = weather.get("temperature_c")
+    match.humidity_pct = weather.get("humidity_pct")
+    match.wind_kmh = weather.get("wind_kmh")
+    match.weather_fetched_at = _now()
+    match.save()
+
+    return {"skipped": False, "populated": True}
+
+
+def populate_weather_for_all_charted_matches() -> dict[str, Any]:
+    """Recorre TODOS los `ChartedMatch` sin clima poblado -- mismo
+    patrón que `populate_weather_for_all_resolved_matches`."""
+    from database.historical.tennis.chartedmatch import ChartedMatch
+
+    init_db_historical()
+    # Materializado a lista ANTES del loop -- el filtro es "sin clima
+    # poblado", así que la query se re-evalúa con resultados distintos
+    # a medida que el loop escribe clima; sin esto, `matches.count()`
+    # de abajo contaría de menos (bug real encontrado por el propio
+    # test de este cambio).
+    matches = list(ChartedMatch.select().where(ChartedMatch.weather_fetched_at.is_null()))
+
+    processed = skipped = errors = 0
+    reasons: dict[str, int] = {}
+    for match in matches:
+        try:
+            result = populate_weather_for_charted_match(match)
+        except Exception as e:
+            errors += 1
+            reasons[f"error: {e}"] = reasons.get(f"error: {e}", 0) + 1
+            continue
+        if result.get("skipped"):
+            skipped += 1
+            reason = result.get("reason", "desconocido")
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            processed += 1
+
+    return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
