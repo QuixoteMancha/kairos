@@ -65,6 +65,15 @@ _LOCATION_BY_TOURNAMENT: dict[str, tuple[float, float]] = {
     "newport": (41.4901, -71.3128),
     "berlin": (52.5200, 13.4050),
     "bad homburg": (50.2266, 8.6181),
+    # Agregados 2026-08-02 (pedido explícito del usuario, tras el
+    # backfill de SF/Final -- ver scripts/backfill_sf_final_matches.py):
+    "london": (51.5074, -0.1278),
+    "prague": (50.0755, 14.4378),
+    "iasi": (47.1585, 27.6014),
+    "estoril": (38.6979, -9.4215),  # sede real: Cascais, Portugal
+    "athens": (37.9838, 23.7275),
+    "stuttgart": (48.7758, 9.1829),
+    "nottingham": (52.9548, -1.1581),
 }
 
 
