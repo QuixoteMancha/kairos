@@ -37,6 +37,21 @@ _FOOTBALL_SERIES = ("KXMLSGAME", "KXUEFAGAME")
 # open, not independently verified live yet.
 _TEAM_SPORT_SERIES = ("KXMLBGAME", "KXNBAGAME", "KXNHLGAME", "KXNFLGAME")
 
+# Kalshi series para los mercados crypto de 15 minutos (2026-08-02,
+# pedido explícito del usuario: "escaneemos los mercados crypto de 15
+# minutos a ver si aparecen oportunidades para market arb, incorporalo
+# al sistema"). Verificado en vivo: cada símbolo tiene UN solo mercado
+# abierto a la vez ("¿sube el precio en los próximos 15 min?"),
+# same-ticket puro (current_a_price/current_b_price del mismo mercado,
+# sin ticker_a/ticker_b como tenis) -- MarketArb ya soporta este shape
+# sin cambios. SOLO MarketArb, no LimitArb (fuera de alcance de lo
+# pedido -- LimitArb necesita fair-price/volatilidad por categoría, acá
+# no se pidió). Investigación previa: 0 oportunidades reales en 6h de
+# logs de tenis/fútbol/team-sports con esta misma estrategia -- se
+# espera el mismo resultado acá, pero se escanea igual por pedido
+# explícito.
+_CRYPTO_15M_SERIES = ("KXBTC15M", "KXETH15M", "KXSOL15M")
+
 
 class Kairos:
 
@@ -109,6 +124,10 @@ class Kairos:
             legs = kalshi_api.get_markets(series_ticker=series)
             team_sport_markets.extend(build_team_sport_markets(legs, series))
 
+        crypto15m_markets = []
+        for series in _CRYPTO_15M_SERIES:
+            crypto15m_markets.extend(kalshi_api.get_markets(series_ticker=series))
+
         # LimitArb needs the paired player-A-vs-player-B tennis markets,
         # the Elo-enriched favorite-only football markets, and the paired
         # team-vs-team markets for the fair-price/volatility comparison.
@@ -122,7 +141,10 @@ class Kairos:
         # arb -- see strategies/market_arb.py module docstring). Football
         # is NOT added here: its favorite-only markets aren't a genuine
         # cross-ticket pair (see outer_apis/kalshi_football_markets.py).
-        market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets)
+        # crypto15m_markets added 2026-08-02 (pedido explícito del
+        # usuario) -- same-ticket only, no cross-ticket pairing exists
+        # for these (un solo mercado binario por símbolo).
+        market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets + crypto15m_markets)
         market_arb.evaluate_risk_and_return_opportunities()
         market_arb.execute_order_placement()
 
