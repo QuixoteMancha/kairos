@@ -82,23 +82,23 @@ def test_case_insensitive_round_match():
 def test_hit_when_price_converges_past_target():
     match = _make_match("M4", "Semifinal")
     signal_time = _now() - timedelta(hours=2)
-    _make_signal("M4", "a", 0.38, 0.10, 0.30, signal_time)
-    # target = raw_edge + avg_volatility/2 = 0.10 + 0.15 = 0.25
+    _make_signal("M4", "a", 0.22, 0.10, 0.16, signal_time)
+    # target = 0.22 + 0.10 + 0.16/2 = 0.40
     TennisMatchProbabilityTick.create(
         match=match, observed_at=signal_time + timedelta(minutes=30),
-        market_price_a=0.30, model_fair_a=0.4,
+        market_price_a=0.42, model_fair_a=0.4,
     )
     result = run_backtest()
     assert result["evaluable_cases"] == 1
     assert result["hits"] == 1
     assert result["cases"][0]["hit"] is True
-    assert result["cases"][0]["target"] == pytest.approx(0.25)
+    assert result["cases"][0]["target"] == pytest.approx(0.40)
 
 
 def test_miss_when_price_never_converges():
     match = _make_match("M5", "Final")
     signal_time = _now() - timedelta(hours=2)
-    _make_signal("M5", "a", 0.38, 0.10, 0.30, signal_time)  # target=0.25
+    _make_signal("M5", "a", 0.22, 0.10, 0.16, signal_time)  # target=0.40
     TennisMatchProbabilityTick.create(
         match=match, observed_at=signal_time + timedelta(minutes=30),
         market_price_a=0.14, model_fair_a=0.4,
@@ -111,10 +111,9 @@ def test_miss_when_price_never_converges():
 def test_dog_side_b_uses_complement_approximation():
     match = _make_match("M6", "Semifinal")
     signal_time = _now() - timedelta(hours=1)
-    _make_signal("M6", "b", 0.30, 0.05, 0.20, signal_time)
-    # target = raw_edge + avg_volatility/2 = 0.05 + 0.10 = 0.15 -- dog es
-    # side b, tick guarda market_price_a=0.40 -> dog aproximado =
-    # 1-0.40 = 0.60 >= 0.15 -> hit
+    _make_signal("M6", "b", 0.20, 0.05, 0.20, signal_time)
+    # target = 0.20 + 0.05 + 0.10 = 0.35 -- dog es side b, tick guarda
+    # market_price_a=0.40 -> dog aproximado = 1-0.40 = 0.60 >= 0.35 -> hit
     TennisMatchProbabilityTick.create(
         match=match, observed_at=signal_time + timedelta(minutes=10),
         market_price_a=0.40, model_fair_a=0.5,
@@ -123,11 +122,19 @@ def test_dog_side_b_uses_complement_approximation():
     assert result["hits"] == 1
 
 
-def test_excludes_case_when_target_above_50pct():
+def test_excludes_case_when_signal_price_above_25pct():
     _make_match("M9", "Final")
-    # target = 0.30 + 0.30/2 = 0.45 -- justo bajo 0.5, pasa
-    _make_signal("M9", "a", 0.2, 0.40, 0.30, _now() - timedelta(hours=1))
-    # target = 0.40 + 0.30/2 = 0.55 -- por encima de 0.5, se excluye
+    _make_signal("M9", "a", 0.30, 0.05, 0.10, _now() - timedelta(hours=1))
+    result = run_backtest()
+    assert result["evaluable_cases"] == 0
+    assert result["excluded_signal_price_above_25pct"] == 1
+
+
+def test_excludes_case_when_target_above_50pct():
+    _make_match("M10", "Final")
+    # signal_price < 0.25 pasa el primer filtro, pero target = 0.22 + 0.40
+    # + 0.30/2 = 0.77 -- por encima de 0.5, se excluye
+    _make_signal("M10", "a", 0.22, 0.40, 0.30, _now() - timedelta(hours=1))
     result = run_backtest()
     assert result["evaluable_cases"] == 0
     assert result["excluded_target_above_50pct"] == 1
@@ -142,7 +149,7 @@ def test_skips_match_without_underdog_signal():
 
 def test_skips_match_without_post_signal_ticks():
     _make_match("M8", "Semifinal")
-    _make_signal("M8", "a", 0.4, 0.03, 0.2, _now())
+    _make_signal("M8", "a", 0.20, 0.03, 0.2, _now())
     result = run_backtest()
     assert result["evaluable_cases"] == 0
 

@@ -5,14 +5,15 @@ segundo set con la probabilidad convergiendo hacia 50%):
 
     "En semifinales y finales de torneos ATP/WTA regulares (250+, dado
     que los niveles tienden a ser más parejos), la probabilidad del
-    underdog infravalorado tiende a alcanzar `raw_edge +
-    avg_volatility/2` -- SIENDO ese target <= 50%, es decir, la
-    hipótesis solo se evalúa cuando el edge+volatilidad no implica que
-    el underdog pase a ser favorito (2026-08-01, refinamiento explícito
-    del usuario tras la primera corrida: la versión anterior sumaba el
-    precio de señal, contaminando el resultado con casos donde el
-    underdog simplemente terminó GANANDO el partido completo, no
-    'convergiendo')."
+    underdog infravalorado tiende a subir `raw_edge + avg_volatility/2`
+    desde su precio pre-match -- PERO SOLO se evalúa cuando (a) el
+    precio pre-match del underdog está por debajo de 25% (ej. 22%) Y
+    (b) el target resultante (precio pre-match + edge + vol/2, ej. 40%)
+    es <= 50% -- caso contrario no aplica (2026-08-01, segundo
+    refinamiento explícito del usuario: la 1ra versión sumaba señal+
+    edge+vol sin filtrar por precio inicial, contaminando el resultado
+    con casos donde el underdog ya arrancaba cerca del target o terminó
+    GANANDO el partido completo en vez de 'convergiendo')."
 
 SOLO INFORME, NO AUTO-APLICA NADA (mismo criterio que
 `calibration_report.py`) -- si el resultado confirma la hipótesis, es
@@ -29,14 +30,13 @@ Para cada `TennisScannedMatch` SETTLED (`winner` no NULL) con
      `market_id` con `case='favorite_overvalued'` (el caso donde el
      underdog está infravalorado -- ver `strategies/limit_arb.py`,
      `market_leg` es el underdog comprado a mercado).
-  2. `target = raw_edge + avg_volatility/2` -- el precio ABSOLUTO al que
-     la hipótesis dice que el underdog debería converger (NO se suma al
-     precio de señal -- eso fue la versión anterior, descartada por
-     contaminar el resultado con victorias completas del underdog en
-     vez de convergencia real). Solo se evalúan casos con `target <=
-     0.5` -- si el target implica que el underdog ya pasaría a ser
-     favorito, el caso se excluye (no es lo que la hipótesis dice).
-  3. Se busca en `TennisMatchProbabilityTick` (ticks reales POST-señal,
+  2. Se descarta si `market_leg_price_at_signal >= 0.25` (el underdog
+     tiene que arrancar claramente por debajo, ej. 22% -- pedido
+     explícito del usuario, evita casos donde ya está cerca del 50%).
+  3. `target = market_leg_price_at_signal + raw_edge + avg_volatility/2`
+     (ej. 22% + edge+vol/2 = 40%). Se descarta si `target > 0.5` (fuera
+     de alcance de la hipótesis, implicaría underdog favorito).
+  4. Se busca en `TennisMatchProbabilityTick` (ticks reales POST-señal,
      antes del settlement) el precio MÁXIMO que alcanzó el underdog.
      CAVEAT conocido: el tick solo guarda `market_price_a` (precio real
      de la pata A) -- si el underdog es la pata B, se aproxima como
@@ -44,7 +44,7 @@ Para cada `TennisScannedMatch` SETTLED (`winner` no NULL) con
      spread bid/ask independiente, ver `outer_apis/kalshi/markets/
      tennis.py` docstring). Esto introduce ruido en esos casos,
      documentado, no oculto.
-  4. "Convergió" (hit) si el máximo alcanzado >= target.
+  5. "Convergió" (hit) si el máximo alcanzado >= target.
 
 LIMITACIÓN DE DATOS (2026-08-01, honesta, no ocultada): `round` es una
 columna NUEVA -- partidos trackeados ANTES de hoy no la tienen a menos
@@ -81,6 +81,7 @@ def run_backtest() -> dict:
     ]
 
     cases = []
+    excluded_signal_price_above_25 = 0
     excluded_target_above_50 = 0
     for match in sf_final_matches:
         signal = (
@@ -95,7 +96,11 @@ def run_backtest() -> dict:
         if signal is None:
             continue  # este partido nunca tuvo una señal de underdog infravalorado
 
-        target = signal.raw_edge + signal.avg_volatility / 2.0
+        if signal.market_leg_price_at_signal >= 0.25:
+            excluded_signal_price_above_25 += 1
+            continue  # underdog no arrancaba lo bastante infravalorado (pedido del usuario)
+
+        target = signal.market_leg_price_at_signal + signal.raw_edge + signal.avg_volatility / 2.0
         if target > 0.5:
             excluded_target_above_50 += 1
             continue  # fuera de alcance de la hipótesis (implicaría underdog favorito)
@@ -141,6 +146,7 @@ def run_backtest() -> dict:
 
     return {
         "total_settled_sf_final_matches": len(sf_final_matches),
+        "excluded_signal_price_above_25pct": excluded_signal_price_above_25,
         "excluded_target_above_50pct": excluded_target_above_50,
         "evaluable_cases": n,
         "hits": hits,
