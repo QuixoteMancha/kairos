@@ -6,7 +6,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from outer_apis.scrapers.tennis.tml_database_scraper import get_year_matches, TOUR_LEVELS_250_PLUS
-from scripts.favorite_by_historical_rank_backtest import run_backtest
+from scripts.favorite_by_historical_rank_backtest import run_backtest, parse_set1_winner
 
 
 def _fake_csv_rows(*rows: dict) -> list[dict]:
@@ -100,3 +100,71 @@ def test_backtest_excludes_matches_without_rank():
     assert result["excluded_no_rank"] == 1
     assert result["evaluable_cases"] == 0
     assert result["overall_hit_rate"] is None
+
+
+# ── parse_set1_winner ────────────────────────────────────────────────
+
+def test_parse_set1_winner_match_winner_won_set1():
+    assert parse_set1_winner("6-4 6-3") == "winner"
+
+
+def test_parse_set1_winner_match_winner_lost_set1_comeback():
+    assert parse_set1_winner("0-6 6-4 6-4") == "loser"
+
+
+def test_parse_set1_winner_with_tiebreak_notation():
+    assert parse_set1_winner("7-6(5) 6-3") == "winner"
+
+
+def test_parse_set1_winner_fail_closed_on_walkover():
+    assert parse_set1_winner("W/O") is None
+    assert parse_set1_winner("") is None
+    assert parse_set1_winner(None) is None
+
+
+def test_parse_set1_winner_fail_closed_on_tied_score():
+    assert parse_set1_winner("6-6 6-3") is None
+
+
+# ── set1_favorite_win_rate en el backtest ───────────────────────────
+
+def test_backtest_set1_favorite_win_rate_when_favorite_wins_both():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "6-4 6-3", "minutes": 95,
+        }],
+    ):
+        result = run_backtest()
+    assert result["set1_evaluable_cases"] == 1
+    assert result["set1_favorite_win_rate"] == 1.0
+
+
+def test_backtest_set1_favorite_loses_set1_but_wins_match():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "3-6 6-4 6-4", "minutes": 150,
+        }],
+    ):
+        result = run_backtest()
+    assert result["overall_hit_rate"] == 1.0  # el favorito ganó el partido
+    assert result["set1_favorite_win_rate"] == 0.0  # pero perdió el 1er set
+
+
+def test_backtest_set1_excludes_walkovers():
+    with patch(
+        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        return_value=[{
+            "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
+            "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
+            "loser_name": "B", "loser_rank": 50, "score": "W/O", "minutes": None,
+        }],
+    ):
+        result = run_backtest()
+    assert result["set1_evaluable_cases"] == 0
+    assert result["set1_favorite_win_rate"] is None
