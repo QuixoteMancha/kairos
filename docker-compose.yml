@@ -91,6 +91,11 @@ services:
       - kairos_net
     volumes:
       - kairos_data_historical:/data_historical
+      # kairos_data (2026-08-02, pedido explícito del usuario, fusión de
+      # set1_favorite_reaction_worker acá -- ver docstring de
+      # workers/tennis_match_tick_worker.py) -- Set1EntrySignal vive en
+      # `db`/DB_PATH (kairos_data), no en la histórica.
+      - kairos_data:/data
 
   market_arb_websocket_scanner:
     image: kairos:latest

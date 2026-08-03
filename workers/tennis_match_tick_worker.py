@@ -16,7 +16,17 @@ Batching: UNA sola llamada `get_markets_by_tickers` para TODOS los
 partidos abiertos en el ciclo (mismo patrón que
 `workers/limitarb_monitor_worker.py`, ver memoria
 kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26) -- con
-docenas de partidos abiertos simultáneos, evita 1 request por partido."""
+docenas de partidos abiertos simultáneos, evita 1 request por partido.
+
+FUSIONADO 2026-08-02 (pedido explícito del usuario -- evitar "nave
+espacial con tantos módulos separados en contenedores diferentes" para
+tareas livianas): este ciclo también llama a
+`workers.set1_favorite_reaction_worker.check_and_save_set1_signal` por
+cada partido abierto -- mismo dato (`get_open_scanned_matches`), misma
+cadencia de 60s, sin necesidad de un contenedor propio. Aislado en SU
+PROPIO try/except (ver más abajo) para que un fallo de TennisExplorer
+(scraping no oficial, sin SLA) nunca bloquee ni degrade el tick de
+precio real de Kalshi, que es más crítico."""
 
 import os
 import time
@@ -30,6 +40,7 @@ from database.historical.tennis.matchstats import has_match_stats, save_match_st
 from models.fairprice.sports.tennis.tennisfmodel import TennisFModel
 from outer_apis.sports.tennis.match_history import set_fetch_allowlist
 from outer_apis.scrapers.tennis.flashscore_scraper import find_match_id, get_match_statistics
+from workers.set1_favorite_reaction_worker import check_and_save_set1_signal
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
@@ -119,7 +130,7 @@ def _settlement_result(market: dict | None) -> str | None:
 def run_once() -> dict:
     open_matches = get_open_scanned_matches()
     if not open_matches:
-        return {"open": 0, "ticked": 0, "settled": 0, "errors": 0}
+        return {"open": 0, "ticked": 0, "settled": 0, "errors": 0, "set1_processed": 0, "set1_errors": 0}
 
     api = KalshiAPI()
     api.initialize()
@@ -127,8 +138,22 @@ def run_once() -> dict:
     all_tickers = [t for m in open_matches for t in (m["ticker_a"], m["ticker_b"])]
     market_cache = api.get_markets_by_tickers(all_tickers)
 
+    # Compartidos entre TODOS los partidos del ciclo (ver
+    # check_and_save_set1_signal) -- evita pedir el ranking/score en
+    # vivo repetido por cada match del mismo tour.
+    set1_rank_cache: dict = {}
+    set1_live_cache: dict = {}
+    set1_processed = set1_errors_count = 0
+
     ticked = settled = errors = 0
     for scanned in open_matches:
+        try:
+            if check_and_save_set1_signal(scanned, set1_rank_cache, set1_live_cache) == "processed":
+                set1_processed += 1
+        except Exception as e:
+            set1_errors_count += 1
+            print(f"[tennis_match_tick_worker] error set1_reaction en {scanned.get('market_id')}: {e}")
+
         try:
             market_a = market_cache.get(scanned["ticker_a"])
             market_b = market_cache.get(scanned["ticker_b"])
@@ -167,7 +192,10 @@ def run_once() -> dict:
             errors += 1
             print(f"[tennis_match_tick_worker] error en {scanned.get('market_id')}: {e}")
 
-    result = {"open": len(open_matches), "ticked": ticked, "settled": settled, "errors": errors}
+    result = {
+        "open": len(open_matches), "ticked": ticked, "settled": settled, "errors": errors,
+        "set1_processed": set1_processed, "set1_errors": set1_errors_count,
+    }
     print(f"[tennis_match_tick_worker] {result}")
     return result
 

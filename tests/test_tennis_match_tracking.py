@@ -105,7 +105,8 @@ def test_tick_worker_winner_logic_and_batching():
 
     with patch("workers.tennis_match_tick_worker.KalshiAPI") as mock_api_cls, \
          patch.object(worker._fmodel, "calculate_fair_price", return_value={"fair_a_price": 0.6, "fair_b_price": 0.4}), \
-         patch("workers.tennis_match_tick_worker.find_match_id", return_value=None) as mock_find_match_id:
+         patch("workers.tennis_match_tick_worker.find_match_id", return_value=None) as mock_find_match_id, \
+         patch("workers.tennis_match_tick_worker.check_and_save_set1_signal", return_value="skipped") as mock_set1:
         mock_api = mock_api_cls.return_value
         mock_api.get_markets_by_tickers.return_value = fake_cache
         result = worker.run_once()
@@ -116,9 +117,16 @@ def test_tick_worker_winner_logic_and_batching():
     # que el settlement SIEMPRE intenta el fetch, sin tumbar el ciclo.
     mock_find_match_id.assert_called_once()
 
+    # 2026-08-02, fusión de set1_favorite_reaction_worker: se llama para
+    # AMBOS partidos abiertos (W1 y W2), sin importar si después
+    # resuelven o no en este mismo ciclo.
+    assert mock_set1.call_count == 2
+
     assert result["settled"] == 1
     assert result["ticked"] == 1
     assert result["errors"] == 0
+    assert result["set1_processed"] == 0
+    assert result["set1_errors"] == 0
 
     w1 = TennisScannedMatch.get(TennisScannedMatch.market_id == "KXATPMATCH-W1")
     assert w1.winner == "a"  # ticker_a resolvió 'yes' -> ganó player_a
@@ -126,3 +134,32 @@ def test_tick_worker_winner_logic_and_batching():
     tick = TennisMatchProbabilityTick.select().first()
     assert tick.match.market_id == "KXATPMATCH-W2"
     assert tick.market_price_a == 0.61
+
+
+def test_tick_worker_set1_failure_never_blocks_price_tick():
+    """2026-08-02, pedido explícito del usuario: un fallo de
+    TennisExplorer (scraping no oficial, sin SLA) NUNCA debe bloquear ni
+    degradar el tick de precio real de Kalshi, que es más crítico."""
+    from workers import tennis_match_tick_worker as worker
+
+    register_scanned_match(_fake_market("KXATPMATCH-SF1"))
+
+    fake_cache = {
+        "KXATPMATCH-SF1-A": {"current_a_price": 0.5, "current_b_price": 0.5, "raw": {}},
+        "KXATPMATCH-SF1-B": {"current_a_price": 0.5, "current_b_price": 0.5, "raw": {}},
+    }
+
+    with patch("workers.tennis_match_tick_worker.KalshiAPI") as mock_api_cls, \
+         patch.object(worker._fmodel, "calculate_fair_price", return_value={"fair_a_price": 0.5, "fair_b_price": 0.5}), \
+         patch(
+             "workers.tennis_match_tick_worker.check_and_save_set1_signal",
+             side_effect=Exception("TennisExplorer caído"),
+         ):
+        mock_api = mock_api_cls.return_value
+        mock_api.get_markets_by_tickers.return_value = fake_cache
+        result = worker.run_once()
+
+    assert result["ticked"] == 1  # el tick de precio real se guardó igual
+    assert result["errors"] == 0  # no cuenta como error del tick principal
+    assert result["set1_processed"] == 0
+    assert result["set1_errors"] == 1  # el fallo se contó por separado
