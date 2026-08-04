@@ -26,6 +26,7 @@ superficie pública de llamada vive en `outer_apis/tennis_match_history.py`.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from datetime import datetime, UTC
@@ -35,6 +36,18 @@ from outer_apis.scrapers import brightdata_proxy
 
 _SEARCH_URL = "https://s.flashscore.com/search/?q={name}&l=1&s=2&f=1%3B1&pid=2&sid=2"
 _RESULTS_URL = "https://www.flashscore.com/player/{slug}/{pid}/results/"
+
+# 2026-08-04, pedido explícito del usuario: "el proxy ya no se usará
+# hasta nuevo aviso para fetchs" -- migramos historial/H2H a
+# TennisExplorer (sin proxy, ver match_history.py), pero
+# find_match_id/get_match_statistics (estadísticas detalladas de
+# partido) SIGUEN sin reemplazo real y requieren proxy BrightData
+# (Flashscore bloquea esas 2 páginas sin proxy). En vez de borrar esa
+# estructura (el worker sigue revisando partidos nuevos sin stats,
+# `has_match_stats`/`_fetch_and_save_match_stats` intactos), se pausa
+# el fetch en el punto más bajo posible -- reversible con una env var,
+# sin tocar código, cuando el usuario avise que se puede retomar.
+PROXY_FETCH_ENABLED = os.getenv("FLASHSCORE_PROXY_FETCH_ENABLED", "false").strip().lower() == "true"
 
 _SET_FIELDS = [("BA", "BB"), ("BC", "BD"), ("BE", "BF"), ("BG", "BH"), ("BI", "BJ")]
 
@@ -88,7 +101,11 @@ def search_player(name: str) -> tuple[str, str] | None:
 def _fetch_results_page(pid: str, slug: str) -> str | None:
     """Obtiene la página de resultados del jugador vía proxy BrightData.
     Fail-closed: None si BrightData no está configurado o falla la
-    request (nunca intenta sin proxy, Flashscore bloquea esta página)."""
+    request (nunca intenta sin proxy, Flashscore bloquea esta página),
+    o si `PROXY_FETCH_ENABLED` está en False (pausado, ver docstring del
+    módulo -- 2026-08-04)."""
+    if not PROXY_FETCH_ENABLED:
+        return None
     url = _RESULTS_URL.format(slug=slug, pid=pid)
     headers = {
         "X-Fsign": "SW9D1eZo",
@@ -462,7 +479,11 @@ def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None,
         son porcentajes tipo "58% (31/53)", no siempre numéricos puros,
         se guardan crudos a propósito). Fail-closed: None si falla la
         request o el partido no tiene estadísticas trackeadas (común en
-        challenger/ITF de bajo nivel) -- nunca fabrica valores."""
+        challenger/ITF de bajo nivel), o si `PROXY_FETCH_ENABLED` está en
+        False (pausado, ver docstring del módulo -- 2026-08-04) -- nunca
+        fabrica valores."""
+    if not PROXY_FETCH_ENABLED:
+        return None
     url = _STATS_URL.format(match_id=match_id)
     headers = {
         "X-Fsign": "SW9D1eZo",

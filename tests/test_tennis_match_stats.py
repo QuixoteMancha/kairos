@@ -89,6 +89,8 @@ def _make_response(text, status=200):
 
 def test_get_match_statistics_parses_sections_and_values():
     with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
+    ), patch(
         "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
         return_value=_make_response(_REAL_STATS_FEED),
     ):
@@ -103,6 +105,8 @@ def test_get_match_statistics_parses_sections_and_values():
 
 def test_get_match_statistics_fail_closed_on_empty_response():
     with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
+    ), patch(
         "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
         return_value=_make_response("0"),
     ):
@@ -111,6 +115,8 @@ def test_get_match_statistics_fail_closed_on_empty_response():
 
 def test_get_match_statistics_fail_closed_on_request_failure():
     with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
+    ), patch(
         "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
         return_value=None,
     ):
@@ -119,6 +125,8 @@ def test_get_match_statistics_fail_closed_on_request_failure():
 
 def test_get_match_statistics_fail_closed_on_http_error():
     with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
+    ), patch(
         "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
         return_value=_make_response("", status=500),
     ):
@@ -226,3 +234,36 @@ def test_find_match_id_falls_back_to_player_b_when_a_not_found():
             "Hamad Medjedovic", "Juan Manuel Cerundolo", "2026-08-01",
         )
     assert match_id == "abc123"
+
+
+# ── proxy pausado por default (2026-08-04, pedido explícito del usuario) ──
+
+def test_proxy_fetch_disabled_by_default():
+    """"El proxy ya no se usará hasta nuevo aviso para fetchs" -- pedido
+    explícito del usuario. `PROXY_FETCH_ENABLED` debe ser False por
+    default (env var `FLASHSCORE_PROXY_FETCH_ENABLED` sin configurar)."""
+    from outer_apis.scrapers.tennis.flashscore_scraper import PROXY_FETCH_ENABLED
+    assert PROXY_FETCH_ENABLED is False
+
+
+def test_get_match_statistics_never_calls_proxy_when_disabled():
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", False,
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+    ) as mock_proxy:
+        result = get_match_statistics("whatever")
+    mock_proxy.assert_not_called()
+    assert result is None
+
+
+def test_fetch_results_page_never_calls_proxy_when_disabled():
+    from outer_apis.scrapers.tennis.flashscore_scraper import _fetch_results_page
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", False,
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+    ) as mock_proxy:
+        result = _fetch_results_page("pid1", "slug1")
+    mock_proxy.assert_not_called()
+    assert result is None
