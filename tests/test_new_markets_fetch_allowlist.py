@@ -64,7 +64,7 @@ def test_fetch_and_cache_skips_live_fetch_when_player_not_in_allowlist():
     )
     match_history.set_fetch_allowlist({"Someone Else"})  # este jugador NO está autorizado hoy
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches") as mock_fetch:
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches") as mock_fetch:
         result = match_history._fetch_and_cache("Old Match Player")
 
     mock_fetch.assert_not_called()
@@ -75,7 +75,7 @@ def test_fetch_and_cache_skips_live_fetch_when_player_not_in_allowlist():
 def test_fetch_and_cache_returns_empty_when_not_in_allowlist_and_no_data_ever():
     match_history.set_fetch_allowlist({"Someone Else"})
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches") as mock_fetch:
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches") as mock_fetch:
         result = match_history._fetch_and_cache("Never Fetched Player")
 
     mock_fetch.assert_not_called()
@@ -86,7 +86,7 @@ def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
     match_history.set_fetch_allowlist({"New Match Player"})
     fake_matches = [{"fecha": "2026-08-01", "oponente": "Y", "resultado": "L", "score": "3-6 4-6", "source": "flashscore"}]
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches",
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("New Match Player")
 
@@ -96,7 +96,7 @@ def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
 
 def test_fetch_and_cache_unrestricted_when_allowlist_is_none():
     match_history.set_fetch_allowlist(None)  # comportamiento de siempre
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches",
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
                return_value=[]) as mock_fetch:
         match_history._fetch_and_cache("Anybody")
     mock_fetch.assert_called_once()

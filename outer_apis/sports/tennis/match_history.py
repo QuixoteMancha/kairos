@@ -1,6 +1,25 @@
 """
 Public call surface for real tennis match-history signals (recent form +
-head-to-head) — wraps `outer_apis/scrapers/tennis/flashscore_scraper.py`.
+head-to-head) — wraps `outer_apis/scrapers/tennis/tennisexplorer_player_scraper.py`.
+
+MIGRADO DE FLASHSCORE A TENNISEXPLORER (2026-08-04, pedido explícito
+del usuario: "elimina cualquier referencia a flashscore... veo que
+tennisexplorer se actualiza rápido"). Antes usaba
+`flashscore_scraper.get_player_recent_matches` (requiere proxy
+residencial BrightData, costo real ~$1/día + incidentes de saldo
+agotado documentados). `tennisexplorer_player_scraper.get_player_recent_matches`
+NO necesita proxy y devuelve el MISMO shape de dict
+({"fecha","oponente","resultado","score","source"}), así que todo lo
+de abajo (caching, prefetch paralelo, fail-closed) sigue igual sin
+tocar la lógica de negocio.
+
+Flashscore queda reservado SOLO para lo que no tiene reemplazo:
+`flashscore_scraper.find_match_id`/`get_match_statistics` (estadísticas
+detalladas de partido -- aces/winners/unforced errors -- que
+TennisExplorer no expone), usado por `tennis_match_tick_worker.py` --
+esas llamadas son escasas (una vez por partido liquidado, no un
+prefetch masivo por scan), así que el costo/riesgo de proxy que queda
+es mucho menor.
 
 Separation of concerns, same pattern as `outer_apis/tennis_rankings.py` and
 `outer_apis/tennis_serve_stats.py`: `outer_apis/scrapers/tennis/*.py` only does raw
@@ -16,11 +35,12 @@ head-to-head are still simple signals, not a full replacement for
 form/injury/surface modeling, but they're REAL data instead of nothing.
 
 PARALLEL PREFETCH (added 2026-07-20, see kairos-tennis-flashscore-
-worker-parallelization memory): unlike the ranking/serve-stat sources,
-Flashscore has no bulk endpoint — each player needs its own proxied
-request. Running that sequentially for every tennis market in a real scan
-(~100 unique players) took over 5 minutes and blew past a reasonable
-timeout. This mirrors the pre-makeover architecture's worker pattern
+worker-parallelization memory -- name kept for history, source is now
+TennisExplorer): unlike the ranking/serve-stat sources, neither
+Flashscore nor TennisExplorer has a bulk endpoint — each player needs
+its own request. Running that sequentially for every tennis market in a
+real scan (~100 unique players) took over 5 minutes and blew past a
+reasonable timeout. This mirrors the pre-makeover architecture's worker pattern
 (`src/core/orchestration/workers.py`, deleted `02d7f35` -- periodic
 background workers that pre-warmed data caches so the hot scan path never
 blocked on live fetches) adapted to this repo's CURRENT one-shot
@@ -58,7 +78,7 @@ sobrevive a cualquier reinicio.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from outer_apis.scrapers.tennis import flashscore_scraper
+from outer_apis.scrapers.tennis import tennisexplorer_player_scraper
 from database.historical.tennis.writer import (
     save_match_history, save_head_to_head_snapshot, get_recent_match_history, get_any_match_history,
 )
@@ -105,8 +125,9 @@ MIN_MATCHES_FOR_FORM = 3  # fail-closed: fewer than this -> no form signal, not 
 # Tuned empirically 2026-07-20: throughput roughly doubled from 8->16
 # workers (~0.58 -> ~1.7 players/s), flattened out from 16->24 (proxy/
 # network-bound past that point, not thread-count-bound) -- 16 is a
-# reasonable balance between speed and not hammering BrightData with too
-# many simultaneous sessions from one account.
+# reasonable balance between speed and not hammering TennisExplorer with
+# too many simultaneous requests (no proxy/session limit here anymore, but
+# still real courtesy against a site that has no official rate-limit docs).
 DEFAULT_PREFETCH_WORKERS = 16
 
 
@@ -118,12 +139,12 @@ def _fetch_and_cache(player_name: str) -> list[dict]:
     if _fetch_allowlist is not None and player_name not in _fetch_allowlist:
         # No autorizado a fetch en vivo este ciclo (no está en un partido
         # nuevo, ver set_fetch_allowlist) -- servir lo último que haya en
-        # DB aunque esté stale, en vez de pegarle a Flashscore/BrightData.
+        # DB aunque esté stale, en vez de pegarle a TennisExplorer en vivo.
         stale = get_any_match_history(player_name, limit=_MAX_DEPTH)
         return stale if stale is not None else []
 
     try:
-        matches = flashscore_scraper.get_player_recent_matches(player_name, n=_MAX_DEPTH)
+        matches = tennisexplorer_player_scraper.get_player_recent_matches(player_name, n=_MAX_DEPTH)
     except Exception:
         matches = []
 
@@ -145,7 +166,7 @@ def prefetch_player_histories(names: list[str], max_workers: int = DEFAULT_PREFE
 
     Tolerant per player: a single player's fetch failing/timing out
     doesn't stop the others (each `_fetch_and_cache` call is already
-    internally fail-closed to [], see flashscore_scraper docstring) --
+    internally fail-closed to [], see tennisexplorer_player_scraper docstring) --
     this function itself never raises.
     """
     unique_names = sorted({n.strip() for n in names if n and n.strip()})

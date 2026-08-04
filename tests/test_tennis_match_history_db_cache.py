@@ -84,7 +84,7 @@ def test_fetch_and_cache_skips_live_fetch_when_db_is_fresh():
     mock, no solo el resultado."""
     _insert_match("Djokovic N.", fetched_at=datetime.now(timezone.utc) - timedelta(minutes=1))
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches") as mock_fetch:
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches") as mock_fetch:
         result = match_history._fetch_and_cache("Djokovic N.")
 
     mock_fetch.assert_not_called()
@@ -99,7 +99,7 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
     fake_matches = [{"fecha": "2026-07-27", "oponente": "Zverev A.", "resultado": "L",
                       "score": "3-6 4-6", "source": "flashscore"}]
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches",
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("Medvedev D.")
 
@@ -107,7 +107,7 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
     assert result == fake_matches
 
     # Verifica que quedó persistido -- una llamada posterior ya no debería tocar la red.
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches") as mock_fetch2:
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches") as mock_fetch2:
         result2 = match_history._fetch_and_cache("Medvedev D.")
     mock_fetch2.assert_not_called()
     assert len(result2) == 1
@@ -146,7 +146,7 @@ def test_fetch_and_cache_refetches_when_db_stale():
     fake_matches = [{"fecha": "2026-07-28", "oponente": "Sabalenka A.", "resultado": "W",
                       "score": "6-2 6-1", "source": "flashscore"}]
 
-    with patch("outer_apis.sports.tennis.match_history.flashscore_scraper.get_player_recent_matches",
+    with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("Swiatek I.")
 

@@ -36,6 +36,7 @@ falla, pasar el slug real explícito (visible en cualquier link
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 from typing import Any
 
 import requests
@@ -266,3 +267,87 @@ def get_player_match_history(
             continue
         all_results.extend(_parse_year_html(html, player_display_name))
     return all_results
+
+
+def _to_iso_date(raw_date: str, reference_year: int) -> str | None:
+    """'03.08.' (sin año -- TennisExplorer solo lo omite para filas del
+    año en curso) -> ISO, usando `reference_year` (el año pedido en el
+    fetch, correcto porque cada fetch es por año explícito). Fail-closed:
+    None si no parsea (nunca fabrica una fecha)."""
+    parts = [p for p in raw_date.strip().split(".") if p]
+    if len(parts) < 2:
+        return None
+    day, month = parts[0], parts[1]
+    try:
+        return _date(reference_year, int(month), int(day)).isoformat()
+    except ValueError:
+        return None
+
+
+def _derive_result_from_score(score: str) -> str:
+    """W/L real contando sets ganados vs perdidos en el score REORIENTADO
+    al dueño de la página (ya lo hace `_parse_year_html` vía
+    `_reorient_score_to_self`) -- mismo criterio point-in-time que
+    `scripts/wta_top200_historical_backfill.py::backfill_player`
+    (extraído acá para reusar en `get_player_recent_matches`)."""
+    sets_won = sets_lost = 0
+    for set_str in (score or "").split(","):
+        set_str = set_str.strip()
+        if "-" not in set_str:
+            continue
+        parts = set_str.split("-")[:2]
+        if len(parts) != 2:
+            continue
+        try:
+            a, b = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if a > b:
+            sets_won += 1
+        elif b > a:
+            sets_lost += 1
+    return "W" if sets_won > sets_lost else "L"
+
+
+def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, Any]]:
+    """Historial reciente de partidos de UN jugador vía TennisExplorer --
+    2026-08-04, pedido explícito del usuario ("elimina cualquier
+    referencia a flashscore" para la señal de forma reciente/H2H, ya que
+    "podemos usar tennisexplorer perfectamente para sacar los scores, ya
+    que veo que se actualiza rápido"). Reemplaza
+    `flashscore_scraper.get_player_recent_matches` -- MISMO shape de
+    retorno para no tener que tocar los callers (`match_history.py`).
+
+    Returns: list de dicts (más reciente primero): {"fecha", "oponente",
+    "resultado": "W"|"L", "score", "source": "tennisexplorer"}.
+    Fail-closed: [] si no se encuentra el slug, el fetch falla, o no hay
+    partidos parseables con fecha real. Trae año actual + año anterior
+    (cubre jugadores a inicio de temporada sin necesitar más de 1 año
+    extra -- `_MAX_DEPTH` de `match_history.py` es 40, un torneo activo
+    ya cubre eso dentro del año en curso salvo casos raros de muy poca
+    actividad)."""
+    slug = guess_player_slug(player_name)
+    if slug is None:
+        return []
+
+    current_year = _date.today().year
+    out: list[dict[str, Any]] = []
+    for year in (None, current_year - 1):
+        html = _fetch(slug, year=year)
+        if html is None or not _verify_player_page(html, player_name):
+            continue
+        resolved_year = current_year if year is None else year
+        for m in _parse_year_html(html, player_name):
+            iso_date = _to_iso_date(m["date"], resolved_year)
+            if iso_date is None or not m.get("score"):
+                continue
+            out.append({
+                "fecha": iso_date,
+                "oponente": m["opponent"],
+                "resultado": _derive_result_from_score(m["score"]),
+                "score": m["score"],
+                "source": "tennisexplorer",
+            })
+
+    out.sort(key=lambda r: r["fecha"], reverse=True)
+    return out[:n]

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     get_player_match_history, guess_player_slug, _parse_year_html,
     _verify_player_page, _reorient_score_to_self,
+    get_player_recent_matches, _to_iso_date, _derive_result_from_score,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -200,3 +201,84 @@ def test_guess_player_slug_fail_closed_on_fetch_failure():
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=None,
     ):
         assert guess_player_slug("Alexandra Eala") is None
+
+
+# ── get_player_recent_matches (2026-08-04, reemplaza flashscore_scraper) ──
+
+def test_to_iso_date_uses_reference_year():
+    assert _to_iso_date("03.08.", 2025) == "2025-08-03"
+
+
+def test_to_iso_date_fail_closed_on_garbage():
+    assert _to_iso_date("garbage", 2025) is None
+
+
+def test_derive_result_from_score_win():
+    assert _derive_result_from_score("6-4, 6-3") == "W"
+
+
+def test_derive_result_from_score_loss():
+    assert _derive_result_from_score("4-6, 3-6") == "L"
+
+
+def test_get_player_recent_matches_fail_closed_when_no_slug():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value=None,
+    ):
+        assert get_player_recent_matches("Nonexistent Player") == []
+
+
+def test_get_player_recent_matches_matches_flashscore_shape():
+    """Mismo shape que `flashscore_scraper.get_player_recent_matches`
+    ({"fecha","oponente","resultado","score","source"}) -- pedido
+    explícito del usuario para no tener que tocar los callers
+    (match_history.py) al migrar de Flashscore a TennisExplorer."""
+    html = _page(
+        _row(self_first=True, opponent="Pegula J.", score="6-4, 6-3", odds_self="1.5", odds_opp="2.5"),
+        year=2026,
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="eala",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        side_effect=lambda slug, year=None: html if year is None else None,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._verify_player_page", return_value=True,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._date",
+    ) as mock_date:
+        mock_date.today.return_value.year = 2026
+        result = get_player_recent_matches("Alexandra Eala", n=20)
+
+    assert len(result) == 1
+    r = result[0]
+    assert set(r.keys()) == {"fecha", "oponente", "resultado", "score", "source"}
+    assert r["oponente"] == "Pegula J."
+    assert r["resultado"] == "W"
+    assert r["score"] == "6-4, 6-3"
+    assert r["source"] == "tennisexplorer"
+
+
+def test_get_player_recent_matches_sorted_most_recent_first_and_capped_at_n():
+    html_year = _page(
+        _row(self_first=True, opponent="A", score="6-4, 6-3", odds_self="1.5", odds_opp="2.5"),
+        year=2026,
+    )
+    # 2 filas con fechas distintas -- inyectamos 2 partidos con distinto orden real
+    two_rows_html = html_year.replace(
+        '01.08.', '01.08.'
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="eala",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        side_effect=lambda slug, year=None: two_rows_html if year is None else None,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._verify_player_page", return_value=True,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._date",
+    ) as mock_date:
+        mock_date.today.return_value.year = 2026
+        result = get_player_recent_matches("Alexandra Eala", n=1)
+
+    assert len(result) == 1  # respeta el límite n
