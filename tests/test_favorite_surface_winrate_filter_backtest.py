@@ -79,31 +79,29 @@ def test_min_rank_gap_constant_is_20():
     assert _MIN_RANK_GAP == 20
 
 
-def test_min_surface_matches_default_is_20():
-    """2026-08-04, pedido explícito del usuario: "dejemos la variable en
-    al menos 20 matches" -- decisión final tras evaluar 0/20/100."""
-    assert _MIN_SURFACE_MATCHES == 20
+def test_min_surface_matches_default_is_0():
+    """2026-08-04, pedido explícito del usuario: probó min_surface_matches=20
+    y luego pidió revertirlo ("no quita los 20 partidos de muestra") --
+    default final = 0, vuelve al comportamiento original (solo exige
+    >=1 partido previo real, fail-closed de por sí)."""
+    assert _MIN_SURFACE_MATCHES == 0
 
 
-def test_run_filtered_backtest_uses_default_min_surface_matches_of_20():
+def test_run_filtered_backtest_uses_default_min_surface_matches_of_0():
     matches = [
-        # warm-up: A construye EXACTAMENTE 20 partidos previos en Hard (justo en el umbral, debe calificar)
-        *[_row(f"2010-01-{i:02d}", winner="A", winner_rank=5, loser="Z", loser_rank=300, surface="Hard") for i in range(1, 21)],
-        # warm-up: B construye SOLO 5 partidos previos en Hard (bajo el umbral, NO debe calificar)
-        *[_row(f"2011-01-{i:02d}", winner="Z", winner_rank=300, loser="B", loser_rank=100, surface="Hard") for i in range(1, 6)],
-        # warm-up: C también construye 20 partidos previos en Hard (para el 2do caso de comparación)
-        *[_row(f"2012-01-{i:02d}", winner="Z", winner_rank=300, loser="C", loser_rank=150, surface="Hard") for i in range(1, 21)],
-        # eval: A (20 partidos, califica) vs B (5 partidos, NO califica) -- excluido por el umbral default
+        # warm-up: A tiene SOLO 1 partido previo en Hard (winrate 1.0 con n=1)
+        _row("2010-01-01", winner="A", winner_rank=5, loser="Z", loser_rank=300, surface="Hard"),
+        # warm-up: B tiene SOLO 1 partido previo en Hard también (pierde, winrate 0.0)
+        _row("2010-06-01", winner="Z", winner_rank=300, loser="B", loser_rank=100, surface="Hard"),
+        # eval: A (rank 5) vs B (rank 100) -- gap>=20, A tiene mejor winrate (1.0 > 0.0), n=1 cada uno
         _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
-        # eval: A (20 partidos) vs C (20 partidos) -- ambos califican por umbral
-        _row("2016-02-01", winner="A", winner_rank=5, loser="C", loser_rank=150, surface="Hard"),
     ]
     with patch(
         "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
-        result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None)  # sin pasar min_surface_matches -- usa el default 20
-    assert result["min_surface_matches_used"] == 20
-    assert result["filtered_cases_n"] == 1  # solo A vs C califica (B se excluye por tener <20 partidos previos)
+        result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None)  # sin pasar min_surface_matches -- usa el default 0
+    assert result["min_surface_matches_used"] == 0
+    assert result["filtered_cases_n"] == 1  # califica igual con n=1, default 0 = sin umbral extra
 
 
 def test_min_surface_matches_excludes_thin_sample_case():

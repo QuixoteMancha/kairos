@@ -109,7 +109,7 @@ def _build_surface_winrate_tracker() -> tuple[list[dict[str, Any]], dict[str, An
     return cases, {"skipped_no_rank_or_surface": skipped_no_rank, "skipped_no_surface_history": skipped_no_surface_history}
 
 
-_MIN_SURFACE_MATCHES = 20
+_MIN_SURFACE_MATCHES = 0
 
 
 def run_filtered_backtest(
@@ -121,11 +121,14 @@ def run_filtered_backtest(
     TANTO el favorito COMO el underdog tengan al menos ese número de
     partidos previos reales (point-in-time) en la superficie del
     partido antes de confiar en su winrate por superficie (evita
-    aceptar un caso con, por ej., 1/1 = 100% winrate). Default = 20,
-    decisión explícita del usuario tras evaluar 0 (solo exige >=1,
-    ruidoso), 100 (muestra sólida pero colapsa la población a 2,222
-    casos y el capital final compuesto queda irrelevante) -- 20 es el
-    punto intermedio elegido."""
+    aceptar un caso con, por ej., 1/1 = 100% winrate). Default = 0
+    (2026-08-04, revertido a pedido explícito del usuario tras probar
+    20 -- "no quita los 20 partidos de muestra" -- vuelve al
+    comportamiento original: solo exige >=1 partido previo real por
+    superficie, ya fail-closed de por sí). Se evaluaron también 20
+    (intermedio) y 100 (muestra sólida pero colapsa la población a 2,222
+    casos, capital final compuesto irrelevante) -- ver Obsidian para el
+    detalle de las 3 corridas."""
     all_cases, meta = _build_surface_winrate_tracker()
 
     filtered_cases = [
