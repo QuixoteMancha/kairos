@@ -247,6 +247,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
     )
+    from database.historical.baseball import MlbGameHistory
 
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
@@ -257,7 +258,7 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
-        TeamMatchHistory, TeamHeadToHead,
+        TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
     ], safe=True)
 
     # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):

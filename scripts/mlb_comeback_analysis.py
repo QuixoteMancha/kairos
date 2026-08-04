@@ -23,6 +23,8 @@ import time
 from datetime import date
 from typing import Any
 
+from database.db import init_db_historical
+from database.historical.baseball import MlbGameHistory
 from outer_apis.scrapers.baseball import mlb_stats_scraper
 
 _PAUSE_BETWEEN_REQUESTS_S = 0.3
@@ -76,6 +78,39 @@ def collect_games_with_linescore(start_date: str, end_date: str) -> list[dict[st
     return result
 
 
+def collect_games_from_db(start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """Igual que `collect_games_with_linescore` pero leyendo SOLO de la
+    DB local `MlbGameHistory` -- 2026-08-04, pedido explícito del
+    usuario tras notar que este script hacía fetch en vivo por
+    partido en cada corrida sin persistir nada. Requiere haber corrido
+    `scripts/mlb_local_backfill.py` antes -- fail-closed: partidos sin
+    linescore guardado (`innings_json` None) se descartan, igual que un
+    partido que no llegó a la 5ta entrada completa."""
+    init_db_historical()
+    rows = MlbGameHistory.select().where(
+        (MlbGameHistory.date >= start_date) & (MlbGameHistory.date <= end_date)
+    )
+
+    result = []
+    for r in rows:
+        if not r.innings_json:
+            continue
+        innings = json.loads(r.innings_json)
+        linescore = {
+            "innings": innings, "home_runs_total": r.home_runs_final, "away_runs_total": r.away_runs_final,
+        }
+        through_f5 = _cumulative_runs_through_inning(linescore, _F5_CHECKPOINT_INNING)
+        if through_f5 is None:
+            continue
+        result.append({
+            "date": r.date, "home_team": r.home_team, "away_team": r.away_team,
+            "home_won": r.home_won,
+            "home_runs_f5": through_f5[0], "away_runs_f5": through_f5[1],
+            "home_runs_final": r.home_runs_final, "away_runs_final": r.away_runs_final,
+        })
+    return result
+
+
 def analyze_comeback_rate(games: list[dict[str, Any]]) -> dict[str, Any]:
     """Equivalente al análisis de tenis: de los partidos donde alguien
     iba PERDIENDO al cierre de la 5ta entrada, ¿qué % remonta y termina
@@ -123,8 +158,11 @@ def analyze_comeback_rate(games: list[dict[str, Any]]) -> dict[str, Any]:
 if __name__ == "__main__":
     import sys
 
-    start = sys.argv[1] if len(sys.argv) > 1 else f"{date.today().year - 1}-01-01"
-    end = sys.argv[2] if len(sys.argv) > 2 else f"{date.today().year - 1}-12-31"
-    games = collect_games_with_linescore(start, end)
+    start = sys.argv[1] if len(sys.argv) > 1 else "2015-01-01"
+    end = sys.argv[2] if len(sys.argv) > 2 else f"{date.today().year}-12-31"
+    # 2026-08-04, pedido explícito -- lee de la DB local por defecto
+    # (correr `scripts/mlb_local_backfill.py` primero); nunca más fetch
+    # de red en cada corrida de este análisis.
+    games = collect_games_from_db(start, end)
     result = analyze_comeback_rate(games)
     print(json.dumps(result, indent=2, ensure_ascii=False))
