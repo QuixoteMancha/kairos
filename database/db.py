@@ -245,7 +245,7 @@ def init_db_historical() -> None:
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        ChartedMatch, ChartedMatchStats,
+        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
     )
 
     db_historical.connect(reuse_if_open=True)
@@ -256,7 +256,7 @@ def init_db_historical() -> None:
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        ChartedMatch, ChartedMatchStats,
+        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
         TeamMatchHistory, TeamHeadToHead,
     ], safe=True)
 

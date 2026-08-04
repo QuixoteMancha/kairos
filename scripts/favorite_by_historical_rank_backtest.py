@@ -23,7 +23,7 @@ import statistics
 from math import comb
 from typing import Any
 
-from outer_apis.scrapers.tennis.tml_database_scraper import get_matches_range, TOUR_LEVELS_250_PLUS
+from outer_apis.scrapers.tennis.tml_database_scraper import get_matches_range_from_db as get_matches_range, TOUR_LEVELS_250_PLUS
 from outer_apis.kalshi.fees import leg_fee_fraction
 from models.volatility.sports.tennis.tennis_markov import (
     pre_match_win_prob, p_serve_for_rank, _p_win_game, _p_win_set,

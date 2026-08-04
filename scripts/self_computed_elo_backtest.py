@@ -50,7 +50,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from outer_apis.scrapers.tennis.tml_database_scraper import get_matches_range, TOUR_LEVELS_250_PLUS
+from outer_apis.scrapers.tennis.tml_database_scraper import get_matches_range_from_db as get_matches_range, TOUR_LEVELS_250_PLUS
 from outer_apis.sports.tennis.tennisabstract_elo import elo_implied_win_prob
 from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob
 
