@@ -6,7 +6,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from scripts.favorite_surface_winrate_filter_backtest import (
-    _build_surface_winrate_tracker, run_filtered_backtest, _MIN_RANK_GAP,
+    _build_surface_winrate_tracker, run_filtered_backtest, _MIN_RANK_GAP, _MIN_SURFACE_MATCHES,
 )
 
 
@@ -55,7 +55,9 @@ def test_filters_by_rank_gap_and_surface_winrate():
     with patch(
         "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
-        result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None)
+        # min_surface_matches=0 -- este test aísla el filtro de rank_gap/winrate,
+        # no el umbral de tamaño de muestra (ver test dedicado más abajo).
+        result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None, min_surface_matches=0)
     assert result["filtered_cases_n"] == 1  # solo el partido A vs B califica
     assert result["total_cases_with_surface_history"] == 2  # A vs B y A vs C ambos tienen historial de superficie
 
@@ -75,6 +77,54 @@ def test_excludes_case_when_no_surface_history_for_either_player():
 
 def test_min_rank_gap_constant_is_20():
     assert _MIN_RANK_GAP == 20
+
+
+def test_min_surface_matches_default_is_20():
+    """2026-08-04, pedido explícito del usuario: "dejemos la variable en
+    al menos 20 matches" -- decisión final tras evaluar 0/20/100."""
+    assert _MIN_SURFACE_MATCHES == 20
+
+
+def test_run_filtered_backtest_uses_default_min_surface_matches_of_20():
+    matches = [
+        # warm-up: A construye EXACTAMENTE 20 partidos previos en Hard (justo en el umbral, debe calificar)
+        *[_row(f"2010-01-{i:02d}", winner="A", winner_rank=5, loser="Z", loser_rank=300, surface="Hard") for i in range(1, 21)],
+        # warm-up: B construye SOLO 5 partidos previos en Hard (bajo el umbral, NO debe calificar)
+        *[_row(f"2011-01-{i:02d}", winner="Z", winner_rank=300, loser="B", loser_rank=100, surface="Hard") for i in range(1, 6)],
+        # warm-up: C también construye 20 partidos previos en Hard (para el 2do caso de comparación)
+        *[_row(f"2012-01-{i:02d}", winner="Z", winner_rank=300, loser="C", loser_rank=150, surface="Hard") for i in range(1, 21)],
+        # eval: A (20 partidos, califica) vs B (5 partidos, NO califica) -- excluido por el umbral default
+        _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
+        # eval: A (20 partidos) vs C (20 partidos) -- ambos califican por umbral
+        _row("2016-02-01", winner="A", winner_rank=5, loser="C", loser_rank=150, surface="Hard"),
+    ]
+    with patch(
+        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+    ):
+        result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None)  # sin pasar min_surface_matches -- usa el default 20
+    assert result["min_surface_matches_used"] == 20
+    assert result["filtered_cases_n"] == 1  # solo A vs C califica (B se excluye por tener <20 partidos previos)
+
+
+def test_min_surface_matches_excludes_thin_sample_case():
+    """2026-08-04, pedido explícito -- exigir >=N partidos previos
+    reales en la superficie (no solo >=1) para confiar en el winrate."""
+    matches = [
+        # warm-up: A tiene SOLO 1 partido previo en Hard (winrate 1.0 con n=1, muestra chica)
+        _row("2010-01-01", winner="A", winner_rank=5, loser="Z", loser_rank=300, surface="Hard"),
+        # warm-up: B tiene SOLO 1 partido previo en Hard también (pierde, winrate 0.0)
+        _row("2010-06-01", winner="Z", winner_rank=300, loser="B", loser_rank=100, surface="Hard"),
+        # eval: A (rank 5) vs B (rank 100) -- gap>=20, A tiene mejor winrate (1.0 > 0.0) pero con n=1 cada uno
+        _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
+    ]
+    with patch(
+        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+    ):
+        no_threshold = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None, min_surface_matches=0)
+        with_threshold = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None, min_surface_matches=100)
+    assert no_threshold["filtered_cases_n"] == 1  # sin umbral, califica con n=1
+    assert with_threshold["filtered_cases_n"] == 0  # con umbral 100, se excluye por muestra chica
+    assert with_threshold["min_surface_matches_used"] == 100
 
 
 def test_prioritizes_higher_ranked_favorite_within_daily_cap():

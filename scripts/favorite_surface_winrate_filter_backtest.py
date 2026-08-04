@@ -88,6 +88,13 @@ def _build_surface_winrate_tracker() -> tuple[list[dict[str, Any]], dict[str, An
                     "set1_diff": _set1_game_diff(m.get("score")),
                     "favorite_surface_winrate": round(fav_wr, 4),
                     "underdog_surface_winrate": round(dog_wr, 4),
+                    # 2026-08-04, pedido explícito -- muestra usada para el
+                    # winrate de arriba, para poder filtrar por un mínimo
+                    # real de partidos previos en esa superficie (evitar
+                    # confiar en un winrate calculado sobre n chico, ej.
+                    # 1/1 = 100%).
+                    "favorite_surface_matches": fav_rec[0] + fav_rec[1],
+                    "underdog_surface_matches": dog_rec[0] + dog_rec[1],
                 })
         elif m["date"] >= eval_cutoff:
             skipped_no_rank += 1
@@ -102,12 +109,31 @@ def _build_surface_winrate_tracker() -> tuple[list[dict[str, Any]], dict[str, An
     return cases, {"skipped_no_rank_or_surface": skipped_no_rank, "skipped_no_surface_history": skipped_no_surface_history}
 
 
-def run_filtered_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0) -> dict[str, Any]:
+_MIN_SURFACE_MATCHES = 20
+
+
+def run_filtered_backtest(
+    initial_capital: float = 50.0,
+    max_stake_usd: float | None = 60_000.0,
+    min_surface_matches: int = _MIN_SURFACE_MATCHES,
+) -> dict[str, Any]:
+    """`min_surface_matches`: 2026-08-04, pedido explícito -- exige que
+    TANTO el favorito COMO el underdog tengan al menos ese número de
+    partidos previos reales (point-in-time) en la superficie del
+    partido antes de confiar en su winrate por superficie (evita
+    aceptar un caso con, por ej., 1/1 = 100% winrate). Default = 20,
+    decisión explícita del usuario tras evaluar 0 (solo exige >=1,
+    ruidoso), 100 (muestra sólida pero colapsa la población a 2,222
+    casos y el capital final compuesto queda irrelevante) -- 20 es el
+    punto intermedio elegido."""
     all_cases, meta = _build_surface_winrate_tracker()
 
     filtered_cases = [
         c for c in all_cases
-        if c["rank_gap"] >= _MIN_RANK_GAP and c["favorite_surface_winrate"] > c["underdog_surface_winrate"]
+        if c["rank_gap"] >= _MIN_RANK_GAP
+        and c["favorite_surface_winrate"] > c["underdog_surface_winrate"]
+        and c["favorite_surface_matches"] >= min_surface_matches
+        and c["underdog_surface_matches"] >= min_surface_matches
     ]
 
     # 2026-08-04, pedido explícito del usuario: "dar prioridad a los de
@@ -137,6 +163,7 @@ def run_filtered_backtest(initial_capital: float = 50.0, max_stake_usd: float | 
 
     return {
         "min_rank_gap_used": _MIN_RANK_GAP,
+        "min_surface_matches_used": min_surface_matches,
         "total_cases_with_surface_history": len(all_cases), **meta,
         "filtered_cases_n": len(filtered_cases),
         "baseline_hit_rate": round(baseline_hits / len(all_cases), 4) if all_cases else None,
@@ -155,12 +182,15 @@ def run_filtered_backtest(initial_capital: float = 50.0, max_stake_usd: float | 
 
 
 if __name__ == "__main__":
-    result = run_filtered_backtest()
+    import sys
+
+    min_matches = int(sys.argv[1]) if len(sys.argv) > 1 else _MIN_SURFACE_MATCHES
+    result = run_filtered_backtest(min_surface_matches=min_matches)
     print(json.dumps(
         {k: v for k, v in result.items() if k not in ("baseline_strategies", "filtered_strategies")},
         indent=2, ensure_ascii=False,
     ))
     print("=== BASELINE (todos los casos) ===")
     print(json.dumps(result["baseline_strategies"], indent=2, ensure_ascii=False))
-    print("=== FILTRADO (gap>=20 + mejor winrate superficie) ===")
+    print(f"=== FILTRADO (gap>=20 + mejor winrate superficie + min_surface_matches={min_matches}) ===")
     print(json.dumps(result["filtered_strategies"], indent=2, ensure_ascii=False))
