@@ -42,11 +42,11 @@ def _row(self_first: bool, opponent: str, score: str, odds_self: str, odds_opp: 
     return row
 
 
-def _page(rows_html: str, year: int = 2026) -> str:
+def _page(rows_html: str, year: int = 2026, tournament_type_class: str = "type-women2") -> str:
     header = (
         '<tr class="head flags"><td class="t-name" colspan="3">'
         '<a href="/washington/2026/wta-women/"><span class="fl fl-us">&nbsp;</span>'
-        '<span class="type-women2">&nbsp;</span>Washington</a></td></tr>'
+        f'<span class="{tournament_type_class}">&nbsp;</span>Washington</a></td></tr>'
     )
     return (
         f"{_TITLE_OK}"
@@ -80,6 +80,26 @@ def test_parse_year_html_self_first():
     assert r["odds_self"] == 2.36
     assert r["odds_opponent"] == 1.58
     assert r["tournament"] == "Washington"
+
+
+def test_parse_year_html_recognizes_any_tournament_type_class():
+    """Bug real encontrado 2026-08-04 investigando por qué 48,127 filas
+    de source="tennisexplorer" quedaron con tournament=None: el regex
+    original hardcodeaba `class="type-women2"`, pero la fuente
+    categoriza el TORNEO (no la jugadora) con esa clase -- un evento
+    (ej. "Czech league", de equipos) puede venir marcado `type-men2`
+    incluso en la página de una jugadora WTA (inconsistencia real de la
+    fuente). Como `current_tournament` se actualiza secuencialmente, un
+    solo header que no matcheaba dejaba sin torneo a TODOS los partidos
+    siguientes -- de ahí el volumen tan grande de filas afectadas.
+    Caso real reproducido con Elise Mertens/"Czech league" (type-men2)."""
+    html = _page(
+        _row(self_first=True, opponent="Rival R.", score="6-3, 6-2", odds_self="1.50", odds_opp="2.50"),
+        tournament_type_class="type-men2",
+    )
+    results = _parse_year_html(html, "Alexandra Eala")
+    assert len(results) == 1
+    assert results[0]["tournament"] == "Washington"  # NO None
 
 
 def test_parse_year_html_self_second_reorients_score_and_odds():

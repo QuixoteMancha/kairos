@@ -160,9 +160,21 @@ def _parse_year_html(html: str, self_name_hint: str) -> list[dict[str, Any]]:
     current_tournament = None
     results: list[dict[str, Any]] = []
     pos = 0
+    # 2026-08-04, bug real encontrado investigando por qué 48,127 filas
+    # de source="tennisexplorer" quedaron con tournament=None: el regex
+    # original hardcodeaba `class="type-women2"` -- pero la fuente
+    # categoriza el TORNEO (no la jugadora) con esa clase, y un torneo
+    # cualquiera (ej. "Czech league", un evento de equipos) puede venir
+    # marcado `type-men2` incluso en la página de una jugadora WTA
+    # (inconsistencia real de la fuente, no nuestra). Como
+    # `current_tournament` se actualiza secuencialmente, UN SOLO header
+    # que no matcheaba dejaba sin torneo a TODOS los partidos
+    # siguientes hasta el próximo header que sí matcheara -- de ahí el
+    # volumen tan grande de filas afectadas. Fix: aceptar cualquier
+    # variante de esa clase (`type-\w+`), no solo `type-women2`.
     combined_re = re.compile(
         r'(?P<header><tr class="head flags">\s*<td class="t-name"[^>]*><a href="[^"]*">'
-        r'<span class="fl[^"]*">&nbsp;</span><span class="type-women2">&nbsp;</span>[^<]*</a>)'
+        r'<span class="fl[^"]*">&nbsp;</span><span class="type-\w+">&nbsp;</span>[^<]*</a>)'
         r'|'
         r'(?P<row><tr class="(?:one|two)">.*?</tr>\s*)',
         re.DOTALL,
