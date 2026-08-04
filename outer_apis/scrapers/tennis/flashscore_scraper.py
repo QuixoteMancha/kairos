@@ -33,6 +33,7 @@ from datetime import datetime, UTC
 from typing import Any
 
 from outer_apis.scrapers import brightdata_proxy
+from outer_apis.scrapers.tennis._request_throttle import flashscore_throttle
 
 _SEARCH_URL = "https://s.flashscore.com/search/?q={name}&l=1&s=2&f=1%3B1&pid=2&sid=2"
 _RESULTS_URL = "https://www.flashscore.com/player/{slug}/{pid}/results/"
@@ -71,6 +72,10 @@ def search_player(name: str) -> tuple[str, str] | None:
     try:
         import requests
 
+        # 2026-08-04, pedido explícito -- throttle real ANTES de la
+        # request (no antes del cache-hit de arriba, para no penalizar
+        # nombres ya conocidos), "no overhittear los servers".
+        flashscore_throttle.wait()
         url = _SEARCH_URL.format(name=name.replace(" ", "%20"))
         resp = requests.get(
             url,
@@ -106,6 +111,7 @@ def _fetch_results_page(pid: str, slug: str) -> str | None:
     módulo -- 2026-08-04)."""
     if not PROXY_FETCH_ENABLED:
         return None
+    flashscore_throttle.wait()
     url = _RESULTS_URL.format(slug=slug, pid=pid)
     headers = {
         "X-Fsign": "SW9D1eZo",
@@ -484,6 +490,7 @@ def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None,
         fabrica valores."""
     if not PROXY_FETCH_ENABLED:
         return None
+    flashscore_throttle.wait()
     url = _STATS_URL.format(match_id=match_id)
     headers = {
         "X-Fsign": "SW9D1eZo",

@@ -41,6 +41,8 @@ from typing import Any
 
 import requests
 
+from outer_apis.scrapers.tennis._request_throttle import tennisexplorer_throttle
+
 _PLAYER_URL = "https://www.tennisexplorer.com/player/{slug}/"
 _REQUEST_TIMEOUT_S = 20
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -48,7 +50,12 @@ _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 def _fetch(slug: str, year: int | None = None) -> str | None:
     """Fail-closed: None ante cualquier fallo de red/status -- nunca
-    devuelve HTML parcial/de error como si fuera válido."""
+    devuelve HTML parcial/de error como si fuera válido. Throttle real
+    (2026-08-04, pedido explícito -- "no overhittear los servers")
+    ANTES de la request, thread-safe, compartido con cualquier otro
+    caller de este módulo (backfills offline Y `prefetch_player_histories`
+    en vivo, que usa un thread pool de hasta 16 workers)."""
+    tennisexplorer_throttle.wait()
     url = _PLAYER_URL.format(slug=slug)
     if year is not None:
         url = f"{url}?annual={year}"

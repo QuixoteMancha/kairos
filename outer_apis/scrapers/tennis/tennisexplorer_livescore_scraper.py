@@ -32,6 +32,8 @@ from typing import Any
 
 import requests
 
+from outer_apis.scrapers.tennis._request_throttle import tennisexplorer_throttle
+
 _MATCHES_URL = "https://www.tennisexplorer.com/matches/?type={tour_type}"
 _REQUEST_TIMEOUT_S = 20
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -46,9 +48,13 @@ _HAS_STREAMS_RE = re.compile(r"icon-tv\.gif|Live\s*streams")
 
 
 def _fetch_matches_page(tour: str) -> str | None:
+    """Throttle real (2026-08-04, pedido explícito -- "no overhittear
+    los servers") compartido con `tennisexplorer_player_scraper._fetch`
+    (mismo sitio, mismo presupuesto real)."""
     tour_type = _TOUR_TYPE.get(tour)
     if tour_type is None:
         return None
+    tennisexplorer_throttle.wait()
     try:
         resp = requests.get(
             _MATCHES_URL.format(tour_type=tour_type),
