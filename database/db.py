@@ -240,7 +240,7 @@ def init_db_historical() -> None:
     from database.historical.market_data import KalshiMarketTick, CryptoPriceSnapshot
     from database.historical.team_sports import TeamRating, TeamMatchHistory, TeamHeadToHead
     from database.historical.tennis import (
-        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHistoricalOdds, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
@@ -251,7 +251,7 @@ def init_db_historical() -> None:
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
-        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHeadToHead,
+        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHistoricalOdds, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
@@ -274,3 +274,14 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "charted_match", "humidity_pct", "REAL")
     _add_column_if_missing(db_historical, "charted_match", "wind_kmh", "REAL")
     _add_column_if_missing(db_historical, "charted_match", "weather_fetched_at", "DATETIME")
+    # 2026-08-03, pedido explícito del usuario: persistir el torneo real
+    # (tal cual, sin normalizar) de los partidos cargados a mano desde
+    # TennisExplorer -- agregado DESPUÉS de que tennis_match_history ya
+    # existiera con filas de Flashscore (sin este campo).
+    _add_column_if_missing(db_historical, "tennis_match_history", "tournament", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "tennis_match_history", "round", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "tennis_match_history", "surface", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "tennis_match_history", "temperature_c", "REAL")
+    _add_column_if_missing(db_historical, "tennis_match_history", "humidity_pct", "REAL")
+    _add_column_if_missing(db_historical, "tennis_match_history", "wind_kmh", "REAL")
+    _add_column_if_missing(db_historical, "tennis_match_history", "weather_fetched_at", "DATETIME")

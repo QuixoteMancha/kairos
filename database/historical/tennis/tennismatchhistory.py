@@ -1,4 +1,4 @@
-from peewee import CharField, DateTimeField, Model
+from peewee import CharField, DateTimeField, FloatField, Model
 
 from database.db import db_historical
 
@@ -28,5 +28,28 @@ class TennisMatchHistory(HistoricalBaseModel):
     match_date = CharField()  # "YYYY-MM-DD", matches the source's string format
     result = CharField()  # "W" | "L"
     score = CharField(null=True)
-    source = CharField()  # "flashscore"
+    source = CharField()  # "flashscore" | "tennisexplorer_manual"
     fetched_at = DateTimeField()
+    # 2026-08-03, pedido explícito del usuario ("agrega a la base los
+    # matches que no están con sus respectivos torneos manteniendo las
+    # nomenclaturas como están") -- nombre del torneo TAL CUAL viene de
+    # la fuente (sin normalizar), agregado DESPUÉS de que la tabla ya
+    # existiera -- requiere ALTER TABLE idempotente, ver
+    # database/db.py::_add_column_if_missing. Nullable: filas viejas de
+    # Flashscore (source="flashscore") nunca tuvieron este dato.
+    tournament = CharField(null=True)
+    # 2026-08-03, pedido explícito del usuario (backfill masivo top-200
+    # WTA vía TennisExplorer) -- round/surface vienen gratis del mismo
+    # fetch, agregados DESPUÉS de que la tabla ya existiera, mismo
+    # mecanismo de ALTER TABLE idempotente que `tournament`.
+    round = CharField(null=True)
+    surface = CharField(null=True)
+    # 2026-08-03, pedido explícito del usuario ("luego hacer fetch de
+    # datos climáticos de match") -- mismo criterio que ChartedMatch
+    # (snapshot único a hora fija 14:00 UTC, NO 3-fases, porque tampoco
+    # hay hora real de inicio para estos partidos) -- ver
+    # scripts/wta_match_history_weather_backfill.py.
+    temperature_c = FloatField(null=True)
+    humidity_pct = FloatField(null=True)
+    wind_kmh = FloatField(null=True)
+    weather_fetched_at = DateTimeField(null=True)

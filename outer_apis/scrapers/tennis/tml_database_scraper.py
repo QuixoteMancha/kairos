@@ -56,9 +56,14 @@ def get_year_matches(year: int, levels: frozenset[str] | None = TOUR_LEVELS_250_
     partido. `levels=None` trae TODO (incluye Davis Cup/exhibición).
 
     Returns: lista de dicts {tourney_name, level, date (ISO), round,
-    surface, best_of, winner_name, winner_rank, loser_name, loser_rank,
-    score, minutes}. Fail-closed: [] si el fetch/parse falla o si una
-    fila no tiene los campos mínimos (nombre+fecha de ambos jugadores)."""
+    surface, best_of, winner_name, winner_rank, winner_age, loser_name,
+    loser_rank, loser_age, score, minutes}. Fail-closed: [] si el
+    fetch/parse falla o si una fila no tiene los campos mínimos
+    (nombre+fecha de ambos jugadores). `winner_age`/`loser_age`
+    (2026-08-03, pedido explícito del usuario para análisis de patrones
+    de sorpresa) son la edad REAL en años (decimal) al momento del
+    partido, tal cual la trae la fuente -- None si el campo viene vacío
+    o no parseable."""
     rows = _fetch_csv(year)
     if rows is None:
         return []
@@ -81,12 +86,20 @@ def get_year_matches(year: int, levels: frozenset[str] | None = TOUR_LEVELS_250_
             except ValueError:
                 return None
 
+        def _float_or_none(value: str | None) -> float | None:
+            try:
+                return float(value) if value else None
+            except ValueError:
+                return None
+
         result.append({
             "tourney_name": row.get("tourney_name"), "level": level, "date": date_iso,
             "round": row.get("round"), "surface": row.get("surface"),
             "best_of": _int_or_none(row.get("best_of")),
             "winner_name": winner_name.strip(), "winner_rank": _int_or_none(row.get("winner_rank")),
+            "winner_age": _float_or_none(row.get("winner_age")),
             "loser_name": loser_name.strip(), "loser_rank": _int_or_none(row.get("loser_rank")),
+            "loser_age": _float_or_none(row.get("loser_age")),
             "score": row.get("score"), "minutes": _int_or_none(row.get("minutes")),
         })
 

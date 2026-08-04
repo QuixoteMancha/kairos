@@ -67,5 +67,51 @@ def get_games_in_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
                 "home_team": home_name,
                 "away_team": away_name,
                 "home_won": bool(home_won),
+                "game_pk": game.get("gamePk"),
             })
     return out
+
+
+_LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+
+
+def get_linescore(game_pk: int) -> dict[str, Any] | None:
+    """Carreras REALES por entrada de un partido ya terminado -- 2026-08-04,
+    pedido explícito del usuario ("la probabilidad de remontadas en MLB
+    es baja... investigar fuentes de datos", arrancando por Retrosheet
+    pero la propia API oficial de MLB ya lo da sin scraping).
+
+    Returns: {"innings": [{"num": int, "home_runs": int|None,
+    "away_runs": int|None}, ...], "home_runs_total": int,
+    "away_runs_total": int} -- fail-closed: None si la request falla o
+    el partido no tiene linescore real (no debería pasar para un
+    partido ya 'Final', pero nunca se fabrica)."""
+    try:
+        resp = requests.get(_LIVE_FEED_URL.format(game_pk=game_pk), timeout=_REQUEST_TIMEOUT_S)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+
+    linescore = data.get("liveData", {}).get("linescore")
+    if not linescore:
+        return None
+
+    innings = []
+    for inn in linescore.get("innings", []):
+        innings.append({
+            "num": inn.get("num"),
+            "home_runs": inn.get("home", {}).get("runs"),
+            "away_runs": inn.get("away", {}).get("runs"),
+        })
+    teams = linescore.get("teams", {})
+    home_total = teams.get("home", {}).get("runs")
+    away_total = teams.get("away", {}).get("runs")
+    if not innings or home_total is None or away_total is None:
+        return None
+
+    return {"innings": innings, "home_runs_total": home_total, "away_runs_total": away_total}

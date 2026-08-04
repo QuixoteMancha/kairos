@@ -255,3 +255,72 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
             time.sleep(_OPEN_METEO_MIN_INTERVAL_S)  # solo tras un fetch real, no tras un skip (no pega la API)
 
     return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+
+
+def populate_weather_for_match_history_row(row) -> dict[str, Any]:
+    """Igual que `populate_weather_for_charted_match` pero para filas de
+    `TennisMatchHistory` (2026-08-03, pedido explícito del usuario tras
+    el backfill masivo top-200 WTA: "luego hacer fetch de datos
+    climáticos de match") -- mismo snapshot único a
+    `_CHARTED_MATCH_SNAPSHOT_HOUR_UTC` UTC (tampoco hay hora real de
+    inicio acá), misma tabla de ubicación, mismo criterio fail-closed.
+
+    Diferencia real con ChartedMatch: `match_date` acá es un CharField
+    "YYYY-MM-DD" (no un DateField real), hay que parsearlo a mano."""
+    if row.weather_fetched_at is not None:
+        return {"skipped": True, "reason": "ya tiene clima"}
+
+    location = get_location(row.tournament)
+    if location is None:
+        return {"skipped": True, "reason": f"torneo no reconocido: {row.tournament!r}"}
+
+    try:
+        year, month, day = (int(p) for p in row.match_date.split("-"))
+    except (ValueError, AttributeError):
+        return {"skipped": True, "reason": f"match_date no parseable: {row.match_date!r}"}
+
+    lat, lon = location
+    when = datetime(year, month, day, _CHARTED_MATCH_SNAPSHOT_HOUR_UTC, tzinfo=timezone.utc)
+
+    weather = open_meteo.get_weather_at(lat, lon, when)
+    if weather is None:
+        return {"skipped": True, "reason": "clima real no disponible (fecha fuera de rango o request fallida)"}
+
+    init_db_historical()
+    row.temperature_c = weather.get("temperature_c")
+    row.humidity_pct = weather.get("humidity_pct")
+    row.wind_kmh = weather.get("wind_kmh")
+    row.weather_fetched_at = _now()
+    row.save()
+
+    return {"skipped": False, "populated": True}
+
+
+def populate_weather_for_all_match_history() -> dict[str, Any]:
+    """Recorre TODAS las filas de `TennisMatchHistory` sin clima
+    poblado -- mismo patrón/throttle que
+    `populate_weather_for_all_charted_matches`, para el backfill masivo
+    top-200 WTA (potencialmente decenas de miles de filas)."""
+    from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+
+    init_db_historical()
+    rows = list(TennisMatchHistory.select().where(TennisMatchHistory.weather_fetched_at.is_null()))
+
+    processed = skipped = errors = 0
+    reasons: dict[str, int] = {}
+    for row in rows:
+        try:
+            result = populate_weather_for_match_history_row(row)
+        except Exception as e:
+            errors += 1
+            reasons[f"error: {e}"] = reasons.get(f"error: {e}", 0) + 1
+            continue
+        if result.get("skipped"):
+            skipped += 1
+            reason = result.get("reason", "desconocido")
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            processed += 1
+            time.sleep(_OPEN_METEO_MIN_INTERVAL_S)
+
+    return {"total": len(rows), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}

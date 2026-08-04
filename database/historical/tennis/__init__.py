@@ -23,6 +23,7 @@ on a fresh fetch (never on a cache hit).
 from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
 from database.historical.tennis.tennisservecalibration import TennisServeCalibration
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
 from database.historical.tennis.tennisabstractelo import TennisAbstractElo, TennisAbstractYelo
@@ -58,7 +59,7 @@ from database.historical.tennis.writer import (
 )
 
 __all__ = [
-    "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHeadToHead",
+    "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHistoricalOdds", "TennisHeadToHead",
     "TennisSurfaceMatchHistory", "TennisAbstractElo", "TennisAbstractYelo",
     "TennisAbstractCareerSplit", "TennisAbstractH2H",
     "save_rankings_snapshot", "save_serve_calibration_snapshot",
