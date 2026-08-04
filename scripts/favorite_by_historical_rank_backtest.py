@@ -223,6 +223,106 @@ def _max_drawdown_pct(equity_curve: list[float]) -> float | None:
     return round(max_dd * 100, 2)
 
 
+# 2026-08-04, pedido explícito del usuario ("investiga qué otras
+# métricas podríamos usar") -- el `sharpe_ratio_per_trade` original
+# (media/desvío de retornos POR OPERACIÓN, sin anualizar) no es
+# comparable con los benchmarks estándar de la industria (>1 bueno, >2
+# muy bueno) por 2 razones: (1) no está anualizado, y (2) mezcla
+# operaciones del MISMO DÍA como si fueran independientes, cuando en
+# realidad están correlacionadas (day-batching, ver
+# `_simulate_realistic_all_strategies`). Las métricas de abajo se
+# calculan sobre la CURVA DE EQUITY DIARIA (1 punto por día de trading
+# real, ya la fuente correcta de independencia aproximada) en vez de
+# sobre retornos individuales de operación.
+_TRADING_DAYS_PER_YEAR_ATP = 36.7  # ~367 días reales de trading ATP / 10 años (2016-2026), medido.
+
+
+def _daily_returns(equity_curve: list[float], initial_capital: float) -> list[float]:
+    """Retorno % día a día de la curva de equity (1 valor por día de
+    trading real, no por operación) -- incluye el primer día contra el
+    capital inicial."""
+    if not equity_curve:
+        return []
+    prev = initial_capital
+    out = []
+    for v in equity_curve:
+        if prev > 0:
+            out.append((v - prev) / prev)
+        prev = v
+    return out
+
+
+def _annualized_sharpe(equity_curve: list[float], initial_capital: float) -> float | None:
+    """Sharpe anualizado real -- media/desvío de los retornos DIARIOS
+    (no por operación), escalado por sqrt(días de trading reales/año).
+    Sin tasa libre de riesgo (asumida 0, consistente con el resto del
+    backtest)."""
+    returns = _daily_returns(equity_curve, initial_capital)
+    if len(returns) < 2:
+        return None
+    stdev = statistics.stdev(returns)
+    if stdev == 0:
+        return None
+    avg = statistics.mean(returns)
+    return round((avg / stdev) * (_TRADING_DAYS_PER_YEAR_ATP ** 0.5), 4)
+
+
+def _annualized_sortino(equity_curve: list[float], initial_capital: float) -> float | None:
+    """Como el Sharpe anualizado, pero solo penaliza la desviación
+    NEGATIVA (downside deviation) -- no castiga la variabilidad al alza,
+    más apropiado para una distribución de retornos asimétrica como la
+    nuestra (subidas frecuentes moderadas, caídas raras del 100%)."""
+    returns = _daily_returns(equity_curve, initial_capital)
+    if len(returns) < 2:
+        return None
+    downside = [r for r in returns if r < 0]
+    if not downside:
+        return None  # sin días negativos -- Sortino indefinido (no hay downside que medir)
+    downside_stdev = (sum(r ** 2 for r in downside) / len(returns)) ** 0.5
+    if downside_stdev == 0:
+        return None
+    avg = statistics.mean(returns)
+    return round((avg / downside_stdev) * (_TRADING_DAYS_PER_YEAR_ATP ** 0.5), 4)
+
+
+def _cagr_pct(equity_curve: list[float], initial_capital: float) -> float | None:
+    """Tasa de crecimiento anual compuesta real, derivada de la curva de
+    equity diaria y el número real de años de trading cubiertos."""
+    if not equity_curve or initial_capital <= 0:
+        return None
+    final = equity_curve[-1]
+    if final <= 0:
+        return None
+    years = len(equity_curve) / _TRADING_DAYS_PER_YEAR_ATP
+    if years <= 0:
+        return None
+    return round(((final / initial_capital) ** (1 / years) - 1) * 100, 2)
+
+
+def _calmar_ratio(cagr_pct: float | None, max_drawdown_pct: float | None) -> float | None:
+    """CAGR / drawdown máximo -- retorno anual real por unidad de peor
+    pérdida acumulada. Benchmark absoluto conocido en la industria: >1.0
+    se considera bueno, Renaissance Technologies reporta >2.0."""
+    if cagr_pct is None or max_drawdown_pct is None or max_drawdown_pct == 0:
+        return None
+    return round(cagr_pct / max_drawdown_pct, 4)
+
+
+def _cvar_95_pct(returns: list[float]) -> float | None:
+    """Conditional Value at Risk al 95% -- de las operaciones, tomamos
+    el peor 5% (por retorno) y promediamos ese subconjunto. Responde
+    "en el peor 5% de los casos, ¿cuánto pierdo en promedio?" -- más
+    honesto que el desvío estándar para una distribución con cola
+    pesada real (30% de las veces se pierde el 100% del stake, no es
+    ruido gaussiano)."""
+    if not returns:
+        return None
+    sorted_returns = sorted(returns)
+    tail_n = max(1, round(len(sorted_returns) * 0.05))
+    tail = sorted_returns[:tail_n]
+    return round((sum(tail) / len(tail)) * 100, 4)
+
+
 _FAIR_PRICE_BUCKETS = [
     (0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 0.75),
     (0.75, 0.80), (0.80, 0.85), (0.85, 0.90), (0.90, 1.01),
@@ -1047,6 +1147,8 @@ def _simulate_realistic_all_strategies(
             stdev = statistics.stdev(returns)
             if stdev > 0:
                 sharpe = round(avg_roi / stdev, 4)
+        max_dd = _max_drawdown_pct(equity_curves[key])
+        cagr = _cagr_pct(equity_curves[key], initial_capital)
         result[key] = {
             "initial_capital_usdc": initial_capital,
             "final_capital_usdc": round(cap, 2),
@@ -1055,8 +1157,15 @@ def _simulate_realistic_all_strategies(
             "n_skipped_concurrency_cap": skipped_cap[key],
             "winrate": round(resolve_hits[key] / resolve_n[key], 4) if resolve_n[key] else None,
             "avg_roi_per_trade_pct": round(avg_roi * 100, 4) if avg_roi is not None else None,
-            "max_drawdown_pct": _max_drawdown_pct(equity_curves[key]),
+            "max_drawdown_pct": max_dd,
             "sharpe_ratio_per_trade": sharpe,
+            # 2026-08-04, pedido explícito -- métricas adicionales de
+            # riesgo-ajustado, ver docstrings de cada helper arriba.
+            "cagr_pct": cagr,
+            "annualized_sharpe": _annualized_sharpe(equity_curves[key], initial_capital),
+            "annualized_sortino": _annualized_sortino(equity_curves[key], initial_capital),
+            "calmar_ratio": _calmar_ratio(cagr, max_dd),
+            "cvar_95_pct": _cvar_95_pct(returns),
             "busted": busted[key],
         }
     return {

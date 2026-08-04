@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from typing import Any
 
 import requests
+
+_logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
 _REQUEST_TIMEOUT_S = 30
@@ -66,6 +69,18 @@ def get_year_matches(year: int, levels: frozenset[str] | None = TOUR_LEVELS_250_
     o no parseable."""
     rows = _fetch_csv(year)
     if rows is None:
+        # 2026-08-04, hallazgo real: una corrida del backtest dio
+        # resultados MUY distintos a corridas previas/posteriores con
+        # los mismos parámetros (capital final $1.1M vs $55M) sin
+        # ningún error visible -- causa más probable: un fallo
+        # transitorio de red/GitHub en UN año puntual, absorbido en
+        # silencio por el fail-closed de abajo (retorna [] para ese
+        # año, el resto del backtest sigue corriendo con un universo de
+        # datos más chico sin que nadie se entere). Este warning no
+        # cambia el comportamiento fail-closed (sigue devolviendo []),
+        # solo lo hace VISIBLE para poder correlacionar resultados
+        # anómalos con fallos de fetch reales.
+        _logger.warning("TML-Database: fetch de %s.csv falló (red o parseo) -- año excluido del resultado, universo de datos más chico de lo esperado", year)
         return []
 
     result: list[dict[str, Any]] = []

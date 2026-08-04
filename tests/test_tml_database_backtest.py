@@ -54,6 +54,20 @@ def test_get_year_matches_fail_closed_on_fetch_failure():
         assert get_year_matches(2026) == []
 
 
+def test_get_year_matches_logs_warning_on_fetch_failure(caplog):
+    """2026-08-04, hallazgo real -- una corrida dio resultados MUY
+    distintos a otras con los mismos parámetros sin ningún error
+    visible; causa probable: fallo transitorio de red absorbido en
+    silencio por el fail-closed. Este warning lo hace visible para
+    poder correlacionar resultados anómalos con años de fetch fallido,
+    sin cambiar el comportamiento fail-closed en sí."""
+    import logging
+    with patch("outer_apis.scrapers.tennis.tml_database_scraper._fetch_csv", return_value=None):
+        with caplog.at_level(logging.WARNING):
+            get_year_matches(2026)
+    assert any("2026" in r.message for r in caplog.records)
+
+
 def test_get_year_matches_skips_rows_missing_names_or_date():
     rows = [_row(winner_name=""), _row(tourney_date="bad")]
     with patch("outer_apis.scrapers.tennis.tml_database_scraper._fetch_csv", return_value=rows):
