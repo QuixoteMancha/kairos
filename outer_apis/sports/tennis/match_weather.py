@@ -24,6 +24,7 @@ clave)."""
 
 from __future__ import annotations
 
+import random
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -220,6 +221,18 @@ def populate_weather_for_charted_match(match) -> dict[str, Any]:
 # puñado de partidos en vivo por ciclo) -- necesita throttle explícito,
 # no confiar en la latencia de red incidental como único freno.
 _OPEN_METEO_MIN_INTERVAL_S = 0.15  # ~400 req/min, con margen bajo 600/min
+# 2026-08-04, pedido explícito del usuario al mover este backfill a la
+# mini-pc ("con pausas aleatorias para no hitear tanto los servers de
+# open-meteo") -- pausa aleatoria en vez de fija, mismo piso mínimo
+# (`_OPEN_METEO_MIN_INTERVAL_S`) pero con un techo bastante más alto
+# para que el patrón de requests no sea perfectamente periódico (menos
+# parecido a tráfico de bot agresivo, más margen real bajo el límite
+# documentado de Open-Meteo).
+_OPEN_METEO_MAX_INTERVAL_S = 0.9
+
+
+def _open_meteo_throttle_sleep() -> None:
+    time.sleep(random.uniform(_OPEN_METEO_MIN_INTERVAL_S, _OPEN_METEO_MAX_INTERVAL_S))
 
 
 def populate_weather_for_all_charted_matches() -> dict[str, Any]:
@@ -252,7 +265,7 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
         else:
             processed += 1
-            time.sleep(_OPEN_METEO_MIN_INTERVAL_S)  # solo tras un fetch real, no tras un skip (no pega la API)
+            _open_meteo_throttle_sleep()  # solo tras un fetch real, no tras un skip (no pega la API)
 
     return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
 
@@ -321,6 +334,6 @@ def populate_weather_for_all_match_history() -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
         else:
             processed += 1
-            time.sleep(_OPEN_METEO_MIN_INTERVAL_S)
+            _open_meteo_throttle_sleep()
 
     return {"total": len(rows), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
