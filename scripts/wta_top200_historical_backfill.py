@@ -77,18 +77,19 @@ def backfill_player(player_name: str) -> dict:
             matches_by_year.append((year, m))
 
     now = datetime.now(timezone.utc)
-    inserted_matches = inserted_odds = 0
+    inserted_matches = inserted_odds = repaired_matches = 0
     with db_historical.connection_context():
         for year, m in matches_by_year:
             iso_date = _to_iso_date(m["date"], year)
             if iso_date is None:
                 continue
 
-            if not TennisMatchHistory.select().where(
+            existing_row = TennisMatchHistory.get_or_none(
                 (TennisMatchHistory.player_name == player_name)
                 & (TennisMatchHistory.opponent_name == m["opponent"])
                 & (TennisMatchHistory.match_date == iso_date)
-            ).exists():
+            )
+            if existing_row is None:
                 # W/L real: contar sets ganados vs perdidos en el score reorientado
                 sets_won = sets_lost = 0
                 for set_str in m["score"].split(","):
@@ -113,6 +114,19 @@ def backfill_player(player_name: str) -> dict:
                     fetched_at=now,
                 )
                 inserted_matches += 1
+            elif existing_row.tournament is None and m["tournament"] is not None:
+                # 2026-08-04, pedido explícito -- REPARAR filas ya
+                # existentes que quedaron con tournament=NULL por el
+                # bug real de `type-women2` hardcodeado (ver
+                # tennisexplorer_player_scraper.py), ahora corregido.
+                # Sin esto, re-correr el backfill saltearía estas filas
+                # para siempre (el chequeo de existencia de arriba las
+                # trata como "ya migradas") sin repararlas nunca.
+                existing_row.tournament = m["tournament"]
+                existing_row.round = m["round"]
+                existing_row.surface = m["surface"]
+                existing_row.save()
+                repaired_matches += 1
 
             if m["odds_self"] is not None or m["odds_opponent"] is not None:
                 if not TennisHistoricalOdds.select().where(
@@ -131,6 +145,7 @@ def backfill_player(player_name: str) -> dict:
         "player": player_name, "status": "ok", "slug": slug,
         "matches_found": len(matches_by_year),
         "matches_inserted": inserted_matches, "odds_inserted": inserted_odds,
+        "matches_repaired": repaired_matches,
     }
 
 
@@ -155,6 +170,7 @@ def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
         print(
             f"[{tag}_backfill] ({i}/{len(players)}) {name} rank={p['ranking']} "
             f"-> {result['status']}, matches+{result.get('matches_inserted', 0)}, "
+            f"repaired+{result.get('matches_repaired', 0)}, "
             f"odds+{result.get('odds_inserted', 0)} ({elapsed:.1f}s)",
             flush=True,
         )
@@ -164,10 +180,12 @@ def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
     ok = sum(1 for r in summary if r["status"] == "ok")
     skipped = sum(1 for r in summary if r["status"] != "ok")
     total_matches = sum(r.get("matches_inserted", 0) for r in summary)
+    total_repaired = sum(r.get("matches_repaired", 0) for r in summary)
     total_odds = sum(r.get("odds_inserted", 0) for r in summary)
     print(
         f"[{tag}_backfill] TERMINADO: {ok} ok, {skipped} sin slug/skip, "
-        f"{total_matches} partidos nuevos, {total_odds} cuotas nuevas",
+        f"{total_matches} partidos nuevos, {total_repaired} partidos reparados "
+        f"(tournament=NULL -> real), {total_odds} cuotas nuevas",
         flush=True,
     )
     return summary

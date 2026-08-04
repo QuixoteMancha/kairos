@@ -121,6 +121,55 @@ def test_backfill_player_idempotent_on_second_run():
         ).count() == first["matches_inserted"]
 
 
+def test_backfill_player_repairs_existing_row_with_null_tournament():
+    """2026-08-04, pedido explícito del usuario -- reparar filas que
+    quedaron con tournament=NULL por el bug real de `type-women2`
+    hardcodeado en el scraper (ya corregido). Antes de este fix, el
+    chequeo de existencia trataba una fila con tournament=NULL como
+    "ya migrada" y la saltaba para siempre, sin repararla nunca."""
+    with db_historical.connection_context():
+        from datetime import datetime, timezone
+        TennisMatchHistory.create(
+            player_name="Test Player", opponent_name="Pegula J.", match_date="2026-08-03",
+            result="W", score="4-6, 6-4, 6-0", source="tennisexplorer",
+            tournament=None, round=None, surface=None,  # simula el bug real ya guardado
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": None, "odds_opponent": None,
+    }
+
+    def fake_fetch(slug, year=None):
+        return f"year={year}"
+
+    def fake_parse(html, name):
+        # solo el año 2026 trae este partido -- coincide con la fila
+        # pre-existente (2026-08-03); los otros 10 años vienen vacíos.
+        return [fake_match] if html == "year=2026" else []
+
+    with patch(
+        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
+    ), patch(
+        "scripts.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
+    ), patch(
+        "scripts.wta_top200_historical_backfill.time.sleep",
+    ):
+        result = backfill_player("Test Player")
+
+    assert result["matches_inserted"] == 0  # la fila YA existía, no se duplica
+    assert result["matches_repaired"] == 1
+    with db_historical.connection_context():
+        row = TennisMatchHistory.get(TennisMatchHistory.player_name == "Test Player")
+        assert row.tournament == "Washington"
+        assert row.round == "F"
+        assert row.surface == "hard"
+
+
 def test_backfill_player_skips_match_without_valid_date():
     fake_match = {
         "date": "garbage", "tournament": "X", "surface": "hard",
