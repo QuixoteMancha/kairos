@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -230,9 +231,58 @@ _OPEN_METEO_MIN_INTERVAL_S = 0.15  # ~400 req/min, con margen bajo 600/min
 # documentado de Open-Meteo).
 _OPEN_METEO_MAX_INTERVAL_S = 0.9
 
+# 2026-08-04, hallazgo real al verificar el rate limit exacto de
+# Open-Meteo (free tier: 600/min, 5000/hora, 10000/día -- confirmado
+# por el usuario preguntando explícitamente "¿respetan los rate
+# limits?"): el jitter de arriba (0.15-0.9s, promedio 0.525s) SÍ
+# respeta el límite por minuto (~114 req/min << 600/min) pero en
+# promedio da ~6857 req/hora -- por ENCIMA del límite real de
+# 5000/hora, y agotaría el cupo diario de 10,000 en ~87 minutos de
+# corrida continua. El jitter por sí solo no alcanza; se necesita un
+# limitador real de ventana rodante que frene ADEMÁS por hora y por
+# día, no solo por request individual.
+_MAX_REQUESTS_PER_HOUR = 4000   # margen real bajo 5000/hora documentado
+_MAX_REQUESTS_PER_DAY = 8000    # margen real bajo 10000/día documentado
+_HOUR_S = 3600.0
+_DAY_S = 86400.0
+
+# timestamps (epoch, float) de requests reales ya hechas -- ventana
+# rodante en memoria del proceso (no persiste entre reinicios, pero es
+# lo que corresponde para un backfill de una sola corrida larga).
+_request_timestamps: deque[float] = deque()
+
+
+class DailyBudgetExhausted(Exception):
+    """Se agotó el cupo diario real de Open-Meteo (con margen) durante
+    esta corrida -- el caller debe detener el backfill en vez de seguir
+    pegándole a la API y arriesgarse a un 429 real."""
+
 
 def _open_meteo_throttle_sleep() -> None:
+    """Jitter base (piso mínimo real de cortesía) + limitador de
+    ventana rodante que frena adicionalmente si se acerca al límite
+    real por HORA o por DÍA de Open-Meteo -- el jitter solo no alcanza
+    para respetar los 3 límites documentados a la vez (ver hallazgo
+    arriba)."""
+    now = time.monotonic()
+    while _request_timestamps and now - _request_timestamps[0] > _DAY_S:
+        _request_timestamps.popleft()
+
+    in_last_day = len(_request_timestamps)
+    if in_last_day >= _MAX_REQUESTS_PER_DAY:
+        raise DailyBudgetExhausted(
+            f"Cupo diario de Open-Meteo agotado (con margen: {_MAX_REQUESTS_PER_DAY} "
+            "de las últimas 24h) -- deteniendo el backfill para esta corrida."
+        )
+
+    in_last_hour = sum(1 for t in _request_timestamps if now - t <= _HOUR_S)
+    if in_last_hour >= _MAX_REQUESTS_PER_HOUR:
+        oldest_in_hour = next(t for t in _request_timestamps if now - t <= _HOUR_S)
+        wait_s = _HOUR_S - (now - oldest_in_hour) + 1.0
+        time.sleep(max(wait_s, 0.0))
+
     time.sleep(random.uniform(_OPEN_METEO_MIN_INTERVAL_S, _OPEN_METEO_MAX_INTERVAL_S))
+    _request_timestamps.append(time.monotonic())
 
 
 def populate_weather_for_all_charted_matches() -> dict[str, Any]:
@@ -252,6 +302,7 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
 
     processed = skipped = errors = 0
     reasons: dict[str, int] = {}
+    budget_exhausted = False
     for match in matches:
         try:
             result = populate_weather_for_charted_match(match)
@@ -265,9 +316,21 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
         else:
             processed += 1
-            _open_meteo_throttle_sleep()  # solo tras un fetch real, no tras un skip (no pega la API)
+            try:
+                _open_meteo_throttle_sleep()  # solo tras un fetch real, no tras un skip (no pega la API)
+            except DailyBudgetExhausted:
+                # 2026-08-04, pedido explícito -- cortar el backfill acá
+                # en vez de seguir pegándole a la API tras agotar el
+                # cupo diario real (con margen). Las filas restantes
+                # quedan sin clima, se retoman en la próxima corrida
+                # (idempotente vía `weather_fetched_at.is_null()`).
+                budget_exhausted = True
+                break
 
-    return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+    return {
+        "total": len(matches), "processed": processed, "skipped": skipped, "errors": errors,
+        "skip_reasons": reasons, "daily_budget_exhausted": budget_exhausted,
+    }
 
 
 def populate_weather_for_match_history_row(row) -> dict[str, Any]:
@@ -321,6 +384,7 @@ def populate_weather_for_all_match_history() -> dict[str, Any]:
 
     processed = skipped = errors = 0
     reasons: dict[str, int] = {}
+    budget_exhausted = False
     for row in rows:
         try:
             result = populate_weather_for_match_history_row(row)
@@ -334,6 +398,13 @@ def populate_weather_for_all_match_history() -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
         else:
             processed += 1
-            _open_meteo_throttle_sleep()
+            try:
+                _open_meteo_throttle_sleep()
+            except DailyBudgetExhausted:
+                budget_exhausted = True
+                break
 
-    return {"total": len(rows), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+    return {
+        "total": len(rows), "processed": processed, "skipped": skipped, "errors": errors,
+        "skip_reasons": reasons, "daily_budget_exhausted": budget_exhausted,
+    }
