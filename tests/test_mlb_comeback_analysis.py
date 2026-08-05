@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from scripts.mlb_comeback_analysis import (
+from scripts.baseball.mlb_comeback_analysis import (
     _cumulative_runs_through_inning, collect_games_with_linescore, analyze_comeback_rate,
 )
 
@@ -36,11 +36,11 @@ def test_cumulative_runs_through_inning_fail_closed_if_incomplete():
 def test_collect_games_with_linescore_skips_when_linescore_fails():
     fake_games = [{"date": "2025-06-01", "home_team": "A", "away_team": "B", "home_won": True, "game_pk": 1}]
     with patch(
-        "scripts.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range", return_value=fake_games,
+        "scripts.baseball.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range", return_value=fake_games,
     ), patch(
-        "scripts.mlb_comeback_analysis.mlb_stats_scraper.get_linescore", return_value=None,
+        "scripts.baseball.mlb_comeback_analysis.mlb_stats_scraper.get_linescore", return_value=None,
     ), patch(
-        "scripts.mlb_comeback_analysis.time.sleep",
+        "scripts.baseball.mlb_comeback_analysis.time.sleep",
     ):
         result = collect_games_with_linescore("2025-06-01", "2025-06-01")
     assert result == []
@@ -50,11 +50,11 @@ def test_collect_games_with_linescore_builds_f5_snapshot():
     fake_games = [{"date": "2025-06-01", "home_team": "A", "away_team": "B", "home_won": True, "game_pk": 1}]
     ls = _linescore([(0, 1), (2, 0), (0, 0), (1, 0), (0, 2), (1, 0)])
     with patch(
-        "scripts.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range", return_value=fake_games,
+        "scripts.baseball.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range", return_value=fake_games,
     ), patch(
-        "scripts.mlb_comeback_analysis.mlb_stats_scraper.get_linescore", return_value=ls,
+        "scripts.baseball.mlb_comeback_analysis.mlb_stats_scraper.get_linescore", return_value=ls,
     ), patch(
-        "scripts.mlb_comeback_analysis.time.sleep",
+        "scripts.baseball.mlb_comeback_analysis.time.sleep",
     ):
         result = collect_games_with_linescore("2025-06-01", "2025-06-01")
     assert len(result) == 1

@@ -11,7 +11,7 @@ Idempotente: re-correr reemplaza los datos de cada año con la versión
 más reciente del CSV real (útil sobre todo para el año en curso, que
 sigue creciendo).
 
-Uso: `python3 -m scripts.tml_database_local_backfill [start_year] [end_year]`
+Uso: `python3 -m scripts.tennis.tml_database_local_backfill [start_year] [end_year]`
 Default: 1968-2026 (todo el rango real de la fuente)."""
 
 from __future__ import annotations

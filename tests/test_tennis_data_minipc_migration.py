@@ -9,8 +9,8 @@ import json
 
 from database.db import init_db_historical
 from database.historical.tennis import TmlDatabaseMatch, TennisHistoricalOdds, TennisMatchHistory
-from scripts.export_local_tennis_data_for_minipc_migration import export_all
-from scripts.import_tennis_data_from_json import (
+from scripts.tennis.export_local_tennis_data_for_minipc_migration import export_all
+from scripts.tennis.import_tennis_data_from_json import (
     import_tml_database_matches, import_historical_odds, import_match_history,
 )
 

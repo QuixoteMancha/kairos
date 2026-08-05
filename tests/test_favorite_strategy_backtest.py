@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from scripts.favorite_strategy_backtest import run_favorite_strategy_backtest
+from scripts.tennis.favorite_strategy_backtest import run_favorite_strategy_backtest
 
 
 def _leg(ticker, title, event_ticker, result=None):
@@ -28,9 +28,9 @@ def test_favorite_by_rank_wins_counts_as_hit():
         _leg("T1-B", "Will B win the A vs B: R32 match?", "EVT1", result="no"),
     ]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}), \
-         patch("scripts.favorite_strategy_backtest._lookup_rank", side_effect=lambda name, c: 5 if name == "A" else 50):
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}), \
+         patch("scripts.tennis.favorite_strategy_backtest._lookup_rank", side_effect=lambda name, c: 5 if name == "A" else 50):
         result = run_favorite_strategy_backtest()
 
     assert result["total_evaluable"] == 1
@@ -44,9 +44,9 @@ def test_favorite_loses_counts_as_miss():
         _leg("T1-B", "Will B win the A vs B: Final match?", "EVT1", result="yes"),
     ]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}), \
-         patch("scripts.favorite_strategy_backtest._lookup_rank", side_effect=lambda name, c: 5 if name == "A" else 50):
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}), \
+         patch("scripts.tennis.favorite_strategy_backtest._lookup_rank", side_effect=lambda name, c: 5 if name == "A" else 50):
         result = run_favorite_strategy_backtest()
 
     assert result["overall_hits"] == 0
@@ -59,9 +59,9 @@ def test_excludes_when_rank_missing():
         _leg("T1-B", "Will B win the A vs B: Final match?", "EVT1", result="no"),
     ]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}), \
-         patch("scripts.favorite_strategy_backtest._lookup_rank", return_value=None):
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}), \
+         patch("scripts.tennis.favorite_strategy_backtest._lookup_rank", return_value=None):
         result = run_favorite_strategy_backtest()
 
     assert result["total_evaluable"] == 0
@@ -71,8 +71,8 @@ def test_excludes_when_rank_missing():
 def test_excludes_incomplete_events():
     legs = [_leg("T1-A", "Will A win the A vs B: Final match?", "EVT1", result="yes")]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}):
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}):
         result = run_favorite_strategy_backtest()
 
     assert result["excluded_incomplete_event"] == 1
@@ -84,8 +84,8 @@ def test_excludes_when_no_winner_yet():
         _leg("T1-B", "Will B win the A vs B: Final match?", "EVT1", result=None),
     ]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}):
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}):
         result = run_favorite_strategy_backtest()
 
     assert result["excluded_no_winner"] == 1
@@ -99,10 +99,10 @@ def test_breaks_down_by_round():
         _leg("T2-B", "Will D win the C vs D: Final match?", "EVT2", result="yes"),
     ]
     api = _fake_api({"KXATPMATCH": legs, "KXWTAMATCH": []})
-    with patch("scripts.favorite_strategy_backtest.KalshiAPI", return_value=api), \
-         patch("scripts.favorite_strategy_backtest._rank_lookup", return_value={}), \
+    with patch("scripts.tennis.favorite_strategy_backtest.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.favorite_strategy_backtest._rank_lookup", return_value={}), \
          patch(
-             "scripts.favorite_strategy_backtest._lookup_rank",
+             "scripts.tennis.favorite_strategy_backtest._lookup_rank",
              side_effect=lambda name, c: {"A": 5, "B": 50, "C": 5, "D": 50}[name],
          ):
         result = run_favorite_strategy_backtest()

@@ -12,7 +12,7 @@ from database.historical.tennis import TmlDatabaseMatch
 from outer_apis.scrapers.tennis.tml_database_scraper import (
     save_matches_to_db, has_cached_year, get_matches_range_from_db,
 )
-from scripts.tml_database_local_backfill import run_backfill
+from scripts.tennis.tml_database_local_backfill import run_backfill
 
 
 def _match(date="2020-01-01", winner="A", loser="B", level="M", **kw):
@@ -75,8 +75,8 @@ def test_get_matches_range_from_db_warns_on_missing_year(caplog):
 def test_run_backfill_persists_and_reports_counts():
     fake_matches = [_match(date="2099-01-01")]
     with patch(
-        "scripts.tml_database_local_backfill.get_year_matches", return_value=fake_matches,
-    ), patch("scripts.tml_database_local_backfill.time.sleep"):
+        "scripts.tennis.tml_database_local_backfill.get_year_matches", return_value=fake_matches,
+    ), patch("scripts.tennis.tml_database_local_backfill.time.sleep"):
         result = run_backfill(2099, 2099, force=True)
     assert result["years_ok"] == 1
     assert result["total_matches_saved"] == 1
@@ -85,9 +85,9 @@ def test_run_backfill_persists_and_reports_counts():
 
 def test_run_backfill_skips_already_cached_years_unless_forced():
     save_matches_to_db(2099, [_match()])
-    with patch("scripts.tml_database_local_backfill.get_year_matches") as mock_fetch, \
-         patch("scripts.tml_database_local_backfill.time.sleep"), \
-         patch("scripts.tml_database_local_backfill.date") as mock_date:
+    with patch("scripts.tennis.tml_database_local_backfill.get_year_matches") as mock_fetch, \
+         patch("scripts.tennis.tml_database_local_backfill.time.sleep"), \
+         patch("scripts.tennis.tml_database_local_backfill.date") as mock_date:
         mock_date.today.return_value.year = 2030  # 2099 no es "el año en curso" en este test
         result = run_backfill(2099, 2099, force=False)
     mock_fetch.assert_not_called()

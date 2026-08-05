@@ -27,7 +27,7 @@ from typing import Any
 
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import _extract_round, _extract_player_name
-from scripts.sf_final_hypothesis_validation import _rank_lookup, _lookup_rank
+from scripts.tennis.sf_final_hypothesis_validation import _rank_lookup, _lookup_rank
 
 _SERIES = ["KXATPMATCH", "KXWTAMATCH"]
 _SERIES_TOUR = {"KXATPMATCH": "ATP", "KXWTAMATCH": "WTA"}

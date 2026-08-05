@@ -15,7 +15,7 @@ from database.db import init_db_historical, db_historical, init_db, db as db_acc
 from database.accounting.limitarbsignal import LimitArbSignal
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
 from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
-from scripts.semifinal_convergence_backtest import run_backtest
+from scripts.tennis.semifinal_convergence_backtest import run_backtest
 
 _VALID_GATE = {
     "valid": True, "injury_ok": True, "fatigue_ok": True, "age_ok": True,
@@ -68,7 +68,7 @@ def _make_signal(market_id, dog_side, dog_price, raw_edge, avg_vol, created_at):
 
 def _patched_gate(return_value=_VALID_GATE):
     return patch(
-        "scripts.semifinal_convergence_backtest._check_validity_gate",
+        "scripts.tennis.semifinal_convergence_backtest._check_validity_gate",
         return_value=return_value,
     )
 

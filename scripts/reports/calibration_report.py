@@ -58,7 +58,7 @@ la anomalía explícitamente en vez de dividir por un número cercano a
 cero.
 
 Uso:
-    python3 -m scripts.calibration_report
+    python3 -m scripts.reports.calibration_report
 """
 
 import sys

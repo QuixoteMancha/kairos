@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from scripts.favorite_surface_winrate_filter_backtest import (
+from scripts.tennis.favorite_surface_winrate_filter_backtest import (
     _build_surface_winrate_tracker, run_filtered_backtest, _MIN_RANK_GAP, _MIN_SURFACE_MATCHES,
 )
 
@@ -30,7 +30,7 @@ def test_surface_winrate_is_point_in_time_correct():
         _row("2016-06-01", winner="A", winner_rank=5, loser="D", loser_rank=100),  # eval, posterior -- NO debe afectar al caso de arriba
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         cases, meta = _build_surface_winrate_tracker()
     # el primer caso de eval (2016-01-01): A tiene 1 victoria previa (del warm-up) en Hard, 0 derrotas -> winrate 1.0
@@ -53,7 +53,7 @@ def test_filters_by_rank_gap_and_surface_winrate():
         _row("2016-02-01", winner="A", winner_rank=5, loser="C", loser_rank=15, surface="Hard"),
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         # min_surface_matches=0 -- este test aísla el filtro de rank_gap/winrate,
         # no el umbral de tamaño de muestra (ver test dedicado más abajo).
@@ -68,7 +68,7 @@ def test_excludes_case_when_no_surface_history_for_either_player():
         _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         cases, meta = _build_surface_winrate_tracker()
     assert cases == []
@@ -97,7 +97,7 @@ def test_run_filtered_backtest_uses_default_min_surface_matches_of_0():
         _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         result = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None)  # sin pasar min_surface_matches -- usa el default 0
     assert result["min_surface_matches_used"] == 0
@@ -116,7 +116,7 @@ def test_min_surface_matches_excludes_thin_sample_case():
         _row("2016-01-01", winner="A", winner_rank=5, loser="B", loser_rank=100, surface="Hard"),
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         no_threshold = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None, min_surface_matches=0)
         with_threshold = run_filtered_backtest(initial_capital=50.0, max_stake_usd=None, min_surface_matches=100)
@@ -144,7 +144,7 @@ def test_prioritizes_higher_ranked_favorite_within_daily_cap():
         _row("2016-01-01", winner="B", winner_rank=2, loser="D", loser_rank=150, surface="Hard"),
     ]
     with patch(
-        "scripts.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_surface_winrate_filter_backtest.get_matches_range", return_value=matches,
     ):
         cases, meta = _build_surface_winrate_tracker()
     day_cases = [c for c in cases if c["date"] == "2016-01-01"]

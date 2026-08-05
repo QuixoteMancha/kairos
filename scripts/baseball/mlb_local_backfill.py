@@ -9,7 +9,7 @@ requests por partido) se hace SOLO acá, de forma deliberada y fuera del
 loop de análisis (`scripts/mlb_comeback_analysis.py` debe leer de la DB
 local vía `collect_games_from_db`, nunca de la red directamente).
 
-Uso: `python3 -m scripts.mlb_local_backfill [start_year] [end_year]`
+Uso: `python3 -m scripts.baseball.mlb_local_backfill [start_year] [end_year]`
 Default: 2015-2026. Idempotente por año: si ya hay partidos de un año
 en la DB, se salta (salvo el año en curso, que siempre se refresca
 porque sigue jugándose)."""

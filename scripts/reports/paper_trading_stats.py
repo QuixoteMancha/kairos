@@ -9,11 +9,11 @@ bug ya encontrado y corregido en docker-compose.yml para los workers,
 ver memoria kairos-4-workers-deployed-prod-tree-corruption-found-fixed).
 
 Uso local (contra la DB de dev, desde la raíz del repo):
-    python3 -m scripts.paper_trading_stats
+    python3 -m scripts.reports.paper_trading_stats
 
 Uso en producción (contra la DB real, dentro de cualquiera de los
 contenedores kairos_* -- todos comparten el mismo volumen de contabilidad):
-    docker exec kairos_limitarb_monitor_worker python3 -m scripts.paper_trading_stats
+    docker exec kairos_limitarb_monitor_worker python3 -m scripts.reports.paper_trading_stats
 
 Solo lectura -- no escribe nada, no toca dinero real (no existe en este
 proyecto), no requiere red.

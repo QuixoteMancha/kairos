@@ -6,7 +6,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from outer_apis.scrapers.tennis.tml_database_scraper import get_year_matches, TOUR_LEVELS_250_PLUS
-from scripts.favorite_by_historical_rank_backtest import (
+from scripts.tennis.favorite_by_historical_rank_backtest import (
     run_backtest, parse_set1_winner, _simulate_capital_paths,
 )
 
@@ -76,7 +76,7 @@ def test_get_year_matches_skips_rows_missing_names_or_date():
 
 def test_backtest_hit_when_better_ranked_wins():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "Miami Masters", "level": "M", "date": "2026-03-22", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -92,7 +92,7 @@ def test_backtest_hit_when_better_ranked_wins():
 
 def test_backtest_miss_when_underdog_wins():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "250", "date": "2026-01-01", "round": "R32",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 90,
@@ -105,7 +105,7 @@ def test_backtest_miss_when_underdog_wins():
 
 def test_backtest_excludes_matches_without_rank():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "250", "date": "2026-01-01", "round": "R32",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": None,
@@ -146,7 +146,7 @@ def test_parse_set1_winner_fail_closed_on_tied_score():
 
 def test_backtest_set1_favorite_win_rate_when_favorite_wins_both():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -160,7 +160,7 @@ def test_backtest_set1_favorite_win_rate_when_favorite_wins_both():
 
 def test_backtest_set1_favorite_loses_set1_but_wins_match():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -174,7 +174,7 @@ def test_backtest_set1_favorite_loses_set1_but_wins_match():
 
 def test_backtest_set1_excludes_walkovers():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -190,7 +190,7 @@ def test_backtest_set1_excludes_walkovers():
 
 def test_conditional_match_winrate_after_set1_all_confirm():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -206,7 +206,7 @@ def test_conditional_match_winrate_after_set1_favorite_chokes():
     # el favorito (rank 5) gana el set 1 (6-4) pero termina PERDIENDO el
     # partido (underdog, rank 50, remonta y gana) -- caso real posible.
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "B", "winner_rank": 50,
@@ -222,7 +222,7 @@ def test_conditional_match_winrate_after_set1_favorite_chokes():
 
 def test_conditional_match_winrate_none_when_no_evaluable_cases():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest()
@@ -233,7 +233,7 @@ def test_conditional_match_winrate_none_when_no_evaluable_cases():
 
 def test_big_rank_gap_included_when_gap_at_least_20():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -248,7 +248,7 @@ def test_big_rank_gap_included_when_gap_at_least_20():
 
 def test_small_rank_gap_excluded():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -264,7 +264,7 @@ def test_small_rank_gap_excluded():
 
 def test_underdog_comeback_rate_is_complement_of_match_win_rate():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # favorito gana set1 y partido
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -287,7 +287,7 @@ def test_underdog_comeback_rate_is_complement_of_match_win_rate():
 
 def test_underdog_comeback_rate_by_rank_gap_buckets():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # gap=10 (bucket 0-20), underdog remonta
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -311,7 +311,7 @@ def test_underdog_comeback_rate_by_rank_gap_buckets():
 
 def test_underdog_comeback_rate_none_when_no_cases():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest()
@@ -324,7 +324,7 @@ def test_underdog_comeback_rate_none_when_no_cases():
 
 def test_favorite_comeback_rate_when_favorite_recovers():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # underdog gana set1 (5-7), favorito (A, rank 5) remonta y gana el partido
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -340,7 +340,7 @@ def test_favorite_comeback_rate_when_favorite_recovers():
 
 def test_favorite_comeback_rate_when_underdog_holds_on():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # underdog (B) gana set1 Y el partido -- favorito no remonta
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -355,7 +355,7 @@ def test_favorite_comeback_rate_when_underdog_holds_on():
 
 def test_favorite_comeback_rate_by_rank_gap_buckets():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -371,7 +371,7 @@ def test_favorite_comeback_rate_by_rank_gap_buckets():
 
 def test_favorite_comeback_rate_none_when_no_cases():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest()
@@ -383,7 +383,7 @@ def test_favorite_comeback_rate_none_when_no_cases():
 
 def test_strategy_comparison_simple_matches_overall_hit_rate():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -401,7 +401,7 @@ def test_strategy_comparison_bet_only_after_set1_and_double_down_share_condition
     apuestas terminan en el mismo lado -- pero son estrategias de
     sizing/capital distintas, por eso quedan separadas."""
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 5,
@@ -416,7 +416,7 @@ def test_strategy_comparison_bet_only_after_set1_and_double_down_share_condition
 
 def test_strategy_comparison_exit_is_complement_of_favorite_comeback():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # favorito (A) pierde set1 pero remonta y gana -- retirarse hubiera sido un ERROR
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -442,7 +442,7 @@ def test_strategy_comparison_combined_pools_both_set1_branches():
     favorito-gana-set1) + "se retiró y de verdad perdía" (rama
     favorito-pierde-set1), sobre el total de casos con set 1 conocido."""
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[
             {  # favorito (A) gana set1 y gana el partido -- refuerzo CORRECTO
                 "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
@@ -470,7 +470,7 @@ def test_strategy_comparison_combined_pools_both_set1_branches():
 
 def test_strategy_comparison_none_when_no_cases():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest()
@@ -494,7 +494,7 @@ def _case(date, hit, set1_favorite_win, rank_gap=25):
 
 def test_capital_simulation_starts_at_initial_capital_and_uses_key():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest(initial_capital=50.0)
@@ -651,7 +651,7 @@ def test_sharpe_positive_when_mixed_but_net_positive_returns():
 
 def test_model_fair_price_calibration_buckets_by_model_probability():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 3, "winner_name": "A", "winner_rank": 1,
@@ -672,7 +672,7 @@ def test_model_fair_price_calibration_buckets_by_model_probability():
 
 def test_model_fair_price_calibration_skips_invalid_best_of():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[{
             "tourney_name": "X", "level": "M", "date": "2026-01-01", "round": "F",
             "surface": "Hard", "best_of": 4, "winner_name": "A", "winner_rank": 5,
@@ -687,7 +687,7 @@ def test_model_fair_price_calibration_skips_invalid_best_of():
 
 def test_model_fair_price_calibration_none_when_no_cases():
     with patch(
-        "scripts.favorite_by_historical_rank_backtest.get_matches_range",
+        "scripts.tennis.favorite_by_historical_rank_backtest.get_matches_range",
         return_value=[],
     ):
         result = run_backtest()
@@ -701,7 +701,7 @@ def test_model_fair_price_calibration_none_when_no_cases():
 # ── capital_simulation_priced (pedido explícito 2026-08-03: usar el modelo
 # base como proxy del precio real de mercado en vez de payout 1:1) ──
 
-from scripts.favorite_by_historical_rank_backtest import (
+from scripts.tennis.favorite_by_historical_rank_backtest import (
     _real_price_legs, _p_win_match_given_set_score, _simulate_capital_paths_priced,
 )
 
@@ -768,7 +768,7 @@ def test_capital_simulation_priced_skips_invalid_best_of():
 
 # ── algobetting_concurrency_capped (pedido explícito 2026-08-03) ──
 
-from scripts.favorite_by_historical_rank_backtest import _simulate_algobetting_concurrency_capped
+from scripts.tennis.favorite_by_historical_rank_backtest import _simulate_algobetting_concurrency_capped
 
 
 def _dated_case(date, hit, rank_gap=25, best_of=3, surface="Hard"):
@@ -847,7 +847,7 @@ def test_concurrency_cap_respects_max_stake_usd_ceiling():
 
 # ── yearly_edge_degradation (pedido explícito 2026-08-03) ──
 
-from scripts.favorite_by_historical_rank_backtest import (
+from scripts.tennis.favorite_by_historical_rank_backtest import (
     _yearly_edge_degradation, _simulate_realistic_all_strategies,
 )
 
@@ -998,7 +998,7 @@ def test_strategy6_hedge_stake_pct_defaults_to_stake_pct_when_none():
 
 # ── estrategia 7: retiro condicional al patrón de alta remontada (2026-08-03) ──
 
-from scripts.favorite_by_historical_rank_backtest import _matches_high_comeback_condition
+from scripts.tennis.favorite_by_historical_rank_backtest import _matches_high_comeback_condition
 
 
 def test_high_comeback_condition_all_criteria_met():
@@ -1145,7 +1145,7 @@ def test_realistic_all_strategies_applies_real_kalshi_fees():
     real de Kalshi (solo la 6, descartada, lo hacía en su pata de
     cobertura)."""
     from outer_apis.kalshi.fees import leg_fee_fraction
-    from scripts.favorite_by_historical_rank_backtest import _real_price_legs
+    from scripts.tennis.favorite_by_historical_rank_backtest import _real_price_legs
 
     cases = [_dated_case("2026-01-01", hit=True, rank_gap=60)]  # favorito rank5 vs underdog rank65
     cases[0]["favorite_rank"] = 5
@@ -1170,7 +1170,7 @@ def test_realistic_all_strategies_applies_real_kalshi_fees():
 def test_net_reprice_pct_charges_fee_on_both_legs():
     """El reprecio (retiro anticipado) paga fee de ENTRADA y de SALIDA
     -- 2 órdenes reales, criterio conservador (nunca subestimar costo)."""
-    from scripts.favorite_by_historical_rank_backtest import (
+    from scripts.tennis.favorite_by_historical_rank_backtest import (
         _real_price_legs, _simulate_realistic_all_strategies,
     )
     from outer_apis.kalshi.fees import leg_fee_fraction

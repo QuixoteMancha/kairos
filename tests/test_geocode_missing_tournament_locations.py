@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from database.db import init_db_historical
 from database.historical.tennis import TennisMatchHistory, TournamentLocationCache
-from scripts.geocode_missing_tournament_locations import (
+from scripts.tennis.geocode_missing_tournament_locations import (
     _geocode, collect_unresolved_city_candidates, run_geocoding,
 )
 
@@ -42,7 +42,7 @@ def test_collect_unresolved_city_candidates_excludes_already_resolved_by_static_
 
 
 def test_geocode_fail_closed_on_no_results():
-    with patch("scripts.geocode_missing_tournament_locations.requests.get") as mock_get:
+    with patch("scripts.tennis.geocode_missing_tournament_locations.requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = []
         assert _geocode("nowhereville") is None
@@ -51,13 +51,13 @@ def test_geocode_fail_closed_on_no_results():
 def test_geocode_fail_closed_on_request_failure():
     import requests
     with patch(
-        "scripts.geocode_missing_tournament_locations.requests.get", side_effect=requests.RequestException,
+        "scripts.tennis.geocode_missing_tournament_locations.requests.get", side_effect=requests.RequestException,
     ):
         assert _geocode("prostejov") is None
 
 
 def test_geocode_parses_real_result():
-    with patch("scripts.geocode_missing_tournament_locations.requests.get") as mock_get:
+    with patch("scripts.tennis.geocode_missing_tournament_locations.requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = [{"lat": "49.4722", "lon": "17.1122"}]
         result = _geocode("prostejov")
@@ -68,9 +68,9 @@ def test_run_geocoding_persists_cache_rows_resolved_and_failed():
     _row("Prostejov challenger")
     _row("Nowhereville ITF")
     with patch(
-        "scripts.geocode_missing_tournament_locations._geocode",
+        "scripts.tennis.geocode_missing_tournament_locations._geocode",
         side_effect=lambda c: (49.4722, 17.1122) if c == "prostejov" else None,
-    ), patch("scripts.geocode_missing_tournament_locations.time.sleep"):
+    ), patch("scripts.tennis.geocode_missing_tournament_locations.time.sleep"):
         result = run_geocoding()
 
     assert result["candidates_total"] == 2
@@ -88,8 +88,8 @@ def test_run_geocoding_never_retries_already_cached_candidate():
     TournamentLocationCache.create(
         city_candidate="prostejov", lat=None, lon=None, source="nominatim", fetched_at=datetime.now(timezone.utc),
     )
-    with patch("scripts.geocode_missing_tournament_locations._geocode") as mock_geocode, \
-         patch("scripts.geocode_missing_tournament_locations.time.sleep"):
+    with patch("scripts.tennis.geocode_missing_tournament_locations._geocode") as mock_geocode, \
+         patch("scripts.tennis.geocode_missing_tournament_locations.time.sleep"):
         result = run_geocoding()
     mock_geocode.assert_not_called()
     assert result["geocoded_this_run"] == 0
@@ -97,8 +97,8 @@ def test_run_geocoding_never_retries_already_cached_candidate():
 
 def test_run_geocoding_respects_min_rows_threshold():
     _row("Prostejov challenger")  # n=1
-    with patch("scripts.geocode_missing_tournament_locations._geocode") as mock_geocode, \
-         patch("scripts.geocode_missing_tournament_locations.time.sleep"):
+    with patch("scripts.tennis.geocode_missing_tournament_locations._geocode") as mock_geocode, \
+         patch("scripts.tennis.geocode_missing_tournament_locations.time.sleep"):
         result = run_geocoding(min_rows=2)
     mock_geocode.assert_not_called()
     assert result["geocoded_this_run"] == 0

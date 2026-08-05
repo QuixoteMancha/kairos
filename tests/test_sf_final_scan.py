@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from scripts.sf_final_scan import scan_sf_final_matches, _trade_price_summary, _parse_match_date
+from scripts.tennis.sf_final_scan import scan_sf_final_matches, _trade_price_summary, _parse_match_date
 
 
 def _leg(ticker, title, event_ticker, rules_secondary, result=None, close_time="2026-08-01T20:00:00Z"):
@@ -37,10 +37,10 @@ def test_filters_only_semifinal_and_final_rounds():
     ]
     api = _fake_api_with_markets({"KXATPMATCH": legs_qf + legs_sf, "KXWTAMATCH": []})
 
-    with patch("scripts.sf_final_scan.KalshiAPI", return_value=api), \
-         patch("scripts.sf_final_scan.get_age", return_value=None), \
-         patch("scripts.sf_final_scan.get_injury_risk_flag", return_value=None), \
-         patch("scripts.sf_final_scan.calculate_fatigue_index", return_value=None):
+    with patch("scripts.tennis.sf_final_scan.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.sf_final_scan.get_age", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.get_injury_risk_flag", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.calculate_fatigue_index", return_value=None):
         results = scan_sf_final_matches(fetch_stats=False)
 
     assert len(results) == 1
@@ -52,7 +52,7 @@ def test_skips_incomplete_events():
     legs = [_leg("T1-A", "Will A win the A vs B: Final match?", "EVT1", "ATP Final")]
     api = _fake_api_with_markets({"KXATPMATCH": legs, "KXWTAMATCH": []})
 
-    with patch("scripts.sf_final_scan.KalshiAPI", return_value=api):
+    with patch("scripts.tennis.sf_final_scan.KalshiAPI", return_value=api):
         results = scan_sf_final_matches(fetch_stats=False)
 
     assert results == []
@@ -65,10 +65,10 @@ def test_winner_resolved_from_leg_a_yes():
     ]
     api = _fake_api_with_markets({"KXATPMATCH": legs, "KXWTAMATCH": []})
 
-    with patch("scripts.sf_final_scan.KalshiAPI", return_value=api), \
-         patch("scripts.sf_final_scan.get_age", return_value=None), \
-         patch("scripts.sf_final_scan.get_injury_risk_flag", return_value=None), \
-         patch("scripts.sf_final_scan.calculate_fatigue_index", return_value=None):
+    with patch("scripts.tennis.sf_final_scan.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.sf_final_scan.get_age", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.get_injury_risk_flag", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.calculate_fatigue_index", return_value=None):
         results = scan_sf_final_matches(fetch_stats=False)
 
     assert results[0]["winner"] == "A"
@@ -81,11 +81,11 @@ def test_fetch_stats_false_skips_flashscore_entirely():
     ]
     api = _fake_api_with_markets({"KXATPMATCH": legs, "KXWTAMATCH": []})
 
-    with patch("scripts.sf_final_scan.KalshiAPI", return_value=api), \
-         patch("scripts.sf_final_scan.get_age", return_value=None), \
-         patch("scripts.sf_final_scan.get_injury_risk_flag", return_value=None), \
-         patch("scripts.sf_final_scan.calculate_fatigue_index", return_value=None), \
-         patch("scripts.sf_final_scan.find_match_id") as mock_find:
+    with patch("scripts.tennis.sf_final_scan.KalshiAPI", return_value=api), \
+         patch("scripts.tennis.sf_final_scan.get_age", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.get_injury_risk_flag", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.calculate_fatigue_index", return_value=None), \
+         patch("scripts.tennis.sf_final_scan.find_match_id") as mock_find:
         results = scan_sf_final_matches(fetch_stats=False)
 
     mock_find.assert_not_called()

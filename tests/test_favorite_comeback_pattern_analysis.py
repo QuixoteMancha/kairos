@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from scripts.favorite_comeback_pattern_analysis import (
+from scripts.tennis.favorite_comeback_pattern_analysis import (
     run_analysis, _is_retirement_score, _build_retirement_history,
     _had_recent_walkover, _bucket_label,
 )
@@ -64,7 +64,7 @@ def test_run_analysis_only_includes_cases_where_favorite_lost_set1():
         _row(winner="A", winner_rank=5, loser="B", loser_rank=50, score="4-6 6-3 6-4"),  # favorito perdió set1, remontó
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     assert result["n"] == 1
@@ -80,7 +80,7 @@ def test_run_analysis_groups_by_favorite_age():
         _row(winner="B", winner_rank=50, loser="A", loser_rank=5, loser_age=22.0, score="6-4 6-3"),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     assert "<23" in result["by_favorite_age"]
@@ -96,7 +96,7 @@ def test_run_analysis_flags_recent_walkover_point_in_time():
         _row(date="2026-01-10", winner="B", winner_rank=50, loser="A", loser_rank=5, score="6-4 6-3"),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     walkover_group = result["by_favorite_recent_walkover"]
@@ -106,7 +106,7 @@ def test_run_analysis_flags_recent_walkover_point_in_time():
 def test_run_analysis_skips_matches_without_rank():
     matches = [_row(winner_rank=None)]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     assert result["skipped_no_rank"] == 1
@@ -115,7 +115,7 @@ def test_run_analysis_skips_matches_without_rank():
 
 # ── find_high_comeback_intersection (pedido explícito 2026-08-03) ──
 
-from scripts.favorite_comeback_pattern_analysis import find_high_comeback_intersection
+from scripts.tennis.favorite_comeback_pattern_analysis import find_high_comeback_intersection
 
 
 def test_intersection_filters_to_qualifying_buckets_only():
@@ -126,7 +126,7 @@ def test_intersection_filters_to_qualifying_buckets_only():
         _row(winner="B", winner_rank=10, loser="A", loser_rank=60, loser_age=22.0, score="6-4 6-3"),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = find_high_comeback_intersection(min_rate_pct=50.0, exclude_categories=(
             "rank_gap_bucket", "favorite_age_bucket", "round", "favorite_had_recent_walkover",
@@ -139,7 +139,7 @@ def test_intersection_filters_to_qualifying_buckets_only():
 def test_intersection_no_qualifying_bucket_means_no_restriction_on_that_category():
     matches = [_row(winner="A", winner_rank=5, winner_age=22.0, loser="B", loser_rank=50, score="4-6 6-3 6-4")]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = find_high_comeback_intersection(min_rate_pct=99.9, exclude_categories=(
             "favorite_rank_bucket", "rank_gap_bucket", "favorite_age_bucket", "round",
@@ -158,7 +158,7 @@ def test_intersection_reports_baseline_for_comparison():
         _row(winner="B", winner_rank=60, loser="A", loser_rank=10, loser_age=22.0, score="6-4 6-3"),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = find_high_comeback_intersection(min_rate_pct=30.0)
     assert result["baseline_comeback_rate_pct"] == 50.0  # 1 de 2 remonta en la población total
@@ -166,7 +166,7 @@ def test_intersection_reports_baseline_for_comparison():
 
 # ── best_of / set1_game_diff (pedido explícito 2026-08-03) ──
 
-from scripts.favorite_comeback_pattern_analysis import _set1_game_diff
+from scripts.tennis.favorite_comeback_pattern_analysis import _set1_game_diff
 
 
 def test_set1_game_diff_computes_absolute_difference():
@@ -187,7 +187,7 @@ def test_run_analysis_groups_by_best_of():
         _row(winner="B", winner_rank=50, loser="A", loser_rank=5, score="6-4 6-3", best_of=5),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     assert "bo3" in result["by_best_of"]
@@ -202,7 +202,7 @@ def test_run_analysis_groups_by_set1_closeness():
         _row(winner="B", winner_rank=50, loser="A", loser_rank=5, score="6-0 6-1"),  # diff=6, paliza
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", return_value=matches,
     ):
         result = run_analysis()
     assert result["by_set1_closeness"]["cerrado (1-2 games)"]["n"] == 1
@@ -211,7 +211,7 @@ def test_run_analysis_groups_by_set1_closeness():
 
 # ── validate_out_of_sample (pedido explícito 2026-08-03, sugerencia #4) ──
 
-from scripts.favorite_comeback_pattern_analysis import validate_out_of_sample
+from scripts.tennis.favorite_comeback_pattern_analysis import validate_out_of_sample
 
 
 def test_validate_out_of_sample_does_not_recompute_condition_on_test():
@@ -228,7 +228,7 @@ def test_validate_out_of_sample_does_not_recompute_condition_on_test():
         return train_matches if start_year == 2016 else test_matches
 
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range", side_effect=fake_ranged,
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range", side_effect=fake_ranged,
     ):
         result = validate_out_of_sample(
             train_start_year=2016, train_end_year=2021,
@@ -245,7 +245,7 @@ def test_validate_out_of_sample_fail_closed_when_test_empty():
         _row(date="2020-01-01", winner="A", winner_rank=5, winner_age=22.0, loser="B", loser_rank=80, score="4-6 6-3 6-4"),
     ]
     with patch(
-        "scripts.favorite_comeback_pattern_analysis.get_matches_range",
+        "scripts.tennis.favorite_comeback_pattern_analysis.get_matches_range",
         side_effect=lambda s, e, levels=None: train_matches if s == 2016 else [],
     ):
         result = validate_out_of_sample(

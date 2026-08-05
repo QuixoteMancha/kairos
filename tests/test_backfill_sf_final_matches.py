@@ -13,7 +13,7 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
 from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
 from database.historical.tennis.tennismatchstats import TennisMatchStats
-from scripts.backfill_sf_final_matches import backfill_match, _parse_trades, _find_real_score
+from scripts.tennis.backfill_sf_final_matches import backfill_match, _parse_trades, _find_real_score
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +60,8 @@ def test_skips_registration_without_real_trades():
 def test_creates_match_with_correct_winner_side():
     api = MagicMock()
     api.get_trades.return_value = _fake_trades([0.3, 0.5, 0.9])
-    with patch("scripts.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
-         patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
+    with patch("scripts.tennis.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
+         patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
         result = backfill_match(api, _entry())
 
     assert result["steps"]["registration"] == "created"
@@ -73,8 +73,8 @@ def test_creates_match_with_correct_winner_side():
 def test_idempotent_on_second_run():
     api = MagicMock()
     api.get_trades.return_value = _fake_trades([0.3, 0.5, 0.9])
-    with patch("scripts.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
-         patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
+    with patch("scripts.tennis.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
+         patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
         backfill_match(api, _entry())
         second = backfill_match(api, _entry())
 
@@ -86,8 +86,8 @@ def test_idempotent_on_second_run():
 def test_creates_real_probability_ticks_from_trade_tape():
     api = MagicMock()
     api.get_trades.return_value = _fake_trades([0.3, 0.5, 0.9])
-    with patch("scripts.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
-         patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
+    with patch("scripts.tennis.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
+         patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
         backfill_match(api, _entry())
 
     match = TennisScannedMatch.get(TennisScannedMatch.market_id == "EVT1")
@@ -102,8 +102,8 @@ def test_saves_stats_with_real_score_when_found():
     api = MagicMock()
     api.get_trades.return_value = _fake_trades([0.3])
     fake_rows = [{"opponent": "Player B", "date": "2026-08-01", "score": "6-4 7-6(5)"}]
-    with patch("scripts.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
-         patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=fake_rows):
+    with patch("scripts.tennis.backfill_sf_final_matches.populate_weather_for_match", return_value={"skipped": True}), \
+         patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=fake_rows):
         backfill_match(api, _entry())
 
     stats = TennisMatchStats.get(TennisMatchStats.market_id == "EVT1")
@@ -117,9 +117,9 @@ def test_calls_weather_backfill():
     api = MagicMock()
     api.get_trades.return_value = _fake_trades([0.4])
     with patch(
-        "scripts.backfill_sf_final_matches.populate_weather_for_match",
+        "scripts.tennis.backfill_sf_final_matches.populate_weather_for_match",
         return_value={"skipped": False, "populated_phases": ["before", "during", "end"]},
-    ) as mock_weather, patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
+    ) as mock_weather, patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
         result = backfill_match(api, _entry())
 
     mock_weather.assert_called_once()
@@ -141,11 +141,11 @@ def test_parse_trades_sorts_chronologically_and_fail_closed_on_bad_fields():
 
 def test_find_real_score_matches_by_opponent_and_date():
     rows = [{"opponent": "Player B", "date": "2026-08-02", "score": "7-5 6-3"}]
-    with patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=rows):
+    with patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=rows):
         score = _find_real_score("Player A", "Player B", "2026-08-01")  # +/-1 dia tolerancia
     assert score == "7-5 6-3"
 
 
 def test_find_real_score_fail_closed_no_match():
-    with patch("scripts.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
+    with patch("scripts.tennis.backfill_sf_final_matches.fetch_and_cache", return_value=[]):
         assert _find_real_score("Player A", "Player B", "2026-08-01") is None

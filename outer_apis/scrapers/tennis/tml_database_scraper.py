@@ -240,7 +240,7 @@ def get_matches_range_from_db(start_year: int, end_year: int,
     if missing_years:
         _logger.warning(
             "TML-Database (DB local): %d año(s) sin backfill -- %s. "
-            "Correr `python3 -m scripts.tml_database_local_backfill` para poblarlos. "
+            "Correr `python3 -m scripts.tennis.tml_database_local_backfill` para poblarlos. "
             "El backtest sigue corriendo con un universo de datos más chico de lo esperado.",
             len(missing_years), missing_years,
         )

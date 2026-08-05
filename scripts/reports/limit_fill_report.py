@@ -4,10 +4,10 @@ límite (ver database/accounting/fillverification.py,
 strategies/fill_verification.py, workers/fill_verification_worker.py).
 
 Uso local (contra la DB de dev, desde la raíz del repo):
-    python3 -m scripts.limit_fill_report
+    python3 -m scripts.reports.limit_fill_report
 
 Uso en producción:
-    docker exec kairos_fill_verification_worker python3 -m scripts.limit_fill_report
+    docker exec kairos_fill_verification_worker python3 -m scripts.reports.limit_fill_report
 
 Solo lectura -- no escribe nada, no toca dinero real (no existe en este
 proyecto), no requiere red (lee solo la DB local).

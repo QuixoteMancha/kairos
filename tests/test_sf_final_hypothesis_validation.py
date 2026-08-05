@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from scripts.sf_final_hypothesis_validation import validate_hypothesis
+from scripts.tennis.sf_final_hypothesis_validation import validate_hypothesis
 
 
 def _match(event_ticker, player_a, player_b, price_a, price_b, price_a_max, price_b_max, series="KXATPMATCH"):
@@ -28,19 +28,19 @@ def _write_dataset(tmp_path, matches):
 
 def _patched_models(fair_a=0.6, volatility=0.20, rank_a=5, rank_b=50):
     fmodel_patch = patch(
-        "scripts.sf_final_hypothesis_validation.TennisFModel.calculate_fair_price",
+        "scripts.tennis.sf_final_hypothesis_validation.TennisFModel.calculate_fair_price",
         return_value={"fair_a_price": fair_a, "fair_b_price": 1 - fair_a},
     )
     vmodel_patch = patch(
-        "scripts.sf_final_hypothesis_validation.TennisVModel.calculate_volatility",
+        "scripts.tennis.sf_final_hypothesis_validation.TennisVModel.calculate_volatility",
         return_value=volatility,
     )
     rank_patch = patch(
-        "scripts.sf_final_hypothesis_validation._lookup_rank",
+        "scripts.tennis.sf_final_hypothesis_validation._lookup_rank",
         side_effect=lambda name, cache: rank_a if "A" in name else rank_b,
     )
     rank_cache_patch = patch(
-        "scripts.sf_final_hypothesis_validation._rank_lookup", return_value={},
+        "scripts.tennis.sf_final_hypothesis_validation._rank_lookup", return_value={},
     )
     return fmodel_patch, vmodel_patch, rank_patch, rank_cache_patch
 
@@ -57,8 +57,8 @@ def test_excludes_match_without_price_data(tmp_path):
 def test_excludes_match_without_rank_data(tmp_path):
     dataset = [_match("E1", "PlayerA", "PlayerB", 0.3, 0.7, 0.5, 0.9)]
     path = _write_dataset(tmp_path, dataset)
-    with patch("scripts.sf_final_hypothesis_validation._rank_lookup", return_value={}), \
-         patch("scripts.sf_final_hypothesis_validation._lookup_rank", return_value=None):
+    with patch("scripts.tennis.sf_final_hypothesis_validation._rank_lookup", return_value={}), \
+         patch("scripts.tennis.sf_final_hypothesis_validation._lookup_rank", return_value=None):
         result = validate_hypothesis(path)
     assert result["excluded_no_rank_data"] == 1
 

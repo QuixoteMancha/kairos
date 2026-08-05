@@ -12,7 +12,7 @@ import pytest
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
-from scripts.wta_top200_historical_backfill import backfill_player, run_backfill, _to_iso_date
+from scripts.tennis.wta_top200_historical_backfill import backfill_player, run_backfill, _to_iso_date
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,7 @@ def test_to_iso_date_fail_closed_on_garbage():
 
 def test_backfill_player_skips_when_no_slug():
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value=None,
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value=None,
     ):
         result = backfill_player("Nonexistent Player")
     assert result["status"] == "skipped_no_slug"
@@ -64,13 +64,13 @@ def test_backfill_player_inserts_match_and_odds():
         return [fake_match] if html == "year=2026" else []
 
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
     ), patch(
-        "scripts.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
+        "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
     ), patch(
-        "scripts.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         result = backfill_player("Test Player")
 
@@ -98,17 +98,17 @@ def test_backfill_player_idempotent_on_second_run():
         "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
     }
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
     ), patch(
-        "scripts.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
+        "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
         # mismo partido reportado en LOS 11 años pedidos -> misma fecha real
         # calculada distinta por año (2016-08-03 ... 2026-08-03) NO
         # colapsa entre sí -- lo que sí debe colapsar es correr la
         # función 2 VECES con el mismo input (esto es lo que se testea).
-        "scripts.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         first = backfill_player("Test Player")
         second = backfill_player("Test Player")
@@ -151,13 +151,13 @@ def test_backfill_player_repairs_existing_row_with_null_tournament():
         return [fake_match] if html == "year=2026" else []
 
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
     ), patch(
-        "scripts.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
+        "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
     ), patch(
-        "scripts.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         result = backfill_player("Test Player")
 
@@ -177,13 +177,13 @@ def test_backfill_player_skips_match_without_valid_date():
         "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
     }
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
     ), patch(
-        "scripts.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
+        "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
-        "scripts.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         result = backfill_player("Test Player")
     assert result["matches_inserted"] == 0
@@ -196,13 +196,13 @@ def test_backfill_player_no_odds_row_when_both_odds_none():
         "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
     }
     with patch(
-        "scripts.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
     ), patch(
-        "scripts.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
+        "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
-        "scripts.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         result = backfill_player("Test Player")
     assert result["odds_inserted"] == 0
@@ -214,12 +214,12 @@ def test_run_backfill_paces_between_players_and_summarizes():
         {"nombre": "Player B", "ranking": 2, "ranking_type": "WTA", "pais": "USA"},
     ]
     with patch(
-        "scripts.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
+        "scripts.tennis.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
     ), patch(
-        "scripts.wta_top200_historical_backfill.backfill_player",
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
         return_value={"player": "x", "status": "ok", "matches_inserted": 1, "odds_inserted": 1},
     ) as mock_bp, patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ) as mock_sleep:
         summary = run_backfill(n_players=2)
 
@@ -231,12 +231,12 @@ def test_run_backfill_paces_between_players_and_summarizes():
 def test_run_backfill_uses_requested_tour_for_rankings():
     fake_players = [{"nombre": "Player A", "ranking": 1, "ranking_type": "ATP", "pais": "ESP"}]
     with patch(
-        "scripts.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
+        "scripts.tennis.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
     ) as mock_rankings, patch(
-        "scripts.wta_top200_historical_backfill.backfill_player",
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
         return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
     ), patch(
-        "scripts.wta_top200_historical_backfill.time.sleep",
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         run_backfill(n_players=1, tour="ATP")
     mock_rankings.assert_called_once_with(n=1, tour="ATP")

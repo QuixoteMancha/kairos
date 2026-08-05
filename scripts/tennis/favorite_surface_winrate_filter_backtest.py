@@ -30,7 +30,7 @@ import json
 from typing import Any
 
 from outer_apis.scrapers.tennis.tml_database_scraper import get_matches_range_from_db as get_matches_range, TOUR_LEVELS_250_PLUS
-from scripts.favorite_by_historical_rank_backtest import (
+from scripts.tennis.favorite_by_historical_rank_backtest import (
     parse_set1_winner, parse_set2_winner, _set1_game_diff, _simulate_realistic_all_strategies,
 )
 

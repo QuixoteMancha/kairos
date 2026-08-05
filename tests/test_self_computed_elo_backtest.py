@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from scripts.self_computed_elo_backtest import (
+from scripts.tennis.self_computed_elo_backtest import (
     run_self_computed_elo_backtest, _elo_update, _INITIAL_ELO,
 )
 
@@ -44,7 +44,7 @@ def test_backtest_skips_warmup_matches_from_calibration():
         _row("2016-01-01", "A", 5, "B", 50),  # eval
     ]
     with patch(
-        "scripts.self_computed_elo_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.self_computed_elo_backtest.get_matches_range", return_value=matches,
     ):
         result = run_self_computed_elo_backtest(warmup_start_year=2000, eval_start_year=2016, end_year=2026)
     assert result["warmup_matches"] == 2  # 1999 y 2015 -- el mock ignora los años pedidos, ambos son < eval_cutoff
@@ -60,7 +60,7 @@ def test_backtest_uses_accumulated_elo_from_warmup_in_eval():
     matches = [_row(f"2010-01-{i:02d}", "A", 5, "B", 50) for i in range(1, 11)]
     matches.append(_row("2016-01-01", "A", 5, "B", 6))  # eval, A sigue siendo favorito por ranking
     with patch(
-        "scripts.self_computed_elo_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.self_computed_elo_backtest.get_matches_range", return_value=matches,
     ):
         result = run_self_computed_elo_backtest(warmup_start_year=2000, eval_start_year=2016, end_year=2026)
     elo_calib = result["elo_only_calibration"]
@@ -74,7 +74,7 @@ def test_backtest_uses_accumulated_elo_from_warmup_in_eval():
 def test_backtest_fail_closed_on_invalid_best_of_in_eval_window():
     matches = [_row("2016-01-01", "A", 5, "B", 50, best_of=4)]
     with patch(
-        "scripts.self_computed_elo_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.self_computed_elo_backtest.get_matches_range", return_value=matches,
     ):
         result = run_self_computed_elo_backtest(warmup_start_year=2000, eval_start_year=2016, end_year=2026)
     assert result["eval_matches_skipped_invalid_best_of"] == 1
@@ -86,7 +86,7 @@ def test_backtest_fail_closed_on_invalid_best_of_in_eval_window():
 def test_backtest_skips_eval_matches_without_rank():
     matches = [_row("2016-01-01", "A", None, "B", 50)]
     with patch(
-        "scripts.self_computed_elo_backtest.get_matches_range", return_value=matches,
+        "scripts.tennis.self_computed_elo_backtest.get_matches_range", return_value=matches,
     ):
         result = run_self_computed_elo_backtest(warmup_start_year=2000, eval_start_year=2016, end_year=2026)
     assert result["eval_matches_skipped_no_rank"] == 1

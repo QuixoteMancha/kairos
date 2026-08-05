@@ -57,9 +57,9 @@ from database.accounting.fillverification import FillVerification
 from database.accounting.writer import _row_to_dict as _signal_to_dict
 from strategies.paper_trading import get_available_equity
 
-import scripts.paper_trading_stats as paper_trading_stats
-import scripts.limit_fill_report as limit_fill_report
-import scripts.calibration_report as calibration_report
+import scripts.reports.paper_trading_stats as paper_trading_stats
+import scripts.reports.limit_fill_report as limit_fill_report
+import scripts.reports.calibration_report as calibration_report
 from outer_apis.kalshi.portfolio import (
     KalshiAuthError,
     KalshiCredentialsError,

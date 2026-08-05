@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from database.db import init_db_historical
 from database.historical.baseball import MlbGameHistory
-from scripts.mlb_local_backfill import backfill_year, run_backfill, _year_has_cache, enrich_game_datetimes
-from scripts.mlb_comeback_analysis import collect_games_from_db
+from scripts.baseball.mlb_local_backfill import backfill_year, run_backfill, _year_has_cache, enrich_game_datetimes
+from scripts.baseball.mlb_comeback_analysis import collect_games_from_db
 
 
 def setup_function(_fn):
@@ -31,9 +31,9 @@ def test_year_has_cache_false_when_empty():
 def test_backfill_year_persists_games_with_linescore():
     fake_games = [{"date": "2099-06-01", "home_team": "A", "away_team": "B", "home_won": True, "game_pk": 1}]
     ls = _fake_linescore([(1, 0), (0, 0), (0, 1), (0, 0), (2, 0)])
-    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games), \
-         patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_linescore", return_value=ls), \
-         patch("scripts.mlb_local_backfill.time.sleep"):
+    with patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games), \
+         patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_linescore", return_value=ls), \
+         patch("scripts.baseball.mlb_local_backfill.time.sleep"):
         result = backfill_year(2099)
     assert result["games_saved"] == 1
     assert MlbGameHistory.select().count() == 1
@@ -48,9 +48,9 @@ def test_backfill_year_is_idempotent_replaces_year():
         home_runs_final=3, away_runs_final=1, innings_json=None, fetched_at=datetime.now(timezone.utc),
     )
     fake_games = [{"date": "2099-06-02", "home_team": "C", "away_team": "D", "home_won": False, "game_pk": 2}]
-    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games), \
-         patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_linescore", return_value=None), \
-         patch("scripts.mlb_local_backfill.time.sleep"):
+    with patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games), \
+         patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_linescore", return_value=None), \
+         patch("scripts.baseball.mlb_local_backfill.time.sleep"):
         backfill_year(2099)
     rows = list(MlbGameHistory.select().where(MlbGameHistory.date.startswith("2099")))
     assert len(rows) == 1
@@ -62,8 +62,8 @@ def test_run_backfill_skips_cached_years_unless_current():
         game_pk=1, date="2099-06-01", home_team="A", away_team="B", home_won=True,
         home_runs_final=3, away_runs_final=1, innings_json=None, fetched_at=datetime.now(timezone.utc),
     )
-    with patch("scripts.mlb_local_backfill.date") as mock_date, \
-         patch("scripts.mlb_local_backfill.backfill_year") as mock_backfill:
+    with patch("scripts.baseball.mlb_local_backfill.date") as mock_date, \
+         patch("scripts.baseball.mlb_local_backfill.backfill_year") as mock_backfill:
         mock_date.today.return_value.year = 2030
         result = run_backfill(2099, 2099, force=False)
     mock_backfill.assert_not_called()
@@ -77,7 +77,7 @@ def test_collect_games_from_db_never_touches_network():
         innings_json=json.dumps([{"num": i + 1, "home_runs": h, "away_runs": a} for i, (h, a) in enumerate([(3, 1), (0, 0), (0, 0), (0, 0), (0, 0)])]),
         fetched_at=datetime.now(timezone.utc),
     )
-    with patch("scripts.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range") as mock_fetch:
+    with patch("scripts.baseball.mlb_comeback_analysis.mlb_stats_scraper.get_games_in_range") as mock_fetch:
         games = collect_games_from_db("2099-01-01", "2099-12-31")
         mock_fetch.assert_not_called()
     assert len(games) == 1
@@ -106,7 +106,7 @@ def test_enrich_game_datetimes_only_updates_existing_rows_missing_it():
         "date": "2099-06-01", "home_team": "A", "away_team": "B", "home_won": True,
         "game_pk": 1, "game_datetime_utc": "2099-06-01T19:00:00Z",
     }]
-    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
+    with patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
         result = enrich_game_datetimes(2099, 2099)
     assert result["rows_updated"] == 1
     row = MlbGameHistory.get(MlbGameHistory.game_pk == 1)
@@ -123,7 +123,7 @@ def test_enrich_game_datetimes_never_overwrites_already_set_value():
         "date": "2099-06-01", "home_team": "A", "away_team": "B", "home_won": True,
         "game_pk": 1, "game_datetime_utc": "2099-06-01T20:00:00Z",  # distinto, no debe pisar
     }]
-    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
+    with patch("scripts.baseball.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
         result = enrich_game_datetimes(2099, 2099)
     assert result["rows_updated"] == 0
     row = MlbGameHistory.get(MlbGameHistory.game_pk == 1)
