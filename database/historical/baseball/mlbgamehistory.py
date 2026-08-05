@@ -1,4 +1,4 @@
-from peewee import BooleanField, CharField, DateTimeField, IntegerField, Model, TextField
+from peewee import BooleanField, CharField, DateTimeField, FloatField, IntegerField, Model, TextField
 
 from database.db import db_historical
 
@@ -48,3 +48,13 @@ class MlbGameHistory(HistoricalBaseModel):
     # `outer_apis/scrapers/baseball/mlb_stats_scraper.py::get_linescore`.
     innings_json = TextField(null=True)
     fetched_at = DateTimeField()
+    # 2026-08-05, pedido explícito del usuario ("adapta el backfill de
+    # clima de tenis para los otros deportes") -- a diferencia de
+    # tenis (sin hora real de inicio, snapshot aproximado a las 14:00
+    # UTC), MLB SÍ trae hora real del primer lanzamiento (`gameDate` de
+    # statsapi.mlb.com) -- guardada tal cual, sin aproximar nada.
+    game_datetime_utc = CharField(null=True)  # ISO 8601 real, ej. "2024-06-01T19:07:00Z"
+    temperature_c = FloatField(null=True)
+    humidity_pct = FloatField(null=True)
+    wind_kmh = FloatField(null=True)
+    weather_fetched_at = DateTimeField(null=True)

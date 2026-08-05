@@ -286,3 +286,12 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "tennis_match_history", "humidity_pct", "REAL")
     _add_column_if_missing(db_historical, "tennis_match_history", "wind_kmh", "REAL")
     _add_column_if_missing(db_historical, "tennis_match_history", "weather_fetched_at", "DATETIME")
+    # 2026-08-05, pedido explícito del usuario: clima real para MLB
+    # (game_datetime_utc real de la fuente, no aproximado como tenis) --
+    # agregado DESPUÉS de que mlb_game_history ya existiera con 26,882
+    # filas reales (backfill 2015-2026 corrido antes de este cambio).
+    _add_column_if_missing(db_historical, "mlb_game_history", "game_datetime_utc", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "mlb_game_history", "temperature_c", "REAL")
+    _add_column_if_missing(db_historical, "mlb_game_history", "humidity_pct", "REAL")
+    _add_column_if_missing(db_historical, "mlb_game_history", "wind_kmh", "REAL")
+    _add_column_if_missing(db_historical, "mlb_game_history", "weather_fetched_at", "DATETIME")

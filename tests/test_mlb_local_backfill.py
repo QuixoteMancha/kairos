@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from database.db import init_db_historical
 from database.historical.baseball import MlbGameHistory
-from scripts.mlb_local_backfill import backfill_year, run_backfill, _year_has_cache
+from scripts.mlb_local_backfill import backfill_year, run_backfill, _year_has_cache, enrich_game_datetimes
 from scripts.mlb_comeback_analysis import collect_games_from_db
 
 
@@ -92,3 +92,39 @@ def test_collect_games_from_db_excludes_incomplete_linescore():
     )
     games = collect_games_from_db("2099-01-01", "2099-12-31")
     assert games == []
+
+
+# ── enrich_game_datetimes (2026-08-05, clima real para MLB) ──
+
+def test_enrich_game_datetimes_only_updates_existing_rows_missing_it():
+    MlbGameHistory.create(
+        game_pk=1, date="2099-06-01", home_team="A", away_team="B", home_won=True,
+        home_runs_final=3, away_runs_final=1, innings_json=None, game_datetime_utc=None,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    fake_games = [{
+        "date": "2099-06-01", "home_team": "A", "away_team": "B", "home_won": True,
+        "game_pk": 1, "game_datetime_utc": "2099-06-01T19:00:00Z",
+    }]
+    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
+        result = enrich_game_datetimes(2099, 2099)
+    assert result["rows_updated"] == 1
+    row = MlbGameHistory.get(MlbGameHistory.game_pk == 1)
+    assert row.game_datetime_utc == "2099-06-01T19:00:00Z"
+
+
+def test_enrich_game_datetimes_never_overwrites_already_set_value():
+    MlbGameHistory.create(
+        game_pk=1, date="2099-06-01", home_team="A", away_team="B", home_won=True,
+        home_runs_final=3, away_runs_final=1, innings_json=None,
+        game_datetime_utc="2099-06-01T19:00:00Z", fetched_at=datetime.now(timezone.utc),
+    )
+    fake_games = [{
+        "date": "2099-06-01", "home_team": "A", "away_team": "B", "home_won": True,
+        "game_pk": 1, "game_datetime_utc": "2099-06-01T20:00:00Z",  # distinto, no debe pisar
+    }]
+    with patch("scripts.mlb_local_backfill.mlb_stats_scraper.get_games_in_range", return_value=fake_games):
+        result = enrich_game_datetimes(2099, 2099)
+    assert result["rows_updated"] == 0
+    row = MlbGameHistory.get(MlbGameHistory.game_pk == 1)
+    assert row.game_datetime_utc == "2099-06-01T19:00:00Z"

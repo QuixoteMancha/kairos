@@ -58,6 +58,7 @@ def backfill_year(year: int) -> dict[str, int]:
             "home_runs_final": (linescore or {}).get("home_runs_total"),
             "away_runs_final": (linescore or {}).get("away_runs_total"),
             "innings_json": json.dumps(linescore["innings"]) if linescore else None,
+            "game_datetime_utc": g.get("game_datetime_utc"),
             "fetched_at": datetime.now(timezone.utc),
         })
 
@@ -68,6 +69,36 @@ def backfill_year(year: int) -> dict[str, int]:
                 MlbGameHistory.insert_many(rows[i:i + 400]).on_conflict_ignore().execute()
 
     return {"year": year, "games_saved": len(rows)}
+
+
+def enrich_game_datetimes(start_year: int = 2015, end_year: int = 2026) -> dict[str, int]:
+    """Enriquecimiento LIVIANO -- 2026-08-05, pedido explícito del
+    usuario ("adapta el backfill de clima de tenis para MLB"): las
+    filas ya backfilleadas (26,882 partidos, 2015-2026) no tienen
+    `game_datetime_utc` porque ese campo se agregó DESPUÉS del backfill
+    original. En vez de re-correr `run_backfill` completo (que
+    re-pediría el linescore pesado de cada partido otra vez, sin
+    necesidad -- las carreras/entradas ya están bien), esto solo vuelve
+    a pedir el CALENDARIO (1 request por año, barato) y actualiza
+    `game_datetime_utc` por `game_pk` en las filas que ya existen."""
+    init_db_historical()
+    updated = 0
+    for year in range(start_year, end_year + 1):
+        start = f"{year}{_REGULAR_SEASON_START}"
+        end = f"{year}{_REGULAR_SEASON_END}"
+        games = mlb_stats_scraper.get_games_in_range(start, end)
+        with MlbGameHistory._meta.database.atomic():
+            for g in games:
+                game_pk = g.get("game_pk")
+                dt = g.get("game_datetime_utc")
+                if game_pk is None or not dt:
+                    continue
+                updated += (
+                    MlbGameHistory.update(game_datetime_utc=dt)
+                    .where((MlbGameHistory.game_pk == game_pk) & (MlbGameHistory.game_datetime_utc.is_null()))
+                    .execute()
+                )
+    return {"rows_updated": updated}
 
 
 def run_backfill(start_year: int = 2015, end_year: int = 2026, force: bool = False) -> dict[str, int]:
@@ -87,6 +118,11 @@ def run_backfill(start_year: int = 2015, end_year: int = 2026, force: bool = Fal
 
 
 if __name__ == "__main__":
-    start = int(sys.argv[1]) if len(sys.argv) > 1 else 2015
-    end = int(sys.argv[2]) if len(sys.argv) > 2 else 2026
-    print(run_backfill(start, end))
+    if len(sys.argv) > 1 and sys.argv[1] == "enrich_datetimes":
+        start = int(sys.argv[2]) if len(sys.argv) > 2 else 2015
+        end = int(sys.argv[3]) if len(sys.argv) > 3 else 2026
+        print(enrich_game_datetimes(start, end))
+    else:
+        start = int(sys.argv[1]) if len(sys.argv) > 1 else 2015
+        end = int(sys.argv[2]) if len(sys.argv) > 2 else 2026
+        print(run_backfill(start, end))

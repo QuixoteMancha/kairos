@@ -19,9 +19,15 @@ def get_games_in_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
         start_date, end_date: "YYYY-MM-DD".
 
     Returns:
-        List of {"date", "home_team", "away_team", "home_won": bool}.
-        Fail-closed: [] on any failure; a game not yet Final is skipped
-        (never guesses an in-progress/scheduled game's outcome).
+        List of {"date", "home_team", "away_team", "home_won": bool,
+        "game_pk", "game_datetime_utc"}. `game_datetime_utc` (2026-08-05,
+        pedido explícito del usuario -- clima para MLB) es el `gameDate`
+        REAL de la fuente (primer lanzamiento, UTC, ISO 8601) -- a
+        diferencia de tenis (que nunca tuvo hora real de inicio y usa
+        un snapshot fijo aproximado), acá SÍ hay hora exacta real, no
+        hace falta aproximar nada. Fail-closed: [] on any failure; a
+        game not yet Final is skipped (never guesses an in-progress/
+        scheduled game's outcome).
     """
     try:
         resp = requests.get(
@@ -68,6 +74,7 @@ def get_games_in_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
                 "away_team": away_name,
                 "home_won": bool(home_won),
                 "game_pk": game.get("gamePk"),
+                "game_datetime_utc": game.get("gameDate"),
             })
     return out
 
