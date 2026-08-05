@@ -56,20 +56,20 @@ _EVAL_START_YEAR = 2016
 _MIN_RANK_GAP = 20  # mismo umbral que ATP, pedido explícito: misma estrategia
 _BEST_OF = 3  # regla real WTA, nunca best-of-5
 
-# "250 en adelante" del lado WTA -- 2026-08-05, pedido explícito del
-# usuario ("me faltó agregar que solo tomen matches de torneos 250 para
-# arriba en nivel [también para WTA]"), equivalente real de
-# `TOUR_LEVELS_250_PLUS` de ATP (250/500/M/G/F). WTA rebrandeó los
-# nombres de categoría en 2021 (International->WTA 250, Premier->WTA
-# 500, Premier 5/Premier Mandatory->WTA 1000) -- se incluyen AMBOS
-# juegos de nombres porque el catálogo de `WtaTournamentLevel` cubre
-# años de antes y después del rebrand. EXCLUIDOS (por debajo de 250):
-# "WTA 125"/"125K" (circuito de desarrollo) e "ITF" (regla explícita
-# del usuario). "Finals" (WTA Finals, fin de temporada) cuenta como
-# tour principal.
+# "125 en adelante" del lado WTA -- 2026-08-05, pedido explícito del
+# usuario ("incluyamos 125 para ambos circuitos"), ampliando el umbral
+# original ("250 para arriba", mismo día). WTA rebrandeó los nombres de
+# categoría en 2021 (International->WTA 250, Premier->WTA 500,
+# Premier 5/Premier Mandatory->WTA 1000) -- se incluyen AMBOS juegos de
+# nombres porque el catálogo de `WtaTournamentLevel` cubre años de
+# antes y después del rebrand. "WTA 125"/"125K" (circuito de
+# desarrollo, mismo tier con nombre distinto pre/post rebrand) AHORA
+# incluidos. Único excluido: "ITF" (por debajo de 125). "Finals" (WTA
+# Finals, fin de temporada) cuenta como tour principal.
 _WTA_MAIN_TOUR_LEVELS = frozenset({
     "Grand Slam", "WTA 1000", "WTA 500", "WTA 250",
     "Premier", "Premier 5", "Premier Mandatory", "International", "Finals",
+    "WTA 125", "125K",
 })
 
 
