@@ -75,6 +75,16 @@ _WTA_MAIN_TOUR_LEVELS = frozenset({
     "Premier", "Premier 5", "Premier Mandatory", "International", "Finals",
 })
 
+# 2026-08-05, pedido explícito del usuario ("mantengamos el 1% por
+# apuesta en la wta, pero ampliemos a 125k y otra prueba ampliando a
+# itf") -- umbrales alternativos para pruebas EXPLORATORIAS de scope,
+# sin tocar el default (`_WTA_MAIN_TOUR_LEVELS`, 250+, sigue siendo el
+# vigente/comiteado). "125K" es el nombre pre-rebrand de "WTA 125"
+# (mismo tier, distinto naming según el año -- se incluyen ambos, igual
+# que se hace arriba con Premier/WTA*).
+_WTA_LEVELS_125_PLUS = _WTA_MAIN_TOUR_LEVELS | {"WTA 125", "125K"}
+_WTA_LEVELS_ITF_PLUS = _WTA_LEVELS_125_PLUS | {"ITF"}
+
 
 # Alias reales conocidos donde el nombre de TennisExplorer difiere del
 # nombre oficial de la fuente WTA (`tournamentGroup.name`) -- 2026-08-05,
@@ -137,12 +147,17 @@ def _load_tournament_level_index() -> dict[tuple[int, str], str | None]:
     return index
 
 
-def _is_main_tour_level(tournament_raw: str | None, match_date: str, level_index: dict[tuple[int, str], str | None]) -> bool:
-    """True solo si el torneo resuelve a un nivel real >= WTA 250 (ver
-    `_WTA_MAIN_TOUR_LEVELS`). Fail-closed: cualquier torneo que no
-    matchee contra el catálogo oficial (nombre no encontrado para ese
-    año) queda EXCLUIDO -- nunca se asume que es main-tour por
-    default."""
+def _is_main_tour_level(
+    tournament_raw: str | None, match_date: str, level_index: dict[tuple[int, str], str | None],
+    allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS,
+) -> bool:
+    """True solo si el torneo resuelve a un nivel real dentro de
+    `allowed_levels` (default: `_WTA_MAIN_TOUR_LEVELS`, 250+ -- el
+    umbral vigente/comiteado; ver `_WTA_LEVELS_125_PLUS`/
+    `_WTA_LEVELS_ITF_PLUS` para pruebas exploratorias de scope más
+    amplio). Fail-closed: cualquier torneo que no matchee contra el
+    catálogo oficial (nombre no encontrado para ese año) queda
+    EXCLUIDO -- nunca se asume que es main-tour por default."""
     norm = _normalize_tournament_name(tournament_raw)
     if norm is None:
         return False
@@ -151,7 +166,7 @@ def _is_main_tour_level(tournament_raw: str | None, match_date: str, level_index
     except (ValueError, TypeError):
         return False
     level = level_index.get((year, norm))
-    return level in _WTA_MAIN_TOUR_LEVELS
+    return level in allowed_levels
 
 
 def _build_abbrev_to_full_name_index() -> dict[str, str | None]:
@@ -265,11 +280,14 @@ def _rank_at(name: str, date_iso: str, index: dict[str, list[tuple[str, int]]]) 
     return entries[i][1]
 
 
-def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Arma los casos evaluables de `TennisMatchHistory`, resolviendo
     ranking real point-in-time vía `WtaPlayerRankingHistory` y
     deduplicando partidos que aparecen 2 veces (una fila por
-    jugadora)."""
+    jugadora). `allowed_levels`: umbral de categoría de torneo (default
+    250+, el vigente/comiteado) -- ver `_WTA_LEVELS_125_PLUS`/
+    `_WTA_LEVELS_ITF_PLUS` para pruebas exploratorias, 2026-08-05,
+    pedido explícito del usuario."""
     init_db_historical()
     ranking_index = _load_ranking_index()
     abbrev_index = _build_abbrev_to_full_name_index()
@@ -311,7 +329,7 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         # de ATP. Fail-closed: torneo sin match real en el catálogo
         # oficial (`WtaTournamentLevel`) para ese año se EXCLUYE, nunca
         # se asume main-tour por default.
-        if not _is_main_tour_level(r.tournament, r.match_date, level_index):
+        if not _is_main_tour_level(r.tournament, r.match_date, level_index, allowed_levels=allowed_levels):
             skipped_below_250_level += 1
             continue
 
@@ -567,8 +585,11 @@ def _simulate_bet_after_set1_win(
     }
 
 
-def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0) -> dict[str, Any]:
-    raw_cases, meta1 = collect_wta_cases()
+def run_backtest(
+    initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0,
+    allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS,
+) -> dict[str, Any]:
+    raw_cases, meta1 = collect_wta_cases(allowed_levels=allowed_levels)
     all_cases, meta2 = _build_surface_winrate_tracker(raw_cases)
 
     filtered_cases = [
