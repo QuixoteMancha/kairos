@@ -6,3 +6,7 @@ python-dotenv>=1.2
 flask>=3.0
 cryptography>=43.0
 websockets>=13.0
+# 2026-08-05, pedido explícito del usuario -- parseo de .xlsx real de
+# SportsbookReviewsOnline (odds históricas pre-partido MLB), ver
+# outer_apis/scrapers/baseball/sportsbookreviewsonline_scraper.py.
+openpyxl>=3.1

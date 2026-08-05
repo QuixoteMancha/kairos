@@ -238,7 +238,9 @@ def init_db_historical() -> None:
     recrea. Las tablas de tenis/team_sports nuevas se crean vacías la
     primera vez que corre esto."""
     from database.historical.market_data import KalshiMarketTick, CryptoPriceSnapshot
-    from database.historical.team_sports import TeamRating, TeamMatchHistory, TeamHeadToHead
+    from database.historical.team_sports import (
+        TeamRating, TeamMatchHistory, TeamHeadToHead, MlbScannedMatch, MlbMatchProbabilityTick,
+    )
     from database.historical.tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHistoricalOdds, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
@@ -247,7 +249,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
     )
-    from database.historical.baseball import MlbGameHistory
+    from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
@@ -259,6 +261,13 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
         TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
+        # 2026-08-05, pedido explícito del usuario -- tracking de scan +
+        # ticks tick-by-tick para MLB, mismo patrón que tenis (tablas
+        # nuevas, no requieren ALTER TABLE).
+        MlbScannedMatch, MlbMatchProbabilityTick,
+        # 2026-08-05, pedido explícito del usuario -- odds pre-partido
+        # reales (SportsbookReviewsOnline), tabla nueva.
+        MlbHistoricalOdds,
     ], safe=True)
 
     # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):

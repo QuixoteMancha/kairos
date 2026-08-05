@@ -6,5 +6,8 @@ explícito del usuario. `MlbGameHistory` es análogo a `TmlDatabaseMatch`
 rodante de 45 días para el Elo en vivo, no un histórico."""
 
 from database.historical.baseball.mlbgamehistory import MlbGameHistory
+# 2026-08-05, pedido explícito del usuario -- odds pre-partido reales
+# (SportsbookReviewsOnline), ver mlbhistoricalodds.py.
+from database.historical.baseball.mlbhistoricalodds import MlbHistoricalOdds
 
-__all__ = ["MlbGameHistory"]
+__all__ = ["MlbGameHistory", "MlbHistoricalOdds"]

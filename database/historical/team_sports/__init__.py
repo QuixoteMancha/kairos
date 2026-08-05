@@ -35,8 +35,14 @@ from database.historical.team_sports.teamrating import TeamRating
 from database.historical.team_sports.teammatchhistory import TeamMatchHistory
 from database.historical.team_sports.teamheadtohead import TeamHeadToHead
 from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating
+# 2026-08-05, pedido explícito del usuario -- captura tick-by-tick real
+# de probabilidades MLB, mismo patrón que tenis (ver
+# `mlbmatchtracking.py` para el razonamiento completo).
+from database.historical.team_sports.mlbscannedmatch import MlbScannedMatch
+from database.historical.team_sports.mlbmatchprobabilitytick import MlbMatchProbabilityTick
 
 __all__ = [
     "TeamRating", "TeamMatchHistory", "TeamHeadToHead",
     "compute_and_persist_elo", "find_team_rating",
+    "MlbScannedMatch", "MlbMatchProbabilityTick",
 ]

@@ -221,7 +221,25 @@ def get_matches_range_from_db(start_year: int, end_year: int,
     result: list[dict[str, Any]] = []
     missing_years: list[int] = []
     for year in range(start_year, end_year + 1):
-        query = TmlDatabaseMatch.select().where(TmlDatabaseMatch.year == year)
+        # 2026-08-05, bug real encontrado y corregido: SIN order_by()
+        # explícito, SQLite no garantiza el orden físico de lectura --
+        # `save_matches_to_db` hace delete()+insert_many() en cada
+        # backfill, lo que reasigna rowids nuevos aunque el CONTENIDO
+        # de las filas sea idéntico. Río abajo, los backtests agrupan
+        # partidos por día y aplican el cupo de capital del 50% en el
+        # orden en que llegan -- un simple refresh de backfill (incluso
+        # uno que no trae partidos nuevos) podía cambiar qué partidos
+        # entran al cupo diario y cuáles quedan afuera, moviendo el
+        # capital final compuesto sobre miles de operaciones sin que
+        # cambiara ningún dato real. Verificado en vivo: 2 corridas
+        # idénticas post-refresh daban el mismo número, pero el número
+        # PRE-refresh vs POST-refresh (mismas 137 filas de 2026)
+        # diferían -- la causa era el reordenamiento físico, no un dato
+        # nuevo. `id` como desempate estable hace el orden 100%
+        # reproducible sin importar el historial de inserciones.
+        query = TmlDatabaseMatch.select().where(TmlDatabaseMatch.year == year).order_by(
+            TmlDatabaseMatch.date, TmlDatabaseMatch.id,
+        )
         rows = list(query)
         if not rows:
             missing_years.append(year)
