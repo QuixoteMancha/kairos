@@ -77,3 +77,45 @@ def test_run_backtest_returns_expected_shape():
         result = run_backtest()
     assert "combined" in result
     assert result["combined"]["n_trades"] == 0
+
+
+def _fake_atp_case():
+    return {
+        "date": "2016-01-01", "favorite_rank": 5, "underdog_rank": 300, "hit": True,
+        "rank_gap": 295, "favorite_surface_winrate": 0.8, "underdog_surface_winrate": 0.2,
+        "surface": "Hard", "best_of": 3, "set1_favorite_win": True, "set2_favorite_win": True,
+    }
+
+
+def test_build_combined_cases_defaults_atp_to_strategy_1():
+    # 2026-08-05, pedido explícito del usuario: "combinemos ambas
+    # estrategias es decir, simple pre-match con los filtros para ambos
+    # circuitos" -- el default de ATP pasó de "8" a "1".
+    with patch(
+        "scripts.tennis.combined_atp_wta_backtest._atp_surface_tracker",
+        return_value=([_fake_atp_case()], {}),
+    ), patch(
+        "scripts.tennis.combined_atp_wta_backtest.collect_wta_cases", return_value=([], {}),
+    ), patch(
+        "scripts.tennis.combined_atp_wta_backtest._wta_surface_tracker", return_value=([], {}),
+    ):
+        combined, meta = _build_combined_cases()
+    assert meta["atp_strategy_used"] == "1"
+    assert combined[0]["tour"] == "ATP"
+    assert combined[0]["strategy"] == "1"
+    assert "price_after_set1_win" not in combined[0]  # variante 1 no necesita precios post-set1
+
+
+def test_build_combined_cases_can_still_use_strategy_8():
+    with patch(
+        "scripts.tennis.combined_atp_wta_backtest._atp_surface_tracker",
+        return_value=([_fake_atp_case()], {}),
+    ), patch(
+        "scripts.tennis.combined_atp_wta_backtest.collect_wta_cases", return_value=([], {}),
+    ), patch(
+        "scripts.tennis.combined_atp_wta_backtest._wta_surface_tracker", return_value=([], {}),
+    ):
+        combined, meta = _build_combined_cases(atp_strategy="8")
+    assert meta["atp_strategy_used"] == "8"
+    assert combined[0]["strategy"] == "8"
+    assert "price_after_set1_win" in combined[0]

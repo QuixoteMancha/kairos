@@ -1,17 +1,21 @@
 """Backtest COMBINADO ATP+WTA compartiendo un único pool de capital --
-2026-08-05, pedido explícito del usuario: "Ahora una corrida combinada
-atp + wta con la estrategia seleccionada para atp + la estrategia 1
-para wta".
+2026-08-05, pedido explícito del usuario: primero "Ahora una corrida
+combinada atp + wta con la estrategia seleccionada para atp + la
+estrategia 1 para wta" (ATP=variante 8, WTA=variante 1), luego
+corregido el mismo día: "En atp habíamos considerado la estrategia 1
+con los filtros. Combinemos ambas estrategias es decir, simple
+pre-match con los filtros para ambos circuitos" -- default ACTUAL:
+AMBOS circuitos en variante 1 (simple pre-match), cada uno con SU
+propio filtro ya comiteado. `atp_strategy` sigue aceptando "8" para
+volver a comparar contra la variante con refuerzo/retiro.
 
 ESTRATEGIAS APLICADAS (por circuito, sobre su propio pool filtrado ya
 comiteado):
-  - ATP: variante 8 ("8_exit_double_down_leg_if_favorite_loses_set2"),
-    documentada como "la elegida como mejor" en
-    `favorite_by_historical_rank_backtest.py` -- pre-match + refuerzo
-    si el favorito gana el set 1, pero si LUEGO pierde el set 2 se
-    retira SOLO la pata de refuerzo (revaluada a `price_at_1_1`).
-  - WTA: variante 1 ("1_simple_bet_favorite") -- apostar al favorito
-    pre-partido y sostener hasta el resultado final, sin refuerzo/retiro.
+  - ATP (default): variante 1 ("1_simple_bet_favorite") -- apostar al
+    favorito pre-partido y sostener hasta el resultado final, mismo
+    filtro gap>=20+superficie ya comiteado.
+  - WTA: variante 1 ("1_simple_bet_favorite") -- mismo criterio,
+    filtro gap>=30+superficie+torneo 250+ ya comiteado.
 
 POOLS DE ORIGEN (sin cambios, mismos filtros ya comiteados):
   - ATP: `favorite_surface_winrate_filter_backtest.py::_build_surface_winrate_tracker`,
@@ -50,11 +54,19 @@ from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
 )
 
 
-def _build_combined_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _build_combined_cases(atp_strategy: str = "1") -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Arma el pool combinado: casos ATP (gap>=20+superficie) tageados
-    `strategy="8"`, casos WTA (gap>=30+superficie) tageados
-    `strategy="1"` -- cada uno con SU precio real (motor calibrado por
-    `tour`), listos para simulación conjunta."""
+    `strategy=atp_strategy`, casos WTA (gap>=30+superficie+torneo 250+)
+    SIEMPRE tageados `strategy="1"` (pedido explícito del usuario) --
+    cada uno con SU precio real (motor calibrado por `tour`), listos
+    para simulación conjunta.
+
+    `atp_strategy` (2026-08-05, pedido explícito del usuario --
+    "combinemos ambas estrategias es decir, simple pre-match con los
+    filtros para ambos circuitos"): default AHORA es "1" (simple
+    pre-match, mismo criterio que WTA) -- antes era "8" (la elegida
+    original de ATP, con refuerzo/retiro condicional al set 2), sigue
+    disponible pasando `atp_strategy="8"` explícitamente para comparar."""
     atp_all, atp_meta = _atp_surface_tracker()
     atp_filtered = [
         c for c in atp_all
@@ -75,12 +87,19 @@ def _build_combined_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if best_of not in (3, 5):
             skipped_atp_invalid_best_of += 1
             continue
+        if atp_strategy == "1":
+            price_pre, _, _ = _real_price_legs(c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"), tour="ATP")
+            combined.append({
+                **c, "tour": "ATP", "strategy": "1", "best_of": best_of,
+                "price_pre_match": price_pre,
+            })
+            continue
         price_pre, price_win, price_loss = _real_price_legs(
             c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"), tour="ATP",
         )
         price_1_1 = _price_at_1_1(c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"), tour="ATP")
         combined.append({
-            **c, "tour": "ATP", "strategy": "8", "best_of": best_of,
+            **c, "tour": "ATP", "strategy": atp_strategy, "best_of": best_of,
             "price_pre_match": price_pre, "price_after_set1_win": price_win,
             "price_after_set1_loss": price_loss, "price_at_1_1": price_1_1,
         })
@@ -93,6 +112,7 @@ def _build_combined_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         })
 
     return combined, {
+        "atp_strategy_used": atp_strategy,
         "atp_filtered_cases_n": len(atp_filtered), "wta_filtered_cases_n": len(wta_filtered),
         "skipped_atp_invalid_best_of": skipped_atp_invalid_best_of,
         **{f"atp_{k}": v for k, v in atp_meta.items()},
@@ -240,14 +260,16 @@ def simulate_combined(
     }
 
 
-def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0) -> dict[str, Any]:
-    combined_cases, meta = _build_combined_cases()
+def run_backtest(
+    initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0, atp_strategy: str = "1",
+) -> dict[str, Any]:
+    combined_cases, meta = _build_combined_cases(atp_strategy=atp_strategy)
     combined_prioritized = sorted(combined_cases, key=lambda c: (c["date"], c["favorite_rank"]))
     result = simulate_combined(combined_prioritized, initial_capital=initial_capital, max_stake_usd=max_stake_usd)
     return {
         **meta, "combined": result,
         "caveat": (
-            "Un solo bankroll compartido entre ATP (variante 8, la elegida) "
+            f"Un solo bankroll compartido entre ATP (variante {atp_strategy}) "
             "y WTA (variante 1, simple) -- mismo cupo diario de exposición "
             "(50%) y mismo stake (1%) que cada backtest individual, pero "
             "ahora compitiendo por el MISMO capital y el MISMO cupo (más "
