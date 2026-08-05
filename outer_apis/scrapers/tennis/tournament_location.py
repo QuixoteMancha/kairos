@@ -5,9 +5,43 @@ deliberadamente incompleta (se extiende cuando aparece un torneo nuevo
 sin ubicación, nunca se adivina por nombre/país parecido).
 
 Fail-closed: un torneo no reconocido devuelve None -- nunca se inventa
-una ubicación aproximada."""
+una ubicación aproximada.
+
+NORMALIZACIÓN (2026-08-04, pedido explícito del usuario -- priorizar el
+gap de clima, 90% de `TennisMatchHistory` sin clima, investigar fuentes
+antes de re-scrapear): el 85% del gap NO era falta de dato real, era
+que el nombre de torneo llega con sufijos de tour/nivel
+("Rome WTA", "Cincinnati WTA", "Prostejov challenger") o con acentos
+Unicode ("Kitzbühel" vs la clave ASCII "kitzbuhel") que rompían el
+match EXACTO contra la tabla, aunque la ciudad sede YA estaba
+correctamente en la tabla bajo otro nombre. `get_location` ahora
+normaliza (quita sufijos conocidos de tour/nivel, quita acentos) ANTES
+de buscar -- esto NO es adivinar una ubicación nueva, es canonicalizar
+el string de un torneo que YA tiene una entrada real y verificada."""
 
 from __future__ import annotations
+
+import unicodedata
+
+# Sufijos de tour/nivel que TennisExplorer agrega al nombre real del
+# torneo (no son parte del nombre de la sede) -- se quitan ANTES de
+# buscar en la tabla, nunca se usan para adivinar una ciudad nueva.
+_SUFFIXES_TO_STRIP = (
+    " wta", " atp", " challenger", " itf", " - men", " - women", " men", " women",
+)
+
+
+def _normalize(name: str) -> str:
+    n = name.strip().lower()
+    n = unicodedata.normalize("NFKD", n).encode("ascii", "ignore").decode("ascii")
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _SUFFIXES_TO_STRIP:
+            if n.endswith(suffix):
+                n = n[: -len(suffix)].strip()
+                changed = True
+    return n
 
 # (lat, lon) de la sede real de cada torneo -- misma clave (nombre de
 # torneo tal como aparece en rules_secondary de Kalshi / recent-results
@@ -74,12 +108,38 @@ _LOCATION_BY_TOURNAMENT: dict[str, tuple[float, float]] = {
     "athens": (37.9838, 23.7275),
     "stuttgart": (48.7758, 9.1829),
     "nottingham": (52.9548, -1.1581),
+    # Agregados 2026-08-04 (pedido explícito del usuario, investigación
+    # del gap de clima 90% -- ciudades sede real de torneos ATP/WTA/
+    # challenger confirmadas, top ofensores por volumen en
+    # TennisMatchHistory sin ubicación reconocida):
+    "brisbane": (-27.4698, 153.0251),
+    "adelaide": (-34.9285, 138.6007),
+    "charleston": (32.7765, -79.9311),
+    "auckland": (-36.8485, 174.7633),
+    "linz": (48.3069, 14.2858),
+    "wuhan": (30.5928, 114.3055),
+    "strasbourg": (48.5734, 7.7521),
+    "montreal": (45.5019, -73.5674),
+    "toronto": (43.6532, -79.3832),
+    "buenos aires": (-34.6037, -58.3816),
+    "kitzbuhel": (47.4467, 12.3925),  # ya existía como "kitzbuehel" fonético; normalize() ahora también matchea el acento real "Kitzbühel"
+    "bratislava": (48.1486, 17.1077),
+    "ostrava": (49.8209, 18.2625),
+    "abu dhabi": (24.4539, 54.3773),
+    "hertogenbosch": (51.6978, 5.3037),  # alias sin "s-" -- misma sede que "s-hertogenbosch"
+    # Eventos con sede fija conocida pero nombre de sponsor variable --
+    # alias explícito a la ciudad real, NO una adivinanza (el evento es
+    # siempre en la misma sede año a año).
+    "livesport prague open": (50.0755, 14.4378),
 }
 
 
 def get_location(tournament_name: str | None) -> tuple[float, float] | None:
     """(lat, lon) para un nombre de torneo, o None si no está en la
-    tabla estática -- nunca se adivina."""
+    tabla estática -- nunca se adivina. Normaliza sufijos de tour/nivel
+    y acentos Unicode antes de buscar (ver `_normalize`) -- un torneo
+    con sede real ya conocida no debe fallar solo por venir con
+    "WTA"/"challenger" pegado o con un acento distinto al de la clave."""
     if not tournament_name:
         return None
-    return _LOCATION_BY_TOURNAMENT.get(tournament_name.strip().lower())
+    return _LOCATION_BY_TOURNAMENT.get(_normalize(tournament_name))
