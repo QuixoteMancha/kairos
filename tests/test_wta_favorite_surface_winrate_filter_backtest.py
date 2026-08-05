@@ -7,16 +7,18 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from database.db import init_db_historical
-from database.historical.tennis import TennisMatchHistory
+from database.historical.tennis import TennisMatchHistory, WtaTournamentLevel
 from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
     _rank_at, _build_surface_winrate_tracker, collect_wta_cases, run_backtest, _MIN_RANK_GAP, _BEST_OF,
     _build_abbrev_to_full_name_index, _resolve_abbreviated_name, _self_won_set1, _simulate_bet_after_set1_win,
+    _normalize_tournament_name, _is_main_tour_level, _WTA_MAIN_TOUR_LEVELS,
 )
 
 
 def setup_function(_fn):
     init_db_historical()
     TennisMatchHistory.delete().execute()
+    WtaTournamentLevel.delete().execute()
 
 
 def _real_row(player, opponent, date, result, surface="Hard", score="6-4, 6-3"):
@@ -75,6 +77,8 @@ def test_collect_wta_cases_excludes_players_outside_roster():
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
         cases, meta = collect_wta_cases()
     assert cases == []
@@ -89,6 +93,8 @@ def test_collect_wta_cases_dedupes_same_match_both_perspectives():
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
         cases, meta = collect_wta_cases()
     assert len(cases) == 1
@@ -139,6 +145,8 @@ def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
         cases, meta = collect_wta_cases()
     assert cases[0]["favorite_won_set1"] is True
@@ -153,10 +161,87 @@ def test_collect_wta_cases_favorite_is_opponent_flips_set1_result():
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
         cases, meta = collect_wta_cases()
     assert cases[0]["favorite_name"] == "Ana Ivanovic"
     assert cases[0]["favorite_won_set1"] is False
+
+
+def test_normalize_tournament_name_strips_tour_suffix_and_edition_number():
+    assert _normalize_tournament_name("Rome 2 WTA") == "ROME"
+    assert _normalize_tournament_name("Madrid WTA") == "MADRID"
+    assert _normalize_tournament_name("Indian Wells") == "INDIAN WELLS"
+    assert _normalize_tournament_name("Calvi ITF") == "CALVI"
+
+
+def test_normalize_tournament_name_applies_known_alias():
+    # 2026-08-05, bug real -- TennisExplorer dice "French Open", la API
+    # oficial WTA usa "ROLAND GARROS" para el mismo evento.
+    assert _normalize_tournament_name("French Open") == "ROLAND GARROS"
+
+
+def test_normalize_tournament_name_fail_closed_on_empty():
+    assert _normalize_tournament_name(None) is None
+    assert _normalize_tournament_name("WTA 2") is None  # solo sufijo+número, nada real queda
+
+
+def test_load_tournament_level_index_never_downgrades_on_post_normalization_collision():
+    # 2026-08-05, bug real -- "MADRID" (Premier Mandatory) y "MADRID 2
+    # ITF" normalizan AMBOS a "MADRID" (se quitan dígitos/sufijos), pero
+    # son filas reales distintas en la tabla (no colisionan ahí). El
+    # índice point-in-time no debe dejar que la ITF pise al main-tour.
+    from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import _load_tournament_level_index
+    from datetime import datetime, timezone
+    WtaTournamentLevel.create(year=2016, tournament_name="MADRID", level="Premier Mandatory", fetched_at=datetime.now(timezone.utc))
+    WtaTournamentLevel.create(year=2016, tournament_name="MADRID 2 ITF", level="ITF", fetched_at=datetime.now(timezone.utc))
+    index = _load_tournament_level_index()
+    assert index[(2016, "MADRID")] == "Premier Mandatory"
+
+
+def test_is_main_tour_level_true_for_main_tour_levels():
+    for level in _WTA_MAIN_TOUR_LEVELS:
+        index = {(2016, "MADRID"): level}
+        assert _is_main_tour_level("Madrid WTA", "2016-05-01", index) is True
+
+
+def test_is_main_tour_level_false_for_below_250():
+    for level in ("WTA 125", "125K", "ITF", None):
+        index = {(2016, "MAKARSKA"): level}
+        assert _is_main_tour_level("Makarska", "2016-06-01", index) is False
+
+
+def test_is_main_tour_level_fail_closed_when_not_in_catalog():
+    # el torneo no existe en el catálogo real de ese año -- nunca se
+    # asume main-tour por default.
+    assert _is_main_tour_level("Unknown Event", "2016-06-01", {}) is False
+
+
+def test_collect_wta_cases_excludes_below_250_level_tournament():
+    ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
+    from datetime import datetime, timezone
+    TennisMatchHistory.create(
+        player_name="Ana Ivanovic", opponent_name="Kvitova P.", match_date="2016-01-01", result="W",
+        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Makarska",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    TennisMatchHistory.create(
+        player_name="Petra Kvitova", opponent_name="Someone X.", match_date="2015-01-01", result="L",
+        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Someplace",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    level_index = {(2016, "MAKARSKA"): "WTA 125"}
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
+        return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_tournament_level_index",
+        return_value=level_index,
+    ):
+        cases, meta = collect_wta_cases()
+    assert cases == []
+    assert meta["skipped_below_250_level"] == 1
 
 
 def test_simulate_bet_after_set1_win_only_includes_qualifying_cases():

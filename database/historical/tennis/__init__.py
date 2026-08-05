@@ -28,6 +28,9 @@ from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
 # 2026-08-05, pedido explícito del usuario -- ranking real semanal WTA
 # (equivalente al de TML-Database para ATP), ver wtaplayerranking.py.
 from database.historical.tennis.wtaplayerranking import WtaPlayerRankingHistory
+# 2026-08-05, pedido explícito del usuario -- categoría real de torneo
+# (250/500/1000/Slam vs ITF/125), ver wtatournamentlevel.py.
+from database.historical.tennis.wtatournamentlevel import WtaTournamentLevel
 from database.historical.tennis.tournamentlocationcache import TournamentLocationCache
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
@@ -65,7 +68,7 @@ from database.historical.tennis.writer import (
 
 __all__ = [
     "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHistoricalOdds", "TennisHeadToHead",
-    "TmlDatabaseMatch", "TournamentLocationCache", "WtaPlayerRankingHistory",
+    "TmlDatabaseMatch", "TournamentLocationCache", "WtaPlayerRankingHistory", "WtaTournamentLevel",
     "TennisSurfaceMatchHistory", "TennisAbstractElo", "TennisAbstractYelo",
     "TennisAbstractCareerSplit", "TennisAbstractH2H",
     "save_rankings_snapshot", "save_serve_calibration_snapshot",

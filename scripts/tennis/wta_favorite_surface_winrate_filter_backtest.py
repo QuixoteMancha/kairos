@@ -46,7 +46,7 @@ from bisect import bisect_right
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory
+from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory, WtaTournamentLevel
 from outer_apis.kalshi.fees import leg_fee_fraction
 from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob, p_serve_for_rank, _p_win_game, _p_win_set
 from scripts.tennis.favorite_by_historical_rank_backtest import _p_win_match_given_set_score
@@ -55,6 +55,100 @@ from scripts.reports import risk_metrics
 _EVAL_START_YEAR = 2016
 _MIN_RANK_GAP = 20  # mismo umbral que ATP, pedido explícito: misma estrategia
 _BEST_OF = 3  # regla real WTA, nunca best-of-5
+
+# "250 en adelante" del lado WTA -- 2026-08-05, pedido explícito del
+# usuario ("me faltó agregar que solo tomen matches de torneos 250 para
+# arriba en nivel [también para WTA]"), equivalente real de
+# `TOUR_LEVELS_250_PLUS` de ATP (250/500/M/G/F). WTA rebrandeó los
+# nombres de categoría en 2021 (International->WTA 250, Premier->WTA
+# 500, Premier 5/Premier Mandatory->WTA 1000) -- se incluyen AMBOS
+# juegos de nombres porque el catálogo de `WtaTournamentLevel` cubre
+# años de antes y después del rebrand. EXCLUIDOS (por debajo de 250):
+# "WTA 125"/"125K" (circuito de desarrollo) e "ITF" (regla explícita
+# del usuario). "Finals" (WTA Finals, fin de temporada) cuenta como
+# tour principal.
+_WTA_MAIN_TOUR_LEVELS = frozenset({
+    "Grand Slam", "WTA 1000", "WTA 500", "WTA 250",
+    "Premier", "Premier 5", "Premier Mandatory", "International", "Finals",
+})
+
+
+# Alias reales conocidos donde el nombre de TennisExplorer difiere del
+# nombre oficial de la fuente WTA (`tournamentGroup.name`) -- 2026-08-05,
+# verificado en vivo: TennisExplorer usa "French Open", la API oficial
+# usa "ROLAND GARROS" para el mismo evento (único mismatch real
+# encontrado entre los 4 majors; Australian Open/Wimbledon/US Open
+# coinciden literalmente tras normalizar)."""
+_TOURNAMENT_NAME_ALIASES = {"FRENCH OPEN": "ROLAND GARROS"}
+
+
+def _normalize_tournament_name(raw: str | None) -> str | None:
+    """Normaliza el nombre libre de torneo de `TennisMatchHistory`
+    (TennisExplorer, ej. "Rome 2 WTA", "Indian Wells", "Madrid WTA")
+    para matchear contra el nombre oficial de `WtaTournamentLevel`
+    (WTA API, ej. "ROME", "INDIAN WELLS", "MADRID") -- 2026-08-05.
+
+    Reglas reales observadas en vivo (ver docstring del módulo/backfill
+    para ejemplos): quita sufijos de tour/nivel que TennisExplorer
+    agrega ("WTA", "ITF", "challenger" -- este último no debería
+    aparecer en filas WTA reales, pero se limpia igual por si acaso),
+    quita tokens numéricos sueltos (TennisExplorer distingue ediciones
+    duplicadas del mismo año con "Rome 2"/"Madrid 19" etc.), colapsa
+    espacios, mayúsculas. Fail-closed: None si no queda nada real tras
+    limpiar."""
+    if not raw:
+        return None
+    tokens = [t for t in raw.strip().upper().split(" ") if t]
+    drop = {"WTA", "ITF", "CHALLENGER"}
+    kept = [t for t in tokens if t not in drop and not t.isdigit()]
+    if not kept:
+        return None
+    normalized = " ".join(kept)
+    return _TOURNAMENT_NAME_ALIASES.get(normalized, normalized)
+
+
+def _load_tournament_level_index() -> dict[tuple[int, str], str | None]:
+    """{(year, normalized_name): level} -- cargado una sola vez desde
+    `WtaTournamentLevel` (backfilleada aparte vía
+    `wta_tournament_level_backfill.py`, catálogo oficial completo).
+
+    2026-08-05, bug real encontrado en vivo: la normalización quita
+    tokens numéricos ("MADRID 2 ITF" -> "MADRID"), lo que puede colisionar
+    con el nombre real del torneo principal ("MADRID" -> Premier
+    Mandatory) DESPUÉS de normalizar, aunque sean filas distintas y sin
+    colisión en la propia tabla (`(year, tournament_name)` real es
+    único, pero `(year, normalized_name)` no lo es). Mismo criterio de
+    no-degradación que el backfill (`_priority`): ante colisión post-
+    normalización, se conserva el nivel de MAYOR jerarquía real."""
+    from scripts.tennis.wta_tournament_level_backfill import _priority
+
+    init_db_historical()
+    index: dict[tuple[int, str], str | None] = {}
+    for r in WtaTournamentLevel.select():
+        norm = _normalize_tournament_name(r.tournament_name)
+        if norm is None:
+            continue
+        key = (r.year, norm)
+        if key not in index or _priority(r.level) > _priority(index[key]):
+            index[key] = r.level
+    return index
+
+
+def _is_main_tour_level(tournament_raw: str | None, match_date: str, level_index: dict[tuple[int, str], str | None]) -> bool:
+    """True solo si el torneo resuelve a un nivel real >= WTA 250 (ver
+    `_WTA_MAIN_TOUR_LEVELS`). Fail-closed: cualquier torneo que no
+    matchee contra el catálogo oficial (nombre no encontrado para ese
+    año) queda EXCLUIDO -- nunca se asume que es main-tour por
+    default."""
+    norm = _normalize_tournament_name(tournament_raw)
+    if norm is None:
+        return False
+    try:
+        year = int(match_date[:4])
+    except (ValueError, TypeError):
+        return False
+    level = level_index.get((year, norm))
+    return level in _WTA_MAIN_TOUR_LEVELS
 
 
 def _build_abbrev_to_full_name_index() -> dict[str, str | None]:
@@ -176,12 +270,13 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     init_db_historical()
     ranking_index = _load_ranking_index()
     abbrev_index = _build_abbrev_to_full_name_index()
+    level_index = _load_tournament_level_index()
     eval_cutoff = f"{_EVAL_START_YEAR}-01-01"
 
     seen: set[tuple[frozenset, str]] = set()
     cases: list[dict[str, Any]] = []
     skipped_no_surface = skipped_not_wta_roster = skipped_no_rank_data = skipped_duplicate = 0
-    skipped_opponent_name_unresolved = 0
+    skipped_opponent_name_unresolved = skipped_below_250_level = 0
 
     # 2026-08-05, mismo bug real encontrado y corregido en
     # `tml_database_scraper.py::get_matches_range_from_db` (ver ese
@@ -205,6 +300,16 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         opponent_full_name = _resolve_abbreviated_name(r.opponent_name, abbrev_index)
         if opponent_full_name is None:
             skipped_opponent_name_unresolved += 1
+            continue
+
+        # 2026-08-05, pedido explícito del usuario: "me faltó agregar
+        # que solo tomen matches de torneos 250 para arriba en nivel
+        # [también para WTA]" -- equivalente real de `TOUR_LEVELS_250_PLUS`
+        # de ATP. Fail-closed: torneo sin match real en el catálogo
+        # oficial (`WtaTournamentLevel`) para ese año se EXCLUYE, nunca
+        # se asume main-tour por default.
+        if not _is_main_tour_level(r.tournament, r.match_date, level_index):
+            skipped_below_250_level += 1
             continue
 
         dedup_key = (frozenset({r.player_name, opponent_full_name}), r.match_date)
@@ -258,6 +363,7 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return cases, {
         "skipped_not_wta_roster": skipped_not_wta_roster, "skipped_no_rank_data": skipped_no_rank_data,
         "skipped_duplicate": skipped_duplicate, "skipped_opponent_name_unresolved": skipped_opponent_name_unresolved,
+        "skipped_below_250_level": skipped_below_250_level,
     }
 
 

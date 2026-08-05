@@ -187,6 +187,49 @@ def get_weekly_ranking_history(player_id: int) -> list[dict[str, Any]]:
     return result
 
 
+_API_TOURNAMENTS = "https://api.wtatennis.com/tennis/tournaments"
+
+
+def get_all_tournaments() -> list[dict[str, Any]]:
+    """Catálogo REAL completo de torneos WTA (todas las categorías,
+    1960-hoy), paginado -- 2026-08-05, pedido explícito del usuario
+    ("me faltó agregar que solo tomen matches de torneos 250 para
+    arriba en nivel [también para WTA]"). A diferencia de
+    `get_ranked_players_at`, este endpoint IGNORA cualquier filtro de
+    año en la URL (verificado en vivo: `?year=2024` devuelve el mismo
+    total que sin el parámetro) -- se pagina completo (pageSize tope
+    real 100, ~188 páginas, ~18,738 entradas verificado en vivo) y se
+    filtra por año en Python, en el caller.
+
+    Returns: lista de {"year": int, "tournament_name": str (nombre real
+    en mayúsculas, `tournamentGroup.name`), "level": str | None}.
+    Fail-closed: [] ante fallo de red/parseo; filas sin nombre/año real
+    se descartan."""
+    result: list[dict[str, Any]] = []
+    page = 0
+    while True:
+        resp = _get(_API_TOURNAMENTS, params={"page": page, "pageSize": _PAGE_SIZE})
+        if not resp:
+            break
+        try:
+            data = resp.json()
+        except ValueError:
+            break
+        content = data.get("content", [])
+        for c in content:
+            year = c.get("year")
+            group = c.get("tournamentGroup") or {}
+            name = group.get("name")
+            if year is None or not name:
+                continue
+            result.append({"year": int(year), "tournament_name": name, "level": c.get("level")})
+        total = (data.get("pageInfo") or {}).get("numEntries", 0)
+        if len(content) < _PAGE_SIZE or (page + 1) * _PAGE_SIZE >= total:
+            break
+        page += 1
+    return result
+
+
 def get_player_data(name: str) -> dict[str, Any] | None:
     """Fail-closed: returns None if the player isn't found or on any
     fetch/parse failure. Never fabricates a match."""
