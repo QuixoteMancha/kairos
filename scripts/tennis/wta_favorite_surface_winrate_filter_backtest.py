@@ -53,23 +53,26 @@ from scripts.tennis.favorite_by_historical_rank_backtest import _p_win_match_giv
 from scripts.reports import risk_metrics
 
 _EVAL_START_YEAR = 2016
-_MIN_RANK_GAP = 20  # mismo umbral que ATP, pedido explícito: misma estrategia
+# 2026-08-05, pedido explícito del usuario: "sólo tomemos 250 en
+# adelante y para wta mejoremos la condición a 30 puntos de diferencia
+# de ranking" -- revierte el intento de incluir 125 (mismo día,
+# descartado) y AMPLÍA el gap mínimo de ranking de WTA a 30 (diverge de
+# ATP a propósito, ya NO es "mismo umbral" -- decisión explícita del
+# usuario, ATP se queda en 20 sin cambios).
+_MIN_RANK_GAP = 30
 _BEST_OF = 3  # regla real WTA, nunca best-of-5
 
-# "125 en adelante" del lado WTA -- 2026-08-05, pedido explícito del
-# usuario ("incluyamos 125 para ambos circuitos"), ampliando el umbral
-# original ("250 para arriba", mismo día). WTA rebrandeó los nombres de
-# categoría en 2021 (International->WTA 250, Premier->WTA 500,
-# Premier 5/Premier Mandatory->WTA 1000) -- se incluyen AMBOS juegos de
-# nombres porque el catálogo de `WtaTournamentLevel` cubre años de
-# antes y después del rebrand. "WTA 125"/"125K" (circuito de
-# desarrollo, mismo tier con nombre distinto pre/post rebrand) AHORA
-# incluidos. Único excluido: "ITF" (por debajo de 125). "Finals" (WTA
+# "250 en adelante" del lado WTA -- equivalente real de
+# `TOUR_LEVELS_250_PLUS` de ATP (250/500/M/G/F). WTA rebrandeó los
+# nombres de categoría en 2021 (International->WTA 250, Premier->WTA
+# 500, Premier 5/Premier Mandatory->WTA 1000) -- se incluyen AMBOS
+# juegos de nombres porque el catálogo de `WtaTournamentLevel` cubre
+# años de antes y después del rebrand. EXCLUIDOS (por debajo de 250):
+# "WTA 125"/"125K" (circuito de desarrollo) e "ITF". "Finals" (WTA
 # Finals, fin de temporada) cuenta como tour principal.
 _WTA_MAIN_TOUR_LEVELS = frozenset({
     "Grand Slam", "WTA 1000", "WTA 500", "WTA 250",
     "Premier", "Premier 5", "Premier Mandatory", "International", "Finals",
-    "WTA 125", "125K",
 })
 
 
@@ -600,7 +603,7 @@ def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60
             "el resultado). 'filtered_bet_only_after_set1_win' = variante "
             "2 (SIN exposición pre-partido, entra recién si la favorita "
             "ya ganó el set 1) -- ambas sobre el mismo pool filtrado "
-            "(gap>=20 + mejor winrate real por superficie, sin margen "
+            "(gap>=30 + mejor winrate real por superficie, sin margen "
             "extra). No incluye las 6 variantes restantes de ATP "
             "(refuerzo/retiro/hedge condicionales al set 2)."
         ),

@@ -33,8 +33,11 @@ def test_best_of_is_always_3():
     assert _BEST_OF == 3
 
 
-def test_min_rank_gap_matches_atp():
-    assert _MIN_RANK_GAP == 20
+def test_min_rank_gap_is_30_for_wta():
+    # 2026-08-05, pedido explícito del usuario: "para wta mejoremos la
+    # condición a 30 puntos de diferencia de ranking" -- diverge a
+    # propósito de ATP (20), ya no es el mismo umbral.
+    assert _MIN_RANK_GAP == 30
 
 
 def test_rank_at_finds_most_recent_entry_leq_date():
@@ -206,19 +209,13 @@ def test_is_main_tour_level_true_for_main_tour_levels():
         assert _is_main_tour_level("Madrid WTA", "2016-05-01", index) is True
 
 
-def test_is_main_tour_level_true_for_125_tier():
-    # 2026-08-05, pedido explícito del usuario: "incluyamos 125 para
-    # ambos circuitos" -- WTA 125/125K (mismo tier, nombre distinto
-    # pre/post rebrand 2021) ahora cuentan como main-tour.
-    for level in ("WTA 125", "125K"):
+def test_is_main_tour_level_false_for_below_250():
+    # 2026-08-05, revertido a "250 en adelante" (el intento de incluir
+    # 125 se descartó el mismo día, pedido explícito del usuario) --
+    # WTA 125/125K vuelven a quedar excluidos, igual que ITF.
+    for level in ("WTA 125", "125K", "ITF", None):
         index = {(2016, "MAKARSKA"): level}
-        assert _is_main_tour_level("Makarska", "2016-06-01", index) is True
-
-
-def test_is_main_tour_level_false_for_below_125():
-    for level in ("ITF", None):
-        index = {(2016, "SOMEWHERE"): level}
-        assert _is_main_tour_level("Somewhere", "2016-06-01", index) is False
+        assert _is_main_tour_level("Makarska", "2016-06-01", index) is False
 
 
 def test_is_main_tour_level_fail_closed_when_not_in_catalog():
@@ -227,12 +224,12 @@ def test_is_main_tour_level_fail_closed_when_not_in_catalog():
     assert _is_main_tour_level("Unknown Event", "2016-06-01", {}) is False
 
 
-def test_collect_wta_cases_excludes_below_125_level_tournament():
+def test_collect_wta_cases_excludes_below_250_level_tournament():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
     from datetime import datetime, timezone
     TennisMatchHistory.create(
         player_name="Ana Ivanovic", opponent_name="Kvitova P.", match_date="2016-01-01", result="W",
-        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Calvi",
+        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Makarska",
         fetched_at=datetime.now(timezone.utc),
     )
     TennisMatchHistory.create(
@@ -240,9 +237,7 @@ def test_collect_wta_cases_excludes_below_125_level_tournament():
         score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Someplace",
         fetched_at=datetime.now(timezone.utc),
     )
-    # 2026-08-05, umbral ampliado a "125 en adelante" -- ITF (por debajo
-    # de 125) sigue excluido, WTA 125 ya no.
-    level_index = {(2016, "CALVI"): "ITF"}
+    level_index = {(2016, "MAKARSKA"): "WTA 125"}
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
