@@ -12,7 +12,10 @@ import pytest
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
-from scripts.tennis.wta_top200_historical_backfill import backfill_player, run_backfill, _to_iso_date
+from scripts.tennis.wta_top200_historical_backfill import (
+    backfill_player, run_backfill, run_backfill_from_wta_roster, _to_iso_date,
+)
+from database.historical.tennis import WtaPlayerRankingHistory
 
 
 @pytest.fixture(autouse=True)
@@ -240,3 +243,22 @@ def test_run_backfill_uses_requested_tour_for_rankings():
     ):
         run_backfill(n_players=1, tour="ATP")
     mock_rankings.assert_called_once_with(n=1, tour="ATP")
+
+
+def test_run_backfill_from_wta_roster_uses_distinct_names_from_ranking_table():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    WtaPlayerRankingHistory.delete().execute()
+    WtaPlayerRankingHistory.create(player_id=1, player_name="Player A", ranked_at="2020-01-01", singles_ranking=5, fetched_at=now)
+    WtaPlayerRankingHistory.create(player_id=1, player_name="Player A", ranked_at="2021-01-01", singles_ranking=3, fetched_at=now)
+    WtaPlayerRankingHistory.create(player_id=2, player_name="Player B", ranked_at="2020-01-01", singles_ranking=50, fetched_at=now)
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        summary = run_backfill_from_wta_roster()
+
+    # 2 jugadoras DISTINTAS (Player A aparece 2 veces en la tabla, 1 sola vez en el roster)
+    assert mock_bp.call_count == 2
+    assert len(summary) == 2

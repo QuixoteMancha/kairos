@@ -149,26 +149,21 @@ def backfill_player(player_name: str) -> dict:
     }
 
 
-def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
-    """`tour`: "WTA" | "ATP" -- generalizado 2026-08-03, pedido explícito
-    del usuario tras el backfill WTA ("puedes sacar las cuotas
-    históricas de los matches de ATP?"). El scraper de TennisExplorer
-    no depende del tour (misma URL/estructura por jugador/a), así que
-    reusa exactamente la misma lógica -- solo cambia la fuente del
-    ranking (`get_top_rankings(tour=...)`)."""
+def _run_backfill_for_names(names: list[str], tag: str) -> list[dict]:
+    """Loop real compartido -- extraído 2026-08-05, pedido explícito del
+    usuario ("¿tenemos menos matches de WTA en base? ampliemos el
+    backfill") para poder correr contra un roster AMPLIO (no solo el
+    top-200 actual), sin duplicar la lógica de fetch/pausas/reporte."""
     init_db_historical()
-    players = get_top_rankings(n=n_players, tour=tour)
-    tag = tour.lower()
-    print(f"[{tag}_backfill] {len(players)} jugadores/as reales del top-{n_players} {tour}", flush=True)
+    print(f"[{tag}_backfill] {len(names)} jugadoras/es reales a procesar", flush=True)
 
     summary = []
-    for i, p in enumerate(players, start=1):
-        name = p["nombre"]
+    for i, name in enumerate(names, start=1):
         t0 = time.monotonic()
         result = backfill_player(name)
         elapsed = time.monotonic() - t0
         print(
-            f"[{tag}_backfill] ({i}/{len(players)}) {name} rank={p['ranking']} "
+            f"[{tag}_backfill] ({i}/{len(names)}) {name} "
             f"-> {result['status']}, matches+{result.get('matches_inserted', 0)}, "
             f"repaired+{result.get('matches_repaired', 0)}, "
             f"odds+{result.get('odds_inserted', 0)} ({elapsed:.1f}s)",
@@ -191,6 +186,43 @@ def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
     return summary
 
 
+def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
+    """`tour`: "WTA" | "ATP" -- generalizado 2026-08-03, pedido explícito
+    del usuario tras el backfill WTA ("puedes sacar las cuotas
+    históricas de los matches de ATP?"). El scraper de TennisExplorer
+    no depende del tour (misma URL/estructura por jugador/a), así que
+    reusa exactamente la misma lógica -- solo cambia la fuente del
+    ranking (`get_top_rankings(tour=...)`)."""
+    players = get_top_rankings(n=n_players, tour=tour)
+    names = [p["nombre"] for p in players]
+    return _run_backfill_for_names(names, tag=tour.lower())
+
+
+def run_backfill_from_wta_roster() -> list[dict]:
+    """2026-08-05, pedido explícito del usuario: "¿tenemos menos matches
+    de WTA en base [que ATP]? ampliemos el backfill" -- hallazgo real
+    que lo motivó: `TennisMatchHistory` solo tenía el historial de
+    quienes estaban en el TOP-200 ACTUAL al momento del backfill
+    original (`run_backfill(tour="WTA")`), a diferencia de ATP
+    (TML-Database trae TODO el tour 250+ sin depender de quién esté
+    rankeada HOY) -- 12,153 casos evaluables WTA vs 24,030 ATP en el
+    mismo rango de años, la mitad.
+
+    Corre el mismo backfill de partidos/cuotas de TennisExplorer pero
+    contra el roster AMPLIO ya construido en
+    `wta_player_ranking_backfill.py` (666 jugadoras reales, unión de
+    snapshots históricos 2016-2026, no solo el top-N de hoy) -- lee
+    directamente de `WtaPlayerRankingHistory`, ya poblada."""
+    from database.historical.tennis import WtaPlayerRankingHistory
+
+    init_db_historical()
+    names = sorted({r.player_name for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct()})
+    return _run_backfill_for_names(names, tag="wta_full_roster")
+
+
 if __name__ == "__main__":
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
-    run_backfill(n_players=n, tour="WTA")
+    if len(sys.argv) > 1 and sys.argv[1] == "full_roster":
+        run_backfill_from_wta_roster()
+    else:
+        n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+        run_backfill(n_players=n, tour="WTA")
