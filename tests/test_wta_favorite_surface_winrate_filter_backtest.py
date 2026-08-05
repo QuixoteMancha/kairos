@@ -10,7 +10,7 @@ from database.db import init_db_historical
 from database.historical.tennis import TennisMatchHistory
 from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
     _rank_at, _build_surface_winrate_tracker, collect_wta_cases, run_backtest, _MIN_RANK_GAP, _BEST_OF,
-    _build_abbrev_to_full_name_index, _resolve_abbreviated_name,
+    _build_abbrev_to_full_name_index, _resolve_abbreviated_name, _self_won_set1, _simulate_bet_after_set1_win,
 )
 
 
@@ -19,11 +19,11 @@ def setup_function(_fn):
     TennisMatchHistory.delete().execute()
 
 
-def _real_row(player, opponent, date, result, surface="Hard"):
+def _real_row(player, opponent, date, result, surface="Hard", score="6-4, 6-3"):
     from datetime import datetime, timezone
     TennisMatchHistory.create(
         player_name=player, opponent_name=opponent, match_date=date, result=result,
-        score="6-4, 6-3", source="tennisexplorer", surface=surface, fetched_at=datetime.now(timezone.utc),
+        score=score, source="tennisexplorer", surface=surface, fetched_at=datetime.now(timezone.utc),
     )
 
 
@@ -116,3 +116,67 @@ def test_run_backtest_returns_expected_shape():
         result = run_backtest()
     assert result["filtered_cases_n"] == 0
     assert "baseline" in result and "filtered" in result
+
+
+def test_self_won_set1_uses_self_first_convention():
+    # "6-4, 4-6, 6-3" -- self (primer número de cada set) ganó el set 1 6-4
+    assert _self_won_set1("6-4, 4-6, 6-3") is True
+    assert _self_won_set1("4-6, 6-4, 6-3") is False
+
+
+def test_self_won_set1_fail_closed():
+    assert _self_won_set1(None) is None
+    assert _self_won_set1("") is None
+    assert _self_won_set1("W/O") is None
+    assert _self_won_set1("6-6, 6-3") is None  # set 1 empatado, dato inconsistente
+
+
+def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
+    ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
+    # Ivanovic es favorita (rank 5 < 300) y es "self" en esta fila -- ganó el set1 (6-4 self-first)
+    _real_row("Ana Ivanovic", "Kvitova P.", "2016-01-01", "W", score="6-4, 6-3")
+    _real_row("Petra Kvitova", "Someone X.", "2015-01-01", "L")  # da universo real para resolver "Kvitova P."
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
+        return_value=ranking_index,
+    ):
+        cases, meta = collect_wta_cases()
+    assert cases[0]["favorite_won_set1"] is True
+
+
+def test_collect_wta_cases_favorite_is_opponent_flips_set1_result():
+    ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
+    # acá Kvitova (opponent, peor rank) es "self" -- pero la FAVORITA es Ivanovic (underdog en la fila, mejor rank)
+    # self (Kvitova) ganó el set1 6-4 -- pero la favorita (Ivanovic) NO es self, así que favorite_won_set1 = False
+    _real_row("Petra Kvitova", "Ivanovic A.", "2016-01-01", "W", score="6-4, 6-3")
+    _real_row("Ana Ivanovic", "Someone X.", "2015-01-01", "L")  # da universo real para resolver "Ivanovic A."
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
+        return_value=ranking_index,
+    ):
+        cases, meta = collect_wta_cases()
+    assert cases[0]["favorite_name"] == "Ana Ivanovic"
+    assert cases[0]["favorite_won_set1"] is False
+
+
+def test_simulate_bet_after_set1_win_only_includes_qualifying_cases():
+    cases = [
+        {"date": "2016-01-01", "favorite_rank": 5, "underdog_rank": 100, "hit": True,
+         "surface": "Hard", "favorite_won_set1": True},
+        {"date": "2016-01-02", "favorite_rank": 5, "underdog_rank": 100, "hit": False,
+         "surface": "Hard", "favorite_won_set1": False},
+        {"date": "2016-01-03", "favorite_rank": 5, "underdog_rank": 100, "hit": True,
+         "surface": "Hard", "favorite_won_set1": None},
+    ]
+    result = _simulate_bet_after_set1_win(cases, initial_capital=50.0, max_stake_usd=None)
+    assert result["n_cases"] == 1  # solo el primero (favorite_won_set1 True)
+    assert result["n_trades"] == 1
+
+
+def test_run_backtest_includes_set1_variant():
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest.collect_wta_cases", return_value=([], {}),
+    ):
+        result = run_backtest()
+    assert "filtered_bet_only_after_set1_win" in result
+    assert result["filtered_bet_only_after_set1_win"]["n_trades"] == 0

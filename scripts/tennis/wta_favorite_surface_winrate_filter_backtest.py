@@ -21,12 +21,10 @@ es una simple sustitución de fuente:
     excluye automáticamente cualquier partido ATP mezclado.
   - SCORE: TennisExplorer reorienta el score al "dueño de la página"
     (self primero en cada set), NO al ganador como TML-Database -- ver
-    `tennisexplorer_player_scraper.py::_reorient_score_to_self`. Acá no
-    hace falta parsear el set 1 (alcance de esta corrida: solo la
-    variante "apostar al favorito, sostener hasta el resultado final",
-    no las 8 variantes de set1/set2 de ATP), así que esta diferencia de
-    convención no afecta el resultado -- se usa directamente `result`
-    (W/L real, ya point-in-time correcto, calculado en el backfill).
+    `tennisexplorer_player_scraper.py::_reorient_score_to_self`. Para la
+    variante 2 (set1, agregada 2026-08-05) esto SÍ importa -- `_self_won_set1`
+    parsea con esa convención, y `favorite_won_set1` se traduce según de
+    qué lado esté la favorita (self o no).
   - DEDUP: un mismo partido real puede aparecer 2 veces en
     `TennisMatchHistory` (una fila por cada jugadora, si se backfilleó
     el historial de ambas) -- se deduplica por (par de jugadoras, fecha).
@@ -34,11 +32,12 @@ es una simple sustitución de fuente:
     5, ni siquiera en Slams -- no es un supuesto, es la regla del
     deporte).
 
-ALCANCE: solo la estrategia "1_simple_bet_favorite" (apostar al
-favorito pre-partido, sostener hasta el resultado final) -- la única
-que pidió el usuario replicar "en ATP como WTA", no las 8 variantes de
-set1/set2 (que dependerían de re-parsear el score reorientado, fuera de
-alcance de este pedido puntual)."""
+ALCANCE: 2 variantes -- "1_simple_bet_favorite" (apostar al favorito
+pre-partido, sostener hasta el resultado final) y "2_bet_only_after_set1_win"
+(SIN exposición pre-partido, agregada 2026-08-05 a pedido explícito:
+"añade a la estrategia de wta apostar sólo cuando la favorita gana el
+primer set"). No las 6 variantes restantes de ATP (refuerzo/retiro/hedge
+condicionales al set 2), fuera de alcance de lo pedido hasta ahora."""
 
 from __future__ import annotations
 
@@ -49,7 +48,8 @@ from typing import Any
 from database.db import init_db_historical
 from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory
 from outer_apis.kalshi.fees import leg_fee_fraction
-from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob
+from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob, p_serve_for_rank, _p_win_game, _p_win_set
+from scripts.tennis.favorite_by_historical_rank_backtest import _p_win_match_given_set_score
 from scripts.reports import risk_metrics
 
 _EVAL_START_YEAR = 2016
@@ -109,6 +109,38 @@ def _resolve_abbreviated_name(abbreviated: str, index: dict[str, str | None]) ->
     return index.get(key)
 
 
+def _self_won_set1(score: str | None) -> bool | None:
+    """True/False/None -- a diferencia de TML-Database (score
+    ganador-primero), TennisExplorer reorienta el score al DUEÑO DE LA
+    PÁGINA (self primero en cada set, ver
+    `tennisexplorer_player_scraper.py::_reorient_score_to_self`, mismo
+    convenio confirmado en vivo: "Paolini - Eala", "6-4, 4-6, 6-3" =
+    Paolini (primer nombre listado, self) ganó el set 1 6-4). Fail-closed:
+    None si `score` está vacío o el primer set no matchea "N-M"."""
+    if not score:
+        return None
+    import re
+    first_set = score.strip().split(",")[0].strip()
+    m = re.match(r"^(\d+)-(\d+)$", first_set)
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    if a == b:
+        return None
+    return a > b
+
+
+def _single_set_win_prob_wta(rank_a: int, rank_b: int, surface: str | None) -> float:
+    """Equivalente WTA de `favorite_by_historical_rank_backtest.py::
+    _single_set_win_prob` (que hardcodea tour="ATP") -- misma
+    metodología, `tour="WTA"` explícito."""
+    pa_serve = p_serve_for_rank(rank_a, tour="WTA", surface=surface)
+    pb_serve = p_serve_for_rank(rank_b, tour="WTA", surface=surface)
+    pa_game = _p_win_game(pa_serve)
+    pb_game = _p_win_game(pb_serve)
+    return _p_win_set(pa_game, pb_game, a_serves_first=True, pa_serve=pa_serve, pb_serve=pb_serve)
+
+
 def _load_ranking_index() -> dict[str, list[tuple[str, int]]]:
     """{player_name: [(ranked_at, singles_ranking), ...]} ordenado
     cronológicamente -- cargado una sola vez en memoria para resolver
@@ -151,9 +183,18 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     skipped_no_surface = skipped_not_wta_roster = skipped_no_rank_data = skipped_duplicate = 0
     skipped_opponent_name_unresolved = 0
 
+    # 2026-08-05, mismo bug real encontrado y corregido en
+    # `tml_database_scraper.py::get_matches_range_from_db` (ver ese
+    # módulo): SIN order_by() explícito, SQLite no garantiza orden
+    # físico de lectura, y `_build_surface_winrate_tracker` de abajo
+    # solo ordena por fecha (empates de mismo día quedan en el orden
+    # que llegue la query) -- el cupo diario de capital río abajo puede
+    # aceptar/descartar partidos distintos según ese orden no
+    # determinístico. `match_date, id` como desempate estable.
     rows = (
         TennisMatchHistory.select()
         .where((TennisMatchHistory.surface.is_null(False)) & (TennisMatchHistory.match_date >= eval_cutoff))
+        .order_by(TennisMatchHistory.match_date, TennisMatchHistory.id)
     )
     for r in rows:
         # 2026-08-05, bug real encontrado en vivo: `opponent_name` viene
@@ -195,12 +236,23 @@ def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         favorite_rank = min(rank_self, rank_opp)
         underdog_rank = max(rank_self, rank_opp)
 
+        # 2026-08-05, pedido explícito del usuario: "añade a la
+        # estrategia de wta apostar sólo cuando la favorita gana el
+        # primer set" -- `_self_won_set1` ya devuelve en términos de
+        # `r.player_name` (self); se traduce a "¿ganó la FAVORITA?"
+        # según de qué lado esté la favorita.
+        self_won_set1 = _self_won_set1(r.score)
+        favorite_won_set1 = (
+            None if self_won_set1 is None
+            else (self_won_set1 if favorite_is_self else not self_won_set1)
+        )
+
         cases.append({
             "date": r.match_date, "favorite_name": favorite_name, "underdog_name": underdog_name,
             "favorite_rank": favorite_rank, "underdog_rank": underdog_rank,
             "rank_gap": underdog_rank - favorite_rank,
             "hit": favorite_name == winner_name,
-            "surface": r.surface,
+            "surface": r.surface, "favorite_won_set1": favorite_won_set1,
         })
 
     return cases, {
@@ -331,6 +383,81 @@ def _simulate_simple_hold_strategy(
     }
 
 
+def _simulate_bet_after_set1_win(
+    cases: list[dict[str, Any]], initial_capital: float, stake_pct: float = 0.01,
+    max_simultaneous_pct: float = 0.5, max_stake_usd: float | None = 60_000.0,
+) -> dict[str, Any]:
+    """Variante 2 de ATP, adaptada a WTA -- 2026-08-05, pedido explícito
+    del usuario: "añade a la estrategia de wta apostar sólo cuando la
+    favorita gana el primer set". SIN exposición pre-partido: se entra
+    recién cuando `favorite_won_set1` es real y True (fail-closed: casos
+    sin score parseable, o donde la favorita PERDIÓ el set 1, quedan
+    fuera -- no hay reprecio/retiro, solo entrada condicional).
+
+    Precio de entrada = `_p_win_match_given_set_score(p_set_favorite, 1,
+    0, best_of=3)`, mismo motor y misma fórmula que la variante 2 de
+    ATP (`_real_price_legs`/`price_after_set1_win`), con `p_set_favorite`
+    calibrado para WTA (`_single_set_win_prob_wta`)."""
+    qualifying = [c for c in cases if c["favorite_won_set1"] is True]
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for c in qualifying:
+        by_date.setdefault(c["date"], []).append(c)
+
+    capital = initial_capital
+    busted = False
+    trade_returns: list[float] = []
+    resolve_hits = resolve_n = 0
+    equity_curve: list[float] = [initial_capital]
+    skipped_cap = 0
+
+    for date in sorted(by_date.keys()):
+        if busted:
+            equity_curve.append(capital)
+            continue
+        cap_start = capital
+        max_exposure = cap_start * max_simultaneous_pct
+        running_exposure = 0.0
+        day_pnl = 0.0
+
+        for c in by_date[date]:
+            stake = cap_start * stake_pct
+            if max_stake_usd is not None:
+                stake = min(stake, max_stake_usd)
+            if running_exposure + stake > max_exposure:
+                skipped_cap += 1
+                continue
+            running_exposure += stake
+            p_set_favorite = _single_set_win_prob_wta(c["favorite_rank"], c["underdog_rank"], c.get("surface"))
+            price = _p_win_match_given_set_score(p_set_favorite, 1, 0, _BEST_OF)
+            pct = _net_hold_pct(price, c["hit"])
+            day_pnl += stake * pct
+            trade_returns.append(pct)
+            resolve_n += 1
+            resolve_hits += 1 if c["hit"] else 0
+
+        capital += day_pnl
+        if capital <= 0:
+            capital = 0.0
+            busted = True
+        equity_curve.append(capital)
+
+    trading_days_per_year = _measure_trading_days_per_year(qualifying)
+    max_dd = risk_metrics.max_drawdown_pct(equity_curve)
+    cagr = risk_metrics.cagr_pct(equity_curve, initial_capital, trading_days_per_year)
+
+    return {
+        "n_cases": len(qualifying), "n_trades": resolve_n, "skipped_daily_cap": skipped_cap,
+        "hit_rate": round(resolve_hits / resolve_n, 4) if resolve_n else None,
+        "final_capital": round(capital, 2), "busted": busted,
+        "trading_days_per_year_measured": round(trading_days_per_year, 2),
+        "max_drawdown_pct": max_dd, "cagr_pct": cagr,
+        "annualized_sharpe": risk_metrics.annualized_sharpe(equity_curve, initial_capital, trading_days_per_year),
+        "annualized_sortino": risk_metrics.annualized_sortino(equity_curve, initial_capital, trading_days_per_year),
+        "calmar_ratio": risk_metrics.calmar_ratio(cagr, max_dd),
+        "cvar_95_pct": risk_metrics.cvar_95_pct(trade_returns),
+    }
+
+
 def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0) -> dict[str, Any]:
     raw_cases, meta1 = collect_wta_cases()
     all_cases, meta2 = _build_surface_winrate_tracker(raw_cases)
@@ -339,6 +466,7 @@ def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60
         c for c in all_cases
         if c["rank_gap"] >= _MIN_RANK_GAP and c["favorite_surface_winrate"] > c["underdog_surface_winrate"]
     ]
+    skipped_no_set1_data = sum(1 for c in filtered_cases if c["favorite_won_set1"] is None)
 
     # misma priorización que ATP: (fecha, favorite_rank ascendente)
     filtered_prioritized = sorted(filtered_cases, key=lambda c: (c["date"], c["favorite_rank"]))
@@ -346,13 +474,15 @@ def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60
 
     baseline_result = _simulate_simple_hold_strategy(all_prioritized, initial_capital, max_stake_usd=max_stake_usd)
     filtered_result = _simulate_simple_hold_strategy(filtered_prioritized, initial_capital, max_stake_usd=max_stake_usd)
+    after_set1_win_result = _simulate_bet_after_set1_win(filtered_prioritized, initial_capital, max_stake_usd=max_stake_usd)
 
     return {
         "min_rank_gap_used": _MIN_RANK_GAP,
         "raw_matches_from_tennis_match_history": len(raw_cases), **meta1,
         "total_cases_with_surface_history": len(all_cases), **meta2,
-        "filtered_cases_n": len(filtered_cases),
+        "filtered_cases_n": len(filtered_cases), "skipped_no_set1_data": skipped_no_set1_data,
         "baseline": baseline_result, "filtered": filtered_result,
+        "filtered_bet_only_after_set1_win": after_set1_win_result,
         "caveat": (
             "Ranking real WTA resuelto vía WtaPlayerRankingHistory (API "
             "oficial WTA, serie semanal real) por (jugadora, fecha) -- "
@@ -360,8 +490,13 @@ def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60
             "Partidos de TennisMatchHistory sin AMBAS jugadoras en el "
             "roster WTA real quedan excluidos (fail-closed, también "
             "filtra cualquier partido ATP mezclado en la misma tabla). "
-            "Solo variante 1 (apostar pre-partido, sostener hasta el "
-            "resultado) -- no las 8 variantes de set1/set2 de ATP."
+            "'filtered' = variante 1 (apostar pre-partido, sostener hasta "
+            "el resultado). 'filtered_bet_only_after_set1_win' = variante "
+            "2 (SIN exposición pre-partido, entra recién si la favorita "
+            "ya ganó el set 1) -- ambas sobre el mismo pool filtrado "
+            "(gap>=20 + mejor winrate real por superficie, sin margen "
+            "extra). No incluye las 6 variantes restantes de ATP "
+            "(refuerzo/retiro/hedge condicionales al set 2)."
         ),
     }
 
