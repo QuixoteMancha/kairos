@@ -229,6 +229,43 @@ def _self_won_set1(score: str | None) -> bool | None:
     convenio confirmado en vivo: "Paolini - Eala", "6-4, 4-6, 6-3" =
     Paolini (primer nombre listado, self) ganó el set 1 6-4). Fail-closed:
     None si `score` está vacío o el primer set no matchea "N-M"."""
+    return _self_won_set_n(score, 1)
+
+
+def _self_won_set_n(score: str | None, set_number: int) -> bool | None:
+    """Generalización de `_self_won_set1` para cualquier set --
+    2026-08-05, pedido explícito del usuario: "apliquemos las mismas
+    estrategias que aplicamos en atp para buscar la óptima" -- las
+    variantes 3/5/6/8 necesitan también el resultado del SET 2 (`_set_2`),
+    mismo convenio self-first de TennisExplorer que `_self_won_set1`.
+    Fail-closed: None si no hay suficientes sets en el score, o el set
+    pedido no matchea "N-M", o está empatado (dato inconsistente)."""
+    if not score:
+        return None
+    import re
+    sets = [s.strip() for s in score.strip().split(",")]
+    if len(sets) < set_number:
+        return None
+    m = re.match(r"^(\d+)-(\d+)$", sets[set_number - 1])
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    if a == b:
+        return None
+    return a > b
+
+
+def _self_set1_game_diff(score: str | None) -> int | None:
+    """Diferencia de games del set 1 desde la perspectiva de "self"
+    (positiva si self ganó el set 1) -- equivalente WTA de
+    `favorite_by_historical_rank_backtest.py::_set1_game_diff`, pero en
+    convenio self-first de TennisExplorer (no ganador-primero de
+    TML-Database). Necesario para la variante 7 (condición de alta
+    remontada, `set1_diff<=2`) -- aunque esa condición también exige
+    `best_of=5` (nunca ocurre en WTA, ver docstring de
+    `_matches_high_comeback_condition`), se calcula igual por
+    completitud/consistencia con el resto del pipeline. Fail-closed:
+    None si el score no tiene un set 1 parseable."""
     if not score:
         return None
     import re
@@ -237,9 +274,7 @@ def _self_won_set1(score: str | None) -> bool | None:
     if not m:
         return None
     a, b = int(m.group(1)), int(m.group(2))
-    if a == b:
-        return None
-    return a > b
+    return a - b
 
 
 def _single_set_win_prob_wta(rank_a: int, rank_b: int, surface: str | None) -> float:
@@ -373,12 +408,32 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
             else (self_won_set1 if favorite_is_self else not self_won_set1)
         )
 
+        # 2026-08-05, pedido explícito del usuario: "apliquemos las
+        # mismas estrategias que aplicamos en atp para buscar la
+        # óptima (las variantes)" -- las variantes 3/5/6/8 de
+        # `_simulate_realistic_all_strategies` (favorite_by_historical_rank_backtest.py)
+        # necesitan también el resultado del set 2 y el diff de games
+        # del set 1, mismo criterio de traducción self->favorito que
+        # `favorite_won_set1` arriba.
+        self_won_set2 = _self_won_set_n(r.score, 2)
+        favorite_won_set2 = (
+            None if self_won_set2 is None
+            else (self_won_set2 if favorite_is_self else not self_won_set2)
+        )
+        self_set1_diff = _self_set1_game_diff(r.score)
+        favorite_set1_diff = None if self_set1_diff is None else (self_set1_diff if favorite_is_self else -self_set1_diff)
+
         cases.append({
             "date": r.match_date, "favorite_name": favorite_name, "underdog_name": underdog_name,
             "favorite_rank": favorite_rank, "underdog_rank": underdog_rank,
             "rank_gap": underdog_rank - favorite_rank,
             "hit": favorite_name == winner_name,
             "surface": r.surface, "favorite_won_set1": favorite_won_set1,
+            # nombres alineados con `favorite_by_historical_rank_backtest.py`
+            # para poder reusar `_simulate_realistic_all_strategies` tal cual.
+            "set1_favorite_win": favorite_won_set1, "set2_favorite_win": favorite_won_set2,
+            "set1_diff": favorite_set1_diff, "best_of": _BEST_OF,
+            "favorite_age": None,  # WTA sin DOB/age disponible (limitación conocida) -- variante 7 fail-closed a "retirar"
         })
 
     return cases, {
@@ -628,6 +683,64 @@ def run_backtest(
             "extra). No incluye las 6 variantes restantes de ATP "
             "(refuerzo/retiro/hedge condicionales al set 2)."
         ),
+    }
+
+
+def run_all_variants_backtest(
+    initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0,
+    allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS,
+) -> dict[str, Any]:
+    """Las 8 variantes de `favorite_by_historical_rank_backtest.py::
+    _simulate_realistic_all_strategies` (reforzar/retirar/hedge
+    condicionales al set 2), corridas sobre el MISMO pool filtrado WTA
+    (gap>=30 + mejor winrate real por superficie + torneo 250+) --
+    2026-08-05, pedido explícito del usuario: "apliquemos las mismas
+    estrategias que aplicamos en atp para buscar la óptima (las
+    variantes)".
+
+    LIMITACIONES REALES vs. ATP (documentadas, no bugs):
+      - `best_of` SIEMPRE 3 en WTA (regla real del circuito, nunca 5).
+        La variante 7 (condición de "alta remontada") exige
+        `best_of==5` de forma literal (hallazgo hecho sobre partidos a 5
+        sets, ver `_matches_high_comeback_condition`) -- en WTA esa
+        condición NUNCA se cumple, así que la variante 7 degenera
+        exactamente a la variante 5 (mismo comportamiento: retiro
+        incondicional en vez de condicional). No es un bug, es una
+        limitación estructural real del deporte.
+      - `favorite_age` siempre `None` (WTA sin fecha de nacimiento en la
+        base, limitación conocida ya documentada) -- refuerza el
+        fail-closed de la variante 7 de arriba (aunque best_of ya la
+        descarta sola).
+
+    BUG REAL encontrado y arreglado en el camino (2026-08-05): la
+    función compartida `_simulate_realistic_all_strategies` traía
+    hardcodeada `_TRADING_DAYS_PER_YEAR_ATP` (36.7, medida
+    específicamente sobre el calendario ATP) para anualizar
+    CAGR/Sharpe/Sortino -- reusarla tal cual para WTA (cadencia real
+    ~200+ días/año en el pool filtrado) distorsionaba esas métricas por
+    un factor de ~6-8x. Se agregó el parámetro `trading_days_per_year`
+    (default None = preserva el comportamiento ATP exacto de siempre) y
+    acá se mide la cadencia REAL de este pool con
+    `_measure_trading_days_per_year`, igual que ya se hacía en
+    `_simulate_simple_hold_strategy`/`_simulate_bet_after_set1_win`."""
+    raw_cases, meta1 = collect_wta_cases(allowed_levels=allowed_levels)
+    all_cases, meta2 = _build_surface_winrate_tracker(raw_cases)
+
+    filtered_cases = [
+        c for c in all_cases
+        if c["rank_gap"] >= _MIN_RANK_GAP and c["favorite_surface_winrate"] > c["underdog_surface_winrate"]
+    ]
+    filtered_prioritized = sorted(filtered_cases, key=lambda c: (c["date"], c["favorite_rank"]))
+
+    from scripts.tennis.favorite_by_historical_rank_backtest import _simulate_realistic_all_strategies
+
+    result = _simulate_realistic_all_strategies(
+        filtered_prioritized, initial_capital=initial_capital, max_stake_usd=max_stake_usd, tour="WTA",
+        trading_days_per_year=_measure_trading_days_per_year(filtered_prioritized),
+    )
+    return {
+        "min_rank_gap_used": _MIN_RANK_GAP, "filtered_cases_n": len(filtered_cases),
+        **meta1, **meta2, **result,
     }
 
 

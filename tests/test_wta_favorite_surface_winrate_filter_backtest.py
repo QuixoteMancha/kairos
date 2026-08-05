@@ -12,6 +12,7 @@ from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
     _rank_at, _build_surface_winrate_tracker, collect_wta_cases, run_backtest, _MIN_RANK_GAP, _BEST_OF,
     _build_abbrev_to_full_name_index, _resolve_abbreviated_name, _self_won_set1, _simulate_bet_after_set1_win,
     _normalize_tournament_name, _is_main_tour_level, _WTA_MAIN_TOUR_LEVELS,
+    _self_won_set_n, _self_set1_game_diff, run_all_variants_backtest,
 )
 
 
@@ -271,3 +272,75 @@ def test_run_backtest_includes_set1_variant():
         result = run_backtest()
     assert "filtered_bet_only_after_set1_win" in result
     assert result["filtered_bet_only_after_set1_win"]["n_trades"] == 0
+
+
+def test_self_won_set_n_generalizes_self_won_set1():
+    assert _self_won_set_n("6-4, 4-6, 6-3", 1) is _self_won_set1("6-4, 4-6, 6-3")
+    assert _self_won_set_n("6-4, 4-6, 6-3", 2) is False
+    assert _self_won_set_n("6-4, 4-6, 6-3", 3) is True
+
+
+def test_self_won_set_n_fail_closed_when_set_missing():
+    assert _self_won_set_n("6-4", 2) is None
+    assert _self_won_set_n(None, 1) is None
+
+
+def test_self_set1_game_diff_real_values():
+    assert _self_set1_game_diff("6-4, 4-6, 6-3") == 2
+    assert _self_set1_game_diff("4-6, 6-4, 6-3") == -2
+
+
+def test_self_set1_game_diff_fail_closed_on_empty():
+    assert _self_set1_game_diff(None) is None
+    assert _self_set1_game_diff("garbage") is None
+
+
+def test_collect_wta_cases_includes_fields_needed_for_all_variants():
+    # 2026-08-05, pedido explícito del usuario: "apliquemos las mismas
+    # estrategias que aplicamos en atp para buscar la óptima" --
+    # `_simulate_realistic_all_strategies` necesita set2_favorite_win/
+    # set1_diff/best_of/favorite_age además de lo ya usado.
+    ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
+    from datetime import datetime, timezone
+    TennisMatchHistory.create(
+        player_name="Ana Ivanovic", opponent_name="Kvitova P.", match_date="2016-01-01", result="W",
+        score="6-4, 4-6, 6-3", source="tennisexplorer", surface="Hard", tournament="Miami",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    TennisMatchHistory.create(
+        player_name="Petra Kvitova", opponent_name="Someone X.", match_date="2015-01-01", result="L",
+        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Miami",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
+        return_value=ranking_index,
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
+    ):
+        cases, meta = collect_wta_cases()
+    assert cases[0]["best_of"] == _BEST_OF
+    assert cases[0]["favorite_age"] is None
+    assert cases[0]["set1_favorite_win"] is True  # Ivanovic (favorita, self) ganó el set1 6-4
+    assert cases[0]["set2_favorite_win"] is False  # perdió el set2 4-6
+    assert cases[0]["set1_diff"] == 2
+
+
+def test_run_all_variants_backtest_reuses_atp_simulator_with_wta_tour():
+    fake_cases = [
+        {"date": "2016-01-01", "favorite_name": "A", "underdog_name": "Z", "favorite_rank": 5,
+         "underdog_rank": 300, "rank_gap": 295, "hit": True, "surface": "Hard",
+         "favorite_won_set1": True, "set1_favorite_win": True, "set2_favorite_win": True,
+         "set1_diff": 2, "best_of": 3, "favorite_age": None},
+    ]
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest.collect_wta_cases",
+        return_value=(fake_cases, {}),
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._build_surface_winrate_tracker",
+        return_value=([{**fake_cases[0], "favorite_surface_winrate": 1.0, "underdog_surface_winrate": 0.0}], {}),
+    ):
+        result = run_all_variants_backtest()
+    assert "strategies" in result
+    assert "1_simple_bet_favorite" in result["strategies"]
+    assert result["filtered_cases_n"] == 1

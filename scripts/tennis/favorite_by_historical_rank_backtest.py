@@ -252,11 +252,25 @@ def _daily_returns(equity_curve: list[float], initial_capital: float) -> list[fl
     return out
 
 
-def _annualized_sharpe(equity_curve: list[float], initial_capital: float) -> float | None:
+def _annualized_sharpe(
+    equity_curve: list[float], initial_capital: float, trading_days_per_year: float = _TRADING_DAYS_PER_YEAR_ATP,
+) -> float | None:
     """Sharpe anualizado real -- media/desvío de los retornos DIARIOS
     (no por operación), escalado por sqrt(días de trading reales/año).
     Sin tasa libre de riesgo (asumida 0, consistente con el resto del
-    backtest)."""
+    backtest).
+
+    `trading_days_per_year` (2026-08-05, pedido explícito del usuario:
+    "apliquemos las mismas estrategias que aplicamos en atp [también]
+    para wta" -- bug real encontrado en vivo al reusar esta función
+    para WTA: `_TRADING_DAYS_PER_YEAR_ATP` (36.7) es una constante
+    MEDIDA específicamente sobre el calendario ATP -- WTA tiene una
+    cadencia de partidos real MUY distinta (~200+ días/año en el pool
+    filtrado, verificado en vivo), y usar la constante ATP sin
+    parametrizar distorsionaba el CAGR/Sharpe/Sortino/Calmar de WTA
+    por un factor de ~6-8x. Default preserva el comportamiento ATP
+    exacto de siempre (nunca se cambió el valor, solo se permite
+    overridearlo)."""
     returns = _daily_returns(equity_curve, initial_capital)
     if len(returns) < 2:
         return None
@@ -264,14 +278,17 @@ def _annualized_sharpe(equity_curve: list[float], initial_capital: float) -> flo
     if stdev == 0:
         return None
     avg = statistics.mean(returns)
-    return round((avg / stdev) * (_TRADING_DAYS_PER_YEAR_ATP ** 0.5), 4)
+    return round((avg / stdev) * (trading_days_per_year ** 0.5), 4)
 
 
-def _annualized_sortino(equity_curve: list[float], initial_capital: float) -> float | None:
+def _annualized_sortino(
+    equity_curve: list[float], initial_capital: float, trading_days_per_year: float = _TRADING_DAYS_PER_YEAR_ATP,
+) -> float | None:
     """Como el Sharpe anualizado, pero solo penaliza la desviación
     NEGATIVA (downside deviation) -- no castiga la variabilidad al alza,
     más apropiado para una distribución de retornos asimétrica como la
-    nuestra (subidas frecuentes moderadas, caídas raras del 100%)."""
+    nuestra (subidas frecuentes moderadas, caídas raras del 100%).
+    `trading_days_per_year` -- ver docstring de `_annualized_sharpe`."""
     returns = _daily_returns(equity_curve, initial_capital)
     if len(returns) < 2:
         return None
@@ -282,18 +299,21 @@ def _annualized_sortino(equity_curve: list[float], initial_capital: float) -> fl
     if downside_stdev == 0:
         return None
     avg = statistics.mean(returns)
-    return round((avg / downside_stdev) * (_TRADING_DAYS_PER_YEAR_ATP ** 0.5), 4)
+    return round((avg / downside_stdev) * (trading_days_per_year ** 0.5), 4)
 
 
-def _cagr_pct(equity_curve: list[float], initial_capital: float) -> float | None:
+def _cagr_pct(
+    equity_curve: list[float], initial_capital: float, trading_days_per_year: float = _TRADING_DAYS_PER_YEAR_ATP,
+) -> float | None:
     """Tasa de crecimiento anual compuesta real, derivada de la curva de
-    equity diaria y el número real de años de trading cubiertos."""
+    equity diaria y el número real de años de trading cubiertos.
+    `trading_days_per_year` -- ver docstring de `_annualized_sharpe`."""
     if not equity_curve or initial_capital <= 0:
         return None
     final = equity_curve[-1]
     if final <= 0:
         return None
-    years = len(equity_curve) / _TRADING_DAYS_PER_YEAR_ATP
+    years = len(equity_curve) / trading_days_per_year
     if years <= 0:
         return None
     return round(((final / initial_capital) ** (1 / years) - 1) * 100, 2)
@@ -407,14 +427,22 @@ def _model_fair_price_calibration(cases: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
-def _single_set_win_prob(rank_a: int, rank_b: int, surface: str | None) -> float:
+def _single_set_win_prob(rank_a: int, rank_b: int, surface: str | None, tour: str = "ATP") -> float:
     """P(A gana UN set) real, calibrado por ranking+superficie -- misma
     metodología interna que usa `pre_match_win_prob` (reutiliza sus
     mismos bloques, `p_serve_for_rank`/`_p_win_game`/`_p_win_set`, ver
     docstring de `pre_match_win_prob` sobre por qué esta vía -- no la de
-    `instantaneous_match_win_prob` -- es la correcta para esto)."""
-    pa_serve = p_serve_for_rank(rank_a, tour="ATP", surface=surface)
-    pb_serve = p_serve_for_rank(rank_b, tour="ATP", surface=surface)
+    `instantaneous_match_win_prob` -- es la correcta para esto).
+
+    `tour` (2026-08-05, pedido explícito del usuario -- "apliquemos las
+    mismas estrategias que aplicamos en atp [también] para wta"):
+    default "ATP" preserva el comportamiento exacto de siempre; se
+    agrega para poder reusar `_real_price_legs`/`_price_at_1_1`/
+    `_simulate_realistic_all_strategies` (de este módulo) desde el
+    backtest WTA sin duplicar la lógica de simulación de las 8
+    variantes."""
+    pa_serve = p_serve_for_rank(rank_a, tour=tour, surface=surface)
+    pb_serve = p_serve_for_rank(rank_b, tour=tour, surface=surface)
     pa_game = _p_win_game(pa_serve)
     pb_game = _p_win_game(pb_serve)
     return _p_win_set(pa_game, pb_game, a_serves_first=True, pa_serve=pa_serve, pb_serve=pb_serve)
@@ -482,30 +510,32 @@ def _matches_high_comeback_condition(
 
 
 def _real_price_legs(
-    favorite_rank: int, underdog_rank: int, best_of: int, surface: str | None,
+    favorite_rank: int, underdog_rank: int, best_of: int, surface: str | None, tour: str = "ATP",
 ) -> tuple[float, float, float]:
     """3 precios REALES (motor base, point-in-time, sin lookahead) para
     el lado FAVORITO en los 3 momentos que necesitan las 5 estrategias:
     pre-match, tras confirmarse que ganó el set 1 (para las patas de
     refuerzo/entrada-limpia), y tras confirmarse que lo PERDIÓ (para
     revaluar/"cerrar" la posición de la estrategia de retiro a un precio
-    real de mercado, en vez de asumir breakeven)."""
-    price_pre_match = pre_match_win_prob(favorite_rank, underdog_rank, best_of=best_of, tour="ATP", surface=surface)
-    p_set_favorite = _single_set_win_prob(favorite_rank, underdog_rank, surface)
+    real de mercado, en vez de asumir breakeven). `tour` -- ver
+    docstring de `_single_set_win_prob`."""
+    price_pre_match = pre_match_win_prob(favorite_rank, underdog_rank, best_of=best_of, tour=tour, surface=surface)
+    p_set_favorite = _single_set_win_prob(favorite_rank, underdog_rank, surface, tour=tour)
     price_after_set1_win = _p_win_match_given_set_score(p_set_favorite, 1, 0, best_of)
     price_after_set1_loss = _p_win_match_given_set_score(p_set_favorite, 0, 1, best_of)
     return price_pre_match, price_after_set1_win, price_after_set1_loss
 
 
-def _price_at_1_1(favorite_rank: int, underdog_rank: int, best_of: int, surface: str | None) -> float:
+def _price_at_1_1(favorite_rank: int, underdog_rank: int, best_of: int, surface: str | None, tour: str = "ATP") -> float:
     """Precio REAL (motor base) del favorito estando 1-1 en sets --
     2026-08-03, pedido explícito del usuario para la variante 8: "si el
     favorito pierde el segundo set [tras ganar el primero], se retira
     la segunda apuesta". Necesario para revaluar/cerrar SOLO la pata de
     refuerzo (no la pre-match) a un precio real de mercado en ese
     momento, mismo criterio que `price_after_set1_loss` para la
-    estrategia de retiro tras perder el set 1."""
-    p_set_favorite = _single_set_win_prob(favorite_rank, underdog_rank, surface)
+    estrategia de retiro tras perder el set 1. `tour` -- ver docstring
+    de `_single_set_win_prob`."""
+    p_set_favorite = _single_set_win_prob(favorite_rank, underdog_rank, surface, tour=tour)
     return _p_win_match_given_set_score(p_set_favorite, 1, 1, best_of)
 
 
@@ -723,7 +753,8 @@ _ALL_STRATEGY_KEYS = [
 def _simulate_realistic_all_strategies(
     cases: list[dict[str, Any]], initial_capital: float = 50.0,
     stake_pct: float = 0.01, max_simultaneous_pct: float = 0.5,
-    max_stake_usd: float | None = None, hedge_stake_pct: float | None = None,
+    max_stake_usd: float | None = None, hedge_stake_pct: float | None = None, tour: str = "ATP",
+    trading_days_per_year: float | None = None,
 ) -> dict[str, Any]:
     """Pedido explícito del usuario 2026-08-03: "saquemos estos
     resultados con todas las variantes de la estrategia" -- generaliza
@@ -811,9 +842,9 @@ def _simulate_realistic_all_strategies(
             skipped += 1
             continue
         price_pre, price_win, price_loss = _real_price_legs(
-            c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"),
+            c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"), tour=tour,
         )
-        price_1_1 = _price_at_1_1(c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"))
+        price_1_1 = _price_at_1_1(c["favorite_rank"], c["underdog_rank"], best_of, c.get("surface"), tour=tour)
         priceable.append({
             **c, "price_pre_match": price_pre, "price_after_set1_win": price_win,
             "price_after_set1_loss": price_loss, "price_at_1_1": price_1_1,
@@ -832,6 +863,13 @@ def _simulate_realistic_all_strategies(
     skipped_cap: dict[str, int] = {k: 0 for k in _ALL_STRATEGY_KEYS}
 
     _hedge_pct = hedge_stake_pct if hedge_stake_pct is not None else stake_pct
+    # 2026-08-05, ver docstring de `_annualized_sharpe` sobre el bug
+    # real de reusar la constante ATP (`_TRADING_DAYS_PER_YEAR_ATP`)
+    # para otro tour sin parametrizar -- default None preserva el
+    # comportamiento ATP exacto de siempre (constante fija, nunca
+    # medida por-corrida), el caller (ej. WTA) puede pasar la cadencia
+    # real medida de su propio pool de casos.
+    _tdpy = trading_days_per_year if trading_days_per_year is not None else _TRADING_DAYS_PER_YEAR_ATP
 
     def _sized_stake(cap_start: float, pct: float = stake_pct) -> float:
         stake = cap_start * pct
@@ -1148,7 +1186,7 @@ def _simulate_realistic_all_strategies(
             if stdev > 0:
                 sharpe = round(avg_roi / stdev, 4)
         max_dd = _max_drawdown_pct(equity_curves[key])
-        cagr = _cagr_pct(equity_curves[key], initial_capital)
+        cagr = _cagr_pct(equity_curves[key], initial_capital, trading_days_per_year=_tdpy)
         result[key] = {
             "initial_capital_usdc": initial_capital,
             "final_capital_usdc": round(cap, 2),
@@ -1162,8 +1200,8 @@ def _simulate_realistic_all_strategies(
             # 2026-08-04, pedido explícito -- métricas adicionales de
             # riesgo-ajustado, ver docstrings de cada helper arriba.
             "cagr_pct": cagr,
-            "annualized_sharpe": _annualized_sharpe(equity_curves[key], initial_capital),
-            "annualized_sortino": _annualized_sortino(equity_curves[key], initial_capital),
+            "annualized_sharpe": _annualized_sharpe(equity_curves[key], initial_capital, trading_days_per_year=_tdpy),
+            "annualized_sortino": _annualized_sortino(equity_curves[key], initial_capital, trading_days_per_year=_tdpy),
             "calmar_ratio": _calmar_ratio(cagr, max_dd),
             "cvar_95_pct": _cvar_95_pct(returns),
             "busted": busted[key],
@@ -1172,6 +1210,7 @@ def _simulate_realistic_all_strategies(
         "strategies": result, "skipped_invalid_best_of": skipped,
         "stake_pct_used": stake_pct, "max_simultaneous_pct_used": max_simultaneous_pct,
         "max_stake_usd_used": max_stake_usd, "hedge_stake_pct_used": _hedge_pct,
+        "trading_days_per_year_used": _tdpy,
         "caveat": (
             "Mismos supuestos que `_simulate_algobetting_concurrency_capped` "
             "(precio real del motor base, 'simultáneo' aproximado por "
