@@ -248,6 +248,7 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
+        WtaPlayerRankingHistory,
     )
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
@@ -268,6 +269,9 @@ def init_db_historical() -> None:
         # 2026-08-05, pedido explícito del usuario -- odds pre-partido
         # reales (SportsbookReviewsOnline), tabla nueva.
         MlbHistoricalOdds,
+        # 2026-08-05, pedido explícito del usuario -- ranking semanal
+        # real WTA, tabla nueva.
+        WtaPlayerRankingHistory,
     ], safe=True)
 
     # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):

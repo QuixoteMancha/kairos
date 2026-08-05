@@ -1,0 +1,370 @@
+"""Backtest WTA de la estrategia final elegida en ATP (favorito por
+ranking real + gap>=20 + mejor winrate real por superficie) --
+2026-08-05, pedido explícito del usuario: "calcular por separado los
+resultados de esta estrategia tanto en ATP como WTA".
+
+DIFERENCIAS ESTRUCTURALES REALES vs. la versión ATP
+(`favorite_surface_winrate_filter_backtest.py`), documentadas porque no
+es una simple sustitución de fuente:
+
+  - RANKING: TML-Database (ATP) trae el ranking real EMBEBIDO en cada
+    fila de partido. WTA no tiene equivalente -- acá el ranking sale de
+    `WtaPlayerRankingHistory` (serie semanal real, backfilleada aparte
+    vía `wta_player_ranking_backfill.py`, API oficial WTA), resuelto
+    por (jugadora, fecha) buscando la entrada semanal más reciente <=
+    la fecha del partido.
+  - PARTIDOS: de `TennisMatchHistory` (TennisExplorer, ya poblada por
+    `wta_top200_historical_backfill.py` para ATP Y WTA mezclados en la
+    MISMA tabla, sin columna de tour). El roster de `WtaPlayerRankingHistory`
+    actúa como clasificador natural: un partido solo cuenta si AMBAS
+    jugadoras resuelven a una jugadora real de ese roster -- fail-closed,
+    excluye automáticamente cualquier partido ATP mezclado.
+  - SCORE: TennisExplorer reorienta el score al "dueño de la página"
+    (self primero en cada set), NO al ganador como TML-Database -- ver
+    `tennisexplorer_player_scraper.py::_reorient_score_to_self`. Acá no
+    hace falta parsear el set 1 (alcance de esta corrida: solo la
+    variante "apostar al favorito, sostener hasta el resultado final",
+    no las 8 variantes de set1/set2 de ATP), así que esta diferencia de
+    convención no afecta el resultado -- se usa directamente `result`
+    (W/L real, ya point-in-time correcto, calculado en el backfill).
+  - DEDUP: un mismo partido real puede aparecer 2 veces en
+    `TennisMatchHistory` (una fila por cada jugadora, si se backfilleó
+    el historial de ambas) -- se deduplica por (par de jugadoras, fecha).
+  - BEST OF: SIEMPRE 3 (regla real del circuito WTA, nunca al mejor de
+    5, ni siquiera en Slams -- no es un supuesto, es la regla del
+    deporte).
+
+ALCANCE: solo la estrategia "1_simple_bet_favorite" (apostar al
+favorito pre-partido, sostener hasta el resultado final) -- la única
+que pidió el usuario replicar "en ATP como WTA", no las 8 variantes de
+set1/set2 (que dependerían de re-parsear el score reorientado, fuera de
+alcance de este pedido puntual)."""
+
+from __future__ import annotations
+
+import json
+from bisect import bisect_right
+from typing import Any
+
+from database.db import init_db_historical
+from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory
+from outer_apis.kalshi.fees import leg_fee_fraction
+from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob
+from scripts.reports import risk_metrics
+
+_EVAL_START_YEAR = 2016
+_MIN_RANK_GAP = 20  # mismo umbral que ATP, pedido explícito: misma estrategia
+_BEST_OF = 3  # regla real WTA, nunca best-of-5
+
+
+def _build_abbrev_to_full_name_index() -> dict[str, str | None]:
+    """Resuelve nombres ABREVIADOS ("Cocciaretto E.", tal cual
+    TennisExplorer guarda `opponent_name` -- ver docstring del módulo)
+    a nombre completo real ("Elisabetta Cocciaretto") -- 2026-08-05,
+    bug real encontrado en vivo: `player_name` es nombre completo pero
+    `opponent_name` viene abreviado, así que NUNCA matcheaban contra el
+    roster WTA (100% de las filas se descartaban).
+
+    Universo de nombres completos: TODOS los `player_name` distintos de
+    `TennisMatchHistory` (438 reales, ATP+WTA mezclados -- sirve como
+    proxy amplio, no hace falta que sea solo WTA acá, el filtro de
+    roster WTA real se aplica DESPUÉS de resolver el nombre).
+
+    Clave de abreviación: "{apellido completo} {inicial del nombre}"
+    en minúsculas -- el apellido se toma como TODO menos el primer
+    token (soporta apellidos compuestos reales, ej. "Jessica Bouzas
+    Maneiro" -> "bouzas maneiro j", que matchea la abreviación real
+    "Bouzas Maneiro J."). Fail-closed ante ambigüedad real (2+ nombres
+    completos distintos mapean a la misma clave, ej. dos jugadoras con
+    mismo apellido Y mismo inicial de nombre) -- esa clave queda
+    `None`, nunca se adivina cuál de las dos es."""
+    init_db_historical()
+    full_names = [r.player_name for r in TennisMatchHistory.select(TennisMatchHistory.player_name).distinct()]
+
+    index: dict[str, str | None] = {}
+    seen_keys: dict[str, set[str]] = {}
+    for full_name in full_names:
+        tokens = full_name.strip().split(" ")
+        if len(tokens) < 2:
+            continue
+        first, last = tokens[0], " ".join(tokens[1:])
+        key = f"{last.lower()} {first[0].lower()}"
+        seen_keys.setdefault(key, set()).add(full_name)
+
+    for key, names in seen_keys.items():
+        index[key] = next(iter(names)) if len(names) == 1 else None
+
+    return index
+
+
+def _resolve_abbreviated_name(abbreviated: str, index: dict[str, str | None]) -> str | None:
+    """"Cocciaretto E." -> "Elisabetta Cocciaretto" | None (sin match
+    único real). Fail-closed: formato inesperado (sin "Apellido I.")
+    también devuelve None."""
+    parts = abbreviated.strip().rstrip(".").rsplit(" ", 1)
+    if len(parts) != 2:
+        return None
+    last, initial = parts
+    key = f"{last.lower()} {initial.lower()}"
+    return index.get(key)
+
+
+def _load_ranking_index() -> dict[str, list[tuple[str, int]]]:
+    """{player_name: [(ranked_at, singles_ranking), ...]} ordenado
+    cronológicamente -- cargado una sola vez en memoria para resolver
+    miles de lookups sin una query por partido."""
+    init_db_historical()
+    index: dict[str, list[tuple[str, int]]] = {}
+    for r in WtaPlayerRankingHistory.select().order_by(WtaPlayerRankingHistory.ranked_at):
+        index.setdefault(r.player_name, []).append((r.ranked_at, r.singles_ranking))
+    return index
+
+
+def _rank_at(name: str, date_iso: str, index: dict[str, list[tuple[str, int]]]) -> int | None:
+    """Ranking real vigente en `date_iso` -- la entrada semanal más
+    reciente CON FECHA <= date_iso. Fail-closed: None si la jugadora no
+    está en el roster, o si su primera entrada real es POSTERIOR a
+    `date_iso` (todavía no estaba rankeada en esa fecha -- no se
+    extrapola hacia atrás)."""
+    entries = index.get(name)
+    if not entries:
+        return None
+    dates = [e[0] for e in entries]
+    i = bisect_right(dates, date_iso) - 1
+    if i < 0:
+        return None
+    return entries[i][1]
+
+
+def collect_wta_cases() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Arma los casos evaluables de `TennisMatchHistory`, resolviendo
+    ranking real point-in-time vía `WtaPlayerRankingHistory` y
+    deduplicando partidos que aparecen 2 veces (una fila por
+    jugadora)."""
+    init_db_historical()
+    ranking_index = _load_ranking_index()
+    abbrev_index = _build_abbrev_to_full_name_index()
+    eval_cutoff = f"{_EVAL_START_YEAR}-01-01"
+
+    seen: set[tuple[frozenset, str]] = set()
+    cases: list[dict[str, Any]] = []
+    skipped_no_surface = skipped_not_wta_roster = skipped_no_rank_data = skipped_duplicate = 0
+    skipped_opponent_name_unresolved = 0
+
+    rows = (
+        TennisMatchHistory.select()
+        .where((TennisMatchHistory.surface.is_null(False)) & (TennisMatchHistory.match_date >= eval_cutoff))
+    )
+    for r in rows:
+        # 2026-08-05, bug real encontrado en vivo: `opponent_name` viene
+        # ABREVIADO ("Cocciaretto E."), `player_name` viene completo --
+        # sin resolver esto, el 100% de las filas fallaba el chequeo de
+        # roster (nunca matcheaban un nombre completo). Ver
+        # `_build_abbrev_to_full_name_index` para el mecanismo real.
+        opponent_full_name = _resolve_abbreviated_name(r.opponent_name, abbrev_index)
+        if opponent_full_name is None:
+            skipped_opponent_name_unresolved += 1
+            continue
+
+        dedup_key = (frozenset({r.player_name, opponent_full_name}), r.match_date)
+        if dedup_key in seen:
+            skipped_duplicate += 1
+            continue
+        seen.add(dedup_key)
+
+        if r.player_name not in ranking_index or opponent_full_name not in ranking_index:
+            skipped_not_wta_roster += 1
+            continue
+
+        rank_self = _rank_at(r.player_name, r.match_date, ranking_index)
+        rank_opp = _rank_at(opponent_full_name, r.match_date, ranking_index)
+        if rank_self is None or rank_opp is None:
+            skipped_no_rank_data += 1
+            continue
+        if rank_self == rank_opp:
+            # empate real de ranking -- no se puede determinar favorito
+            # sin adivinar, fail-closed (mismo criterio que el resto de
+            # la sesión: nunca asumir).
+            skipped_no_rank_data += 1
+            continue
+
+        winner_name = r.player_name if r.result == "W" else opponent_full_name
+        favorite_is_self = rank_self < rank_opp
+        favorite_name = r.player_name if favorite_is_self else opponent_full_name
+        underdog_name = opponent_full_name if favorite_is_self else r.player_name
+        favorite_rank = min(rank_self, rank_opp)
+        underdog_rank = max(rank_self, rank_opp)
+
+        cases.append({
+            "date": r.match_date, "favorite_name": favorite_name, "underdog_name": underdog_name,
+            "favorite_rank": favorite_rank, "underdog_rank": underdog_rank,
+            "rank_gap": underdog_rank - favorite_rank,
+            "hit": favorite_name == winner_name,
+            "surface": r.surface,
+        })
+
+    return cases, {
+        "skipped_not_wta_roster": skipped_not_wta_roster, "skipped_no_rank_data": skipped_no_rank_data,
+        "skipped_duplicate": skipped_duplicate, "skipped_opponent_name_unresolved": skipped_opponent_name_unresolved,
+    }
+
+
+def _build_surface_winrate_tracker(cases: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Mismo criterio point-in-time que la versión ATP -- pero acá parte
+    de `cases` ya resueltos (con ranking real), no de partidos crudos,
+    porque el ranking real WTA no viene embebido por fila."""
+    cases_sorted = sorted(cases, key=lambda c: c["date"])
+    record: dict[tuple[str, str], list[int]] = {}
+    result: list[dict[str, Any]] = []
+    skipped_no_surface_history = 0
+
+    for c in cases_sorted:
+        # el "underdog_name" real necesita reconstruirse -- no se guardó
+        # directamente en `collect_wta_cases` (solo favorite_name), pero
+        # alcanza con saber que hubo 2 jugadoras reales en el partido.
+        surface = c["surface"]
+        fav_rec = record.get((c["favorite_name"], surface))
+        # underdog: point-in-time también, pero como no guardamos su
+        # nombre explícito acá (solo rank), el tracker de superficie
+        # necesita el nombre real -- ver `collect_wta_cases`, que ya
+        # incluye "underdog_name" en el dict (agregado abajo).
+        dog_rec = record.get((c["underdog_name"], surface))
+
+        if fav_rec is None or dog_rec is None or (fav_rec[0] + fav_rec[1]) == 0 or (dog_rec[0] + dog_rec[1]) == 0:
+            skipped_no_surface_history += 1
+        else:
+            fav_wr = fav_rec[0] / (fav_rec[0] + fav_rec[1])
+            dog_wr = dog_rec[0] / (dog_rec[0] + dog_rec[1])
+            result.append({**c, "favorite_surface_winrate": round(fav_wr, 4), "underdog_surface_winrate": round(dog_wr, 4)})
+
+        winner_name = c["favorite_name"] if c["hit"] else c["underdog_name"]
+        loser_name = c["underdog_name"] if c["hit"] else c["favorite_name"]
+        wr = record.setdefault((winner_name, surface), [0, 0])
+        wr[0] += 1
+        lr = record.setdefault((loser_name, surface), [0, 0])
+        lr[1] += 1
+
+    return result, {"skipped_no_surface_history": skipped_no_surface_history}
+
+
+def _entry_fee_frac(price: float) -> float:
+    fee_per_contract = leg_fee_fraction(price) or 0.0
+    return fee_per_contract / price if price > 0 else 0.0
+
+
+def _net_hold_pct(price: float, hit: bool) -> float:
+    raw = (1 - price) / price if hit else -1.0
+    return raw - _entry_fee_frac(price)
+
+
+def _measure_trading_days_per_year(cases: list[dict[str, Any]], default: float = 60.0) -> float:
+    dates = sorted({c["date"] for c in cases})
+    if len(dates) < 2:
+        return default
+    from datetime import date as _date
+    first, last = _date.fromisoformat(dates[0]), _date.fromisoformat(dates[-1])
+    years = (last - first).days / 365.25
+    return len(dates) / years if years > 0 else default
+
+
+def _simulate_simple_hold_strategy(
+    cases: list[dict[str, Any]], initial_capital: float, stake_pct: float = 0.01,
+    max_simultaneous_pct: float = 0.5, max_stake_usd: float | None = 60_000.0,
+) -> dict[str, Any]:
+    """Solo la estrategia "1_simple_bet_favorite" -- mismo motor de
+    sizing/cupo/fees que el resto de esta sesión (MLB/ATP)."""
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for c in cases:
+        by_date.setdefault(c["date"], []).append(c)
+
+    capital = initial_capital
+    busted = False
+    trade_returns: list[float] = []
+    resolve_hits = resolve_n = 0
+    equity_curve: list[float] = [initial_capital]
+    skipped_cap = 0
+
+    for date in sorted(by_date.keys()):
+        if busted:
+            equity_curve.append(capital)
+            continue
+        cap_start = capital
+        max_exposure = cap_start * max_simultaneous_pct
+        running_exposure = 0.0
+        day_pnl = 0.0
+
+        for c in by_date[date]:
+            stake = cap_start * stake_pct
+            if max_stake_usd is not None:
+                stake = min(stake, max_stake_usd)
+            if running_exposure + stake > max_exposure:
+                skipped_cap += 1
+                continue
+            running_exposure += stake
+            price = pre_match_win_prob(c["favorite_rank"], c["underdog_rank"], best_of=_BEST_OF, tour="WTA", surface=c.get("surface"))
+            pct = _net_hold_pct(price, c["hit"])
+            day_pnl += stake * pct
+            trade_returns.append(pct)
+            resolve_n += 1
+            resolve_hits += 1 if c["hit"] else 0
+
+        capital += day_pnl
+        if capital <= 0:
+            capital = 0.0
+            busted = True
+        equity_curve.append(capital)
+
+    trading_days_per_year = _measure_trading_days_per_year(cases)
+    max_dd = risk_metrics.max_drawdown_pct(equity_curve)
+    cagr = risk_metrics.cagr_pct(equity_curve, initial_capital, trading_days_per_year)
+
+    return {
+        "n_cases": len(cases), "n_trades": resolve_n, "skipped_daily_cap": skipped_cap,
+        "hit_rate": round(resolve_hits / resolve_n, 4) if resolve_n else None,
+        "final_capital": round(capital, 2), "busted": busted,
+        "trading_days_per_year_measured": round(trading_days_per_year, 2),
+        "max_drawdown_pct": max_dd, "cagr_pct": cagr,
+        "annualized_sharpe": risk_metrics.annualized_sharpe(equity_curve, initial_capital, trading_days_per_year),
+        "annualized_sortino": risk_metrics.annualized_sortino(equity_curve, initial_capital, trading_days_per_year),
+        "calmar_ratio": risk_metrics.calmar_ratio(cagr, max_dd),
+        "cvar_95_pct": risk_metrics.cvar_95_pct(trade_returns),
+    }
+
+
+def run_backtest(initial_capital: float = 50.0, max_stake_usd: float | None = 60_000.0) -> dict[str, Any]:
+    raw_cases, meta1 = collect_wta_cases()
+    all_cases, meta2 = _build_surface_winrate_tracker(raw_cases)
+
+    filtered_cases = [
+        c for c in all_cases
+        if c["rank_gap"] >= _MIN_RANK_GAP and c["favorite_surface_winrate"] > c["underdog_surface_winrate"]
+    ]
+
+    # misma priorización que ATP: (fecha, favorite_rank ascendente)
+    filtered_prioritized = sorted(filtered_cases, key=lambda c: (c["date"], c["favorite_rank"]))
+    all_prioritized = sorted(all_cases, key=lambda c: (c["date"], c["favorite_rank"]))
+
+    baseline_result = _simulate_simple_hold_strategy(all_prioritized, initial_capital, max_stake_usd=max_stake_usd)
+    filtered_result = _simulate_simple_hold_strategy(filtered_prioritized, initial_capital, max_stake_usd=max_stake_usd)
+
+    return {
+        "min_rank_gap_used": _MIN_RANK_GAP,
+        "raw_matches_from_tennis_match_history": len(raw_cases), **meta1,
+        "total_cases_with_surface_history": len(all_cases), **meta2,
+        "filtered_cases_n": len(filtered_cases),
+        "baseline": baseline_result, "filtered": filtered_result,
+        "caveat": (
+            "Ranking real WTA resuelto vía WtaPlayerRankingHistory (API "
+            "oficial WTA, serie semanal real) por (jugadora, fecha) -- "
+            "NO viene embebido en el partido como en ATP/TML-Database. "
+            "Partidos de TennisMatchHistory sin AMBAS jugadoras en el "
+            "roster WTA real quedan excluidos (fail-closed, también "
+            "filtra cualquier partido ATP mezclado en la misma tabla). "
+            "Solo variante 1 (apostar pre-partido, sostener hasta el "
+            "resultado) -- no las 8 variantes de set1/set2 de ATP."
+        ),
+    }
+
+
+if __name__ == "__main__":
+    print(json.dumps(run_backtest(), indent=2, ensure_ascii=False))

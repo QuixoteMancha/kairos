@@ -108,6 +108,85 @@ def get_top_rankings(n: int = 200) -> list[dict[str, Any]]:
     return result[:n]
 
 
+def get_ranked_players_at(at_date: str, n: int = 300) -> list[dict[str, Any]]:
+    """Como `get_top_rankings` pero para una fecha HISTÓRICA real
+    (`at_date`, "YYYY-MM-DD") -- 2026-08-05, pedido explícito del
+    usuario ("calcular los resultados de esta estrategia tanto en ATP
+    como WTA"). La API oficial de WTA acepta `at=` con cualquier fecha
+    pasada (verificado en vivo), no solo la actual -- usado para armar
+    un roster amplio de jugadoras reales que estuvieron rankeadas en
+    distintos puntos del rango de evaluación (2016-2026), no solo las
+    top-N de HOY (que perderían a cualquier jugadora ya retirada).
+
+    A diferencia de `get_top_rankings`, este SÍ incluye `id` (necesario
+    para `get_weekly_ranking_history`). Fail-closed: [] ante cualquier
+    fallo de red/parseo."""
+    result: list[dict[str, Any]] = []
+    page = 0
+    while len(result) < n:
+        resp = _get(
+            _API_RANKED,
+            params={
+                "page": page, "pageSize": _PAGE_SIZE, "type": "rankSingles",
+                "sort": "asc", "metric": "SINGLES", "at": at_date,
+            },
+        )
+        if not resp:
+            break
+        try:
+            items = resp.json()
+        except ValueError:
+            break
+        if not isinstance(items, list) or not items:
+            break
+
+        for item in items:
+            player_obj = item.get("player", {})
+            player_id = player_obj.get("id")
+            name = player_obj.get("fullName", "")
+            rank = item.get("ranking")
+            if not name or player_id is None or rank is None or int(rank) > n:
+                continue
+            result.append({"id": player_id, "name": name, "ranking": int(rank)})
+
+        if len(items) < _PAGE_SIZE:
+            break
+        page += 1
+
+    result.sort(key=lambda x: x["ranking"])
+    return result[:n]
+
+
+def get_weekly_ranking_history(player_id: int) -> list[dict[str, Any]]:
+    """Serie REAL de rankings semanales de una jugadora, ranking oficial
+    WTA -- 2026-08-05, pedido explícito del usuario. Verificado en vivo
+    (Sabalenka, id 320760): 599 entradas semanales reales, desde
+    2012-11-19 hasta hoy -- esta API ya traía el histórico completo, el
+    código previo (`_get_current_ranking`) solo tomaba la más reciente.
+
+    Returns: lista de {"ranked_at": "YYYY-MM-DD", "singles_ranking": int}
+    ordenada cronológicamente ascendente. Fail-closed: [] ante fallo de
+    red/parseo, entradas sin `rankedAt`/`singlesRanking` real se
+    descartan (nunca se fabrica un ranking)."""
+    resp = _get(_API_RANKING.format(player_id=player_id))
+    if not resp:
+        return []
+    try:
+        data = resp.json()
+    except ValueError:
+        return []
+    weekly = data.get("weeklyRankings", [])
+    result = []
+    for w in weekly:
+        ranked_at = w.get("rankedAt")
+        ranking = w.get("singlesRanking")
+        if not ranked_at or ranking is None:
+            continue
+        result.append({"ranked_at": ranked_at[:10], "singles_ranking": int(ranking)})
+    result.sort(key=lambda r: r["ranked_at"])
+    return result
+
+
 def get_player_data(name: str) -> dict[str, Any] | None:
     """Fail-closed: returns None if the player isn't found or on any
     fetch/parse failure. Never fabricates a match."""
