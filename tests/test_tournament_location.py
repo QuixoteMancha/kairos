@@ -65,3 +65,30 @@ def test_team_league_events_stay_unresolved_no_single_venue():
     ellos aunque aparezcan con volumen alto en el gap."""
     for name in ["Bundesliga - men", "Bundesliga - women", "Czech league", "Davis Cup", "Italian Team Championship"]:
         assert get_location(name) is None
+
+
+# ── extract_city_candidate (2026-08-04, geocoding de la cola larga) ──
+
+from outer_apis.scrapers.tennis.tournament_location import extract_city_candidate
+
+
+def test_extract_city_candidate_strips_parenthetical_and_suffix():
+    assert extract_city_candidate("Tokyo (Japan Open)") == "tokyo"
+
+
+def test_extract_city_candidate_strips_comma_and_country():
+    assert extract_city_candidate("Washington (Estados Unidos), dura") == "washington"
+
+
+def test_extract_city_candidate_strips_trailing_edition_number():
+    assert extract_city_candidate("Antalya 34 ITF") == "antalya"
+    assert extract_city_candidate("Cluj-Napoca 2 WTA") == "cluj-napoca"
+
+
+def test_extract_city_candidate_none_for_team_league_events():
+    for name in ["Bundesliga - men", "Czech league", "Davis Cup", "Italian Team Championship", "United Cup", "Billie Jean King Cup"]:
+        assert extract_city_candidate(name) is None, f"{name!r} no debería geocodificarse"
+
+
+def test_extract_city_candidate_strips_challenger_and_accents():
+    assert extract_city_candidate("Prostejov challenger") == "prostejov"

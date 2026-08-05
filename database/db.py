@@ -245,7 +245,7 @@ def init_db_historical() -> None:
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
+        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
     )
     from database.historical.baseball import MlbGameHistory
 
@@ -257,7 +257,7 @@ def init_db_historical() -> None:
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch,
+        ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
         TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
     ], safe=True)
 

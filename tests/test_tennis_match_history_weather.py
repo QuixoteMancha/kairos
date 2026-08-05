@@ -12,6 +12,7 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+from database.historical.tennis import TournamentLocationCache
 from outer_apis.sports.tennis.match_weather import (
     populate_weather_for_match_history_row, populate_weather_for_all_match_history,
     _CHARTED_MATCH_SNAPSHOT_HOUR_UTC,
@@ -23,9 +24,11 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         TennisMatchHistory.delete().where(TennisMatchHistory.source == "test_weather").execute()
+        TournamentLocationCache.delete().execute()
     yield
     with db_historical.connection_context():
         TennisMatchHistory.delete().where(TennisMatchHistory.source == "test_weather").execute()
+        TournamentLocationCache.delete().execute()
 
 
 def _make_row(opponent="Opp", tournament="Washington", match_date="2026-08-01"):
@@ -102,3 +105,47 @@ def test_populate_all_match_history_aggregate():
     assert result["total"] == 2
     assert result["processed"] == 1
     assert result["skipped"] == 1
+
+
+# ── caché geocodeada como fallback (2026-08-04) ──
+
+def test_populates_weather_via_geocode_cache_when_static_table_misses():
+    """Torneo real que NO está en la tabla estática pero SÍ en la caché
+    geocodeada (Nominatim) -- debe poblar clima igual, sin tocar la
+    red de geocoding en este punto (la caché ya está resuelta)."""
+    row = _make_row(tournament="Prostejov challenger", match_date="2020-01-01")
+    TournamentLocationCache.create(
+        city_candidate="prostejov", lat=49.4722, lon=17.1122,
+        source="nominatim", fetched_at=datetime.now(timezone.utc),
+    )
+    fake_weather = {"temperature_c": 10.0, "humidity_pct": 70.0, "wind_kmh": 5.0}
+    with patch(
+        "outer_apis.sports.tennis.match_weather.open_meteo.get_weather_at",
+        return_value=fake_weather,
+    ):
+        result = populate_weather_for_match_history_row(row)
+    assert result == {"skipped": False, "populated": True}
+
+
+def test_skips_when_geocode_cache_has_no_result():
+    """Torneo cuyo candidato geocodeado se intentó y FALLÓ (fila en
+    caché con lat/lon None) -- no reintenta, se saltea igual que
+    'torneo no reconocido'."""
+    row = _make_row(tournament="Nowhereville ITF", match_date="2020-01-01")
+    TournamentLocationCache.create(
+        city_candidate="nowhereville", lat=None, lon=None,
+        source="nominatim", fetched_at=datetime.now(timezone.utc),
+    )
+    result = populate_weather_for_match_history_row(row)
+    assert result["skipped"] is True
+    assert "no reconocido" in result["reason"]
+
+
+def test_skips_team_league_events_never_checks_geocode_cache():
+    """Bundesliga/Davis Cup/etc nunca deben pasar por la caché
+    geocodeada (extract_city_candidate devuelve None para esos) --
+    verificado con la tabla vacía, si buscara igual la fila no existe
+    de todos modos, pero el punto real es la lógica de exclusión."""
+    row = _make_row(tournament="Bundesliga - men", match_date="2020-01-01")
+    result = populate_weather_for_match_history_row(row)
+    assert result["skipped"] is True

@@ -21,6 +21,7 @@ el string de un torneo que YA tiene una entrada real y verificada."""
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
 # Sufijos de tour/nivel que TennisExplorer agrega al nombre real del
@@ -42,6 +43,51 @@ def _normalize(name: str) -> str:
                 n = n[: -len(suffix)].strip()
                 changed = True
     return n
+
+
+def normalize_tournament_name(name: str) -> str:
+    """Alias público de `_normalize` -- reusado por
+    `scripts/geocode_missing_tournament_locations.py` para que la clave
+    de caché geocodeada quede en el MISMO formato que usa `get_location`
+    internamente (evita duplicar la lógica de normalización en 2
+    lugares con riesgo real de divergencia)."""
+    return _normalize(name)
+
+
+# 2026-08-04, pedido explícito -- eventos de equipo/liga NO tienen una
+# sede única real (se juegan en distintas ciudades según ronda/año),
+# nunca se les asigna una ciudad geocodificada.
+_BLOCKLIST_KEYWORDS = (
+    "league", "championship", "davis cup", "billie jean king cup", "fed cup",
+    "hopman cup", "united cup", "bundesliga", "pro series", "team ",
+)
+
+_TRAILING_NUMBER_RE = re.compile(r"\s+\d+$")
+
+
+def extract_city_candidate(raw_tournament: str) -> str | None:
+    """Extrae un candidato real de nombre de ciudad de un string de
+    torneo crudo, para geocodificar vía Nominatim
+    (`scripts/geocode_missing_tournament_locations.py`) -- None si el
+    torneo es un evento de equipo/liga sin sede única (fail-closed,
+    nunca se geocodifica esos). Función ÚNICA compartida entre el
+    script de geocoding y `match_weather.py` (la clave de caché debe
+    ser idéntica en ambos lados, o la caché nunca matchea)."""
+    name = raw_tournament.strip()
+    # "Tokyo (Japan Open)" -> "Tokyo"; "Washington (Estados Unidos), dura" -> "Washington"
+    name = name.split("(")[0].split(",")[0].strip()
+    normalized = _normalize(name)
+    if any(kw in normalized for kw in _BLOCKLIST_KEYWORDS):
+        return None
+    changed = True
+    while changed:
+        changed = False
+        m = _TRAILING_NUMBER_RE.search(normalized)
+        if m:
+            normalized = normalized[: m.start()].strip()
+            changed = True
+    return normalized or None
+
 
 # (lat, lon) de la sede real de cada torneo -- misma clave (nombre de
 # torneo tal como aparece en rules_secondary de Kalshi / recent-results

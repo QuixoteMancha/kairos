@@ -36,7 +36,7 @@ from database.db import init_db_historical
 from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
 from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
 from database.historical.tennis.tennismatchweather import TennisMatchWeather
-from outer_apis.scrapers.tennis.tournament_location import get_location
+from outer_apis.scrapers.tennis.tournament_location import get_location, extract_city_candidate
 from outer_apis.scrapers.weather import open_meteo
 
 
@@ -46,6 +46,33 @@ _DB_LOCK_RETRY_DELAY_S = 0.5
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _get_location_with_geocode_cache(tournament_name: str | None) -> tuple[float, float] | None:
+    """Igual que `get_location`, pero con un segundo nivel de fallback:
+    la caché geocodeada vía Nominatim (`TournamentLocationCache`, ver
+    `scripts/geocode_missing_tournament_locations.py`) para la cola
+    larga de torneos challenger/ITF sin sede conocida a mano -- 2026-08-04,
+    pedido explícito del usuario. Fail-closed en cascada: tabla
+    estática -> caché geocodeada (si existe fila, sea resuelta o no) ->
+    None. Nunca inventa una ubicación."""
+    location = get_location(tournament_name)
+    if location is not None:
+        return location
+    if not tournament_name:
+        return None
+
+    from database.historical.tennis import TournamentLocationCache
+
+    candidate = extract_city_candidate(tournament_name)
+    if candidate is None:
+        return None  # evento de equipo/liga -- nunca se geocodifica, ver extract_city_candidate
+
+    init_db_historical()
+    cached = TournamentLocationCache.get_or_none(TournamentLocationCache.city_candidate == candidate)
+    if cached is None or cached.lat is None or cached.lon is None:
+        return None
+    return cached.lat, cached.lon
 
 
 def _create_weather_row_with_retry(**kwargs) -> None:
@@ -106,7 +133,7 @@ def populate_weather_for_match(match: TennisScannedMatch) -> dict[str, Any]:
     independiente: si el clima de una fase no se pudo obtener (fecha
     fuera del rango de Open-Meteo, request fallida), esa fase se saltea,
     las demás se intentan igual."""
-    location = get_location(match.tournament)
+    location = _get_location_with_geocode_cache(match.tournament)
     if location is None:
         return {"skipped": True, "reason": f"torneo no reconocido: {match.tournament!r}"}
 
@@ -189,7 +216,7 @@ def populate_weather_for_charted_match(match) -> dict[str, Any]:
     if match.weather_fetched_at is not None:
         return {"skipped": True, "reason": "ya tiene clima"}
 
-    location = get_location(match.tournament)
+    location = _get_location_with_geocode_cache(match.tournament)
     if location is None:
         return {"skipped": True, "reason": f"torneo no reconocido: {match.tournament!r}"}
 
@@ -346,7 +373,7 @@ def populate_weather_for_match_history_row(row) -> dict[str, Any]:
     if row.weather_fetched_at is not None:
         return {"skipped": True, "reason": "ya tiene clima"}
 
-    location = get_location(row.tournament)
+    location = _get_location_with_geocode_cache(row.tournament)
     if location is None:
         return {"skipped": True, "reason": f"torneo no reconocido: {row.tournament!r}"}
 
