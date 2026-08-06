@@ -200,13 +200,26 @@ def _build_abbrev_to_full_name_index() -> dict[str, str | None]:
         if len(tokens) < 2:
             continue
         first, last = tokens[0], " ".join(tokens[1:])
-        key = f"{last.lower()} {first[0].lower()}"
+        key = f"{_norm_surname(last)} {first[0].lower()}"
         seen_keys.setdefault(key, set()).add(full_name)
 
     for key, names in seen_keys.items():
         index[key] = next(iter(names)) if len(names) == 1 else None
 
     return index
+
+
+def _norm_surname(surname: str) -> str:
+    """Normaliza un apellido para comparar entre fuentes -- 2026-08-06,
+    bug real encontrado en vivo al cruzar TML-Database (ATP) contra las
+    cuotas de TennisExplorer: apellidos compuestos vienen con GUION en
+    una fuente y ESPACIO en la otra (ej. TML-Database "Pablo Carreno
+    Busta" vs abreviación real de TennisExplorer "Carreno-Busta P.") --
+    sin normalizar esto, la clave de abreviación nunca coincidía para
+    ningún apellido compuesto con esta discrepancia (patrón frecuente,
+    sobre todo apellidos españoles/franceses). `-` se trata como
+    separador de token, igual que un espacio."""
+    return surname.replace("-", " ").strip().lower()
 
 
 def _resolve_abbreviated_name(abbreviated: str, index: dict[str, str | None]) -> str | None:
@@ -217,7 +230,7 @@ def _resolve_abbreviated_name(abbreviated: str, index: dict[str, str | None]) ->
     if len(parts) != 2:
         return None
     last, initial = parts
-    key = f"{last.lower()} {initial.lower()}"
+    key = f"{_norm_surname(last)} {initial.lower()}"
     return index.get(key)
 
 

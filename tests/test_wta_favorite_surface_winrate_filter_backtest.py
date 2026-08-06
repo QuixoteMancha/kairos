@@ -62,6 +62,16 @@ def test_build_abbrev_to_full_name_index_resolves_compound_surname():
     assert index.get("bouzas maneiro j") == "Jessica Bouzas Maneiro"
 
 
+def test_build_abbrev_to_full_name_index_normalizes_hyphenated_surname():
+    # 2026-08-06, bug real -- TML-Database (ATP) trae "Pablo Carreno
+    # Busta" (espacio), TennisExplorer abrevia "Carreno-Busta P." (guion)
+    # -- ambas formas deben resolver a la misma clave normalizada.
+    _real_row("Pablo Carreno Busta", "Ivanovic A.", "2016-01-01", "W")
+    index = _build_abbrev_to_full_name_index()
+    assert index.get("carreno busta p") == "Pablo Carreno Busta"
+    assert _resolve_abbreviated_name("Carreno-Busta P.", index) == "Pablo Carreno Busta"
+
+
 def test_build_abbrev_to_full_name_index_fail_closed_on_ambiguity():
     # 2 jugadoras reales distintas con EXACTAMENTE el mismo apellido + inicial de nombre
     _real_row("Ana Ivanovic", "X Y.", "2016-01-01", "W")
