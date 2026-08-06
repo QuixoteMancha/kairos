@@ -297,3 +297,70 @@ def test_run_backfill_from_atp_roster_uses_2016plus_250plus_names():
     assert mock_bp.call_count == 2
     called_names = {c.args[0] for c in mock_bp.call_args_list}
     assert called_names == {"Player A", "Player B"}
+
+
+def test_run_backfill_for_missing_odds_opponents_targets_unfetched_rival():
+    from datetime import datetime, timezone
+    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
+
+    now = datetime.now(timezone.utc)
+    TmlDatabaseMatch.delete().execute()
+    TennisMatchHistory.delete().execute()
+    TennisHistoricalOdds.delete().execute()
+
+    # universo real para poder resolver "Real R." -> "Rival Real"
+    TmlDatabaseMatch.create(
+        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
+        winner_name="Known Self", loser_name="Rival Real",
+    )
+    # "Known Self" YA tiene su propia página backfilleada (self conocido).
+    TennisMatchHistory.create(
+        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
+        result="W", score="6-4, 6-3", source="tennisexplorer", surface="Hard", fetched_at=now,
+    )
+    # sin fila hermana en TennisHistoricalOdds -- este partido NO tiene cuota real.
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        summary = run_backfill_for_missing_odds_opponents()
+
+    # "Rival Real" nunca tuvo su propia página -- debe agregarse a la lista.
+    # "Known Self" YA la tiene -- no debe re-backfillearse (aunque el
+    # partido siga sin cuota, reintentar su propia página no cambiaría nada).
+    called_names = {c.args[0] for c in mock_bp.call_args_list}
+    assert called_names == {"Rival Real"}
+
+
+def test_run_backfill_for_missing_odds_opponents_skips_rows_with_real_odds():
+    from datetime import datetime, timezone
+    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
+
+    now = datetime.now(timezone.utc)
+    TmlDatabaseMatch.delete().execute()
+    TennisMatchHistory.delete().execute()
+    TennisHistoricalOdds.delete().execute()
+
+    TmlDatabaseMatch.create(
+        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
+        winner_name="Known Self", loser_name="Rival Real",
+    )
+    TennisMatchHistory.create(
+        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
+        result="W", score="6-4, 6-3", source="tennisexplorer", surface="Hard", fetched_at=now,
+    )
+    # ESTE partido SÍ tiene cuota real -- no debería disparar backfill de "Rival Real".
+    TennisHistoricalOdds.create(
+        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
+        odds_self=1.5, odds_opponent=2.5, source="tennisexplorer", fetched_at=now,
+    )
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        run_backfill_for_missing_odds_opponents()
+
+    mock_bp.assert_not_called()

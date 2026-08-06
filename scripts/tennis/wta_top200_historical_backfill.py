@@ -254,11 +254,92 @@ def run_backfill_from_atp_roster() -> list[dict]:
     return _run_backfill_for_names(sorted(names), tag="atp_full_roster")
 
 
+def run_backfill_for_missing_odds_opponents() -> list[dict]:
+    """"Segundo grado" de backfill -- 2026-08-06, pedido explícito del
+    usuario: "expandir el backfill a TennisExplorer para matches que no
+    tienen las cuotas históricas, mismo principio para wta".
+
+    Hallazgo real que lo motivó: cruzando TML-Database (ATP) contra
+    `TennisHistoricalOdds` por (torneo normalizado + año + par de
+    jugadores), la cobertura real llegó a 51.1% -- el resto NO es un
+    bug de matching (ya se investigó y arregló: fechas de torneo vs.
+    fecha real de partido, apellidos con guion) sino AUSENCIA real de
+    dato para partidos donde el RIVAL nunca tuvo su propia página
+    scrapeada en TennisExplorer (solo aparece como oponente abreviado
+    en la página de alguien más, nunca como "self").
+
+    Esta función identifica exactamente esos rivales (mismo criterio
+    para ATP y WTA, ambos comparten `TennisMatchHistory`): para cada
+    fila SIN fila hermana en `TennisHistoricalOdds`, resuelve el nombre
+    abreviado del oponente contra el universo MÁS AMPLIO posible
+    (TML-Database + `WtaPlayerRankingHistory` + `TennisMatchHistory`
+    ya conocidos) y, si resuelve a alguien que TODAVÍA no tiene su
+    propia página backfilleada, lo agrega a la lista -- backfillearlo
+    puede revelar el mismo partido (con cuota) desde SU perspectiva.
+
+    Mismo throttle ya vigente (`_PAUSE_BETWEEN_REQUESTS_S`=1.5s entre
+    años, `_PAUSE_BETWEEN_PLAYERS_S`=3s entre jugador/a) -- sin cambios,
+    ya es conservador (739 jugadores ATP corridos de un tirón sin
+    incidentes en la sesión anterior)."""
+    from database.historical.tennis import TennisHistoricalOdds, WtaPlayerRankingHistory
+    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+
+    init_db_historical()
+
+    # universo AMPLIO de nombres completos reales para resolver
+    # abreviaciones -- ATP (TML-Database) + WTA (ranking oficial) +
+    # cualquier jugador/a ya conocido/a como "self".
+    full_names: set[str] = set()
+    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.winner_name).distinct():
+        full_names.add(r.winner_name)
+    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.loser_name).distinct():
+        full_names.add(r.loser_name)
+    for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct():
+        full_names.add(r.player_name)
+    already_self = {r.player_name for r in TennisMatchHistory.select(TennisMatchHistory.player_name).distinct()}
+    full_names |= already_self
+
+    seen_keys: dict[str, set[str]] = {}
+    for full_name in full_names:
+        tokens = full_name.strip().split(" ")
+        if len(tokens) < 2:
+            continue
+        first, last = tokens[0], " ".join(tokens[1:])
+        key = f"{last.replace('-', ' ').strip().lower()} {first[0].lower()}"
+        seen_keys.setdefault(key, set()).add(full_name)
+    abbrev_index = {k: (next(iter(v)) if len(v) == 1 else None) for k, v in seen_keys.items()}
+
+    def _resolve(abbrev: str) -> str | None:
+        parts = abbrev.strip().rstrip(".").rsplit(" ", 1)
+        if len(parts) != 2:
+            return None
+        last, initial = parts
+        return abbrev_index.get(f"{last.replace('-', ' ').strip().lower()} {initial.lower()}")
+
+    odds_row_keys = {
+        (o.player_name, o.opponent_name, o.match_date)
+        for o in TennisHistoricalOdds.select(TennisHistoricalOdds.player_name, TennisHistoricalOdds.opponent_name, TennisHistoricalOdds.match_date)
+    }
+
+    missing_opponents: set[str] = set()
+    for r in TennisMatchHistory.select(TennisMatchHistory.player_name, TennisMatchHistory.opponent_name, TennisMatchHistory.match_date):
+        if (r.player_name, r.opponent_name, r.match_date) in odds_row_keys:
+            continue
+        full_opp = _resolve(r.opponent_name)
+        if full_opp is None or full_opp in already_self:
+            continue
+        missing_opponents.add(full_opp)
+
+    return _run_backfill_for_names(sorted(missing_opponents), tag="missing_odds_opponents")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "full_roster":
         run_backfill_from_wta_roster()
     elif len(sys.argv) > 1 and sys.argv[1] == "atp_full_roster":
         run_backfill_from_atp_roster()
+    elif len(sys.argv) > 1 and sys.argv[1] == "missing_odds_opponents":
+        run_backfill_for_missing_odds_opponents()
     else:
         n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
         run_backfill(n_players=n, tour="WTA")
