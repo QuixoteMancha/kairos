@@ -220,9 +220,45 @@ def run_backfill_from_wta_roster() -> list[dict]:
     return _run_backfill_for_names(names, tag="wta_full_roster")
 
 
+def run_backfill_from_atp_roster() -> list[dict]:
+    """2026-08-05, pedido explícito del usuario: "verificar si tenemos
+    todos los matches históricos con sus respectivas cuotas, sino
+    lanzar el backfill para fetchear las cuotas históricas" -- hallazgo
+    real que lo motivó: `TennisHistoricalOdds` solo tenía cobertura real
+    para 486 jugadores/as en total (mezcla ATP+WTA de backfills previos,
+    principalmente top-200 WTA), de los cuales apenas 102 coincidían con
+    algún jugador real de TML-Database (7,536 jugadores distintos
+    históricos) -- el pool ATP filtrado (12,513 casos, favorito+gap≥20+
+    superficie) prácticamente no tenía cuota real de mercado vinculable.
+
+    A diferencia de WTA (que necesitó `WtaPlayerRankingHistory` para el
+    roster porque TML-Database no tiene equivalente ATP), acá el
+    roster real sale directo de TML-Database: TODOS los nombres
+    (ganador+perdedor) de partidos 2016+ nivel 250+ (`TOUR_LEVELS_250_PLUS`)
+    -- exactamente el universo que puede llegar a aparecer en el pool
+    evaluable de `favorite_surface_winrate_filter_backtest.py`. Medido
+    en vivo: 739 jugadores reales (vs 7,536 del historial completo
+    1968-2026 sin filtrar) -- acotar al rango/nivel relevante evita un
+    backfill de +50h innecesario sobre jugadores que nunca calificarían
+    para el pool filtrado igual."""
+    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from outer_apis.scrapers.tennis.tml_database_scraper import TOUR_LEVELS_250_PLUS
+
+    init_db_historical()
+    names: set[str] = set()
+    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.winner_name, TmlDatabaseMatch.loser_name).where(
+        (TmlDatabaseMatch.date >= "2016-01-01") & (TmlDatabaseMatch.level.in_(list(TOUR_LEVELS_250_PLUS)))
+    ):
+        names.add(r.winner_name)
+        names.add(r.loser_name)
+    return _run_backfill_for_names(sorted(names), tag="atp_full_roster")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "full_roster":
         run_backfill_from_wta_roster()
+    elif len(sys.argv) > 1 and sys.argv[1] == "atp_full_roster":
+        run_backfill_from_atp_roster()
     else:
         n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
         run_backfill(n_players=n, tour="WTA")

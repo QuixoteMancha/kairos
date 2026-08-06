@@ -262,3 +262,38 @@ def test_run_backfill_from_wta_roster_uses_distinct_names_from_ranking_table():
     # 2 jugadoras DISTINTAS (Player A aparece 2 veces en la tabla, 1 sola vez en el roster)
     assert mock_bp.call_count == 2
     assert len(summary) == 2
+
+
+def test_run_backfill_from_atp_roster_uses_2016plus_250plus_names():
+    from datetime import datetime, timezone
+    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from scripts.tennis.wta_top200_historical_backfill import run_backfill_from_atp_roster
+
+    now = datetime.now(timezone.utc)
+    TmlDatabaseMatch.delete().execute()
+    # partido real evaluable (2016+, nivel 250)
+    TmlDatabaseMatch.create(
+        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
+        winner_name="Player A", loser_name="Player B",
+    )
+    # partido FUERA de alcance (nivel ITF-equivalente D=Davis Cup, excluido de TOUR_LEVELS_250_PLUS)
+    TmlDatabaseMatch.create(
+        year=2016, tourney_name="Davis Cup", level="D", date="2016-01-01", round="F",
+        winner_name="Player C", loser_name="Player D",
+    )
+    # partido FUERA de rango (antes de 2016)
+    TmlDatabaseMatch.create(
+        year=2010, tourney_name="X", level="250", date="2010-01-01", round="F",
+        winner_name="Player E", loser_name="Player F",
+    )
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        summary = run_backfill_from_atp_roster()
+
+    # solo Player A/B califican (2016+, nivel 250) -- C/D (Davis Cup) y E/F (2010) quedan afuera
+    assert mock_bp.call_count == 2
+    called_names = {c.args[0] for c in mock_bp.call_args_list}
+    assert called_names == {"Player A", "Player B"}
