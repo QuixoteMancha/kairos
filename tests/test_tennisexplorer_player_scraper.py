@@ -66,6 +66,31 @@ def test_verify_player_page_tolerates_one_token_difference():
     assert _verify_player_page(_TITLE_OK, "Alex Eala") is True  # "Alex" != "Alexandra" pero "Eala" matchea
 
 
+def test_verify_player_page_tolerates_first_name_initial():
+    title = "<title>C. Ruud - Tennis Explorer</title>"
+    assert _verify_player_page(title, "Casper Ruud") is True
+
+
+def test_verify_player_page_rejects_same_surname_different_person():
+    # 2026-08-06, bug real encontrado en vivo: "Casper Ruud" (jugador
+    # actual) vs "Christian Ruud" (su padre, ex-jugador) -- MISMO
+    # apellido exacto, pero personas DISTINTAS. La versión anterior de
+    # este chequeo (tolerancia por intersección de tokens sin
+    # distinguir nombre/apellido) aceptaba esto por error -- nunca debe
+    # aceptarse solo porque el apellido coincide.
+    title = "<title>Christian Ruud - Tennis Explorer</title>"
+    assert _verify_player_page(title, "Casper Ruud") is False
+
+
+def test_verify_player_page_requires_exact_surname_match():
+    title = "<title>Alexandra Ealaa - Tennis Explorer</title>"
+    assert _verify_player_page(title, "Alexandra Eala") is False
+
+
+def test_verify_player_page_fail_closed_on_single_token_name():
+    assert _verify_player_page(_TITLE_OK, "Eala") is False
+
+
 def test_reorient_score_flips_when_self_is_second():
     assert _reorient_score_to_self("6-4, 4-6, 6-3", self_is_first=True) == "6-4, 4-6, 6-3"
     assert _reorient_score_to_self("6-4, 4-6, 6-3", self_is_first=False) == "4-6, 6-4, 3-6"

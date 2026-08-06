@@ -68,23 +68,55 @@ def _fetch(slug: str, year: int | None = None) -> str | None:
     return resp.text
 
 
-def _name_tokens(name: str) -> set[str]:
-    return set(re.sub(r"[^a-zA-Z ]", "", name).lower().split())
-
-
 def _verify_player_page(html: str, expected_name: str) -> bool:
     """Confirma que la página devuelta es REALMENTE del jugador/a
     esperado -- nunca confía ciegamente en que el slug adivinado por
-    `guess_player_slug` haya acertado."""
+    `guess_player_slug` haya acertado.
+
+    2026-08-06, bug real encontrado en vivo (verificado con caso real:
+    "Casper Ruud" -> `guess_player_slug` adivinaba "ruud" -> esa URL es
+    la página real de CHRISTIAN RUUD, su padre, también ex-jugador
+    profesional -- una persona DISTINTA con el mismo apellido). La
+    versión anterior de este chequeo toleraba "1 token de diferencia"
+    contando la INTERSECCIÓN de tokens sin distinguir nombre de
+    apellido -- eso pensado para "C. Ruud" vs "Casper Ruud" (mismo
+    jugador, nombre abreviado) TAMBIÉN aceptaba, por error, a un
+    jugador COMPLETAMENTE DISTINTO con el mismo apellido (el apellido
+    solo ya bastaba para pasar la tolerancia). Alcance real medido:
+    225/1,285 jugadores/as ya backfilleados comparten apellido con
+    alguien más en el universo conocido -- riesgo real y amplio, no un
+    caso aislado.
+
+    Fix: el APELLIDO debe coincidir EXACTO (nunca se tolera diferencia
+    ahí -- es la señal que definía "misma familia/apellido", no
+    "misma persona"). El NOMBRE debe coincidir completo, O uno de los
+    2 ser una inicial consistente con el otro (tolera "C. Ruud" vs
+    "Casper Ruud", el caso real que motivó la tolerancia original).
+    Fail-closed: sin apellido en `expected_name` (nombre de una sola
+    palabra) o sin título parseable, siempre False -- nunca se asume."""
     m = re.search(r"<title>([^<]*) - Tennis Explorer</title>", html)
     if not m:
         return False
-    expected = _name_tokens(expected_name)
-    page = _name_tokens(m.group(1))
-    if not expected:
+    expected_tokens = re.sub(r"[^a-zA-Z\- ]", "", expected_name).strip().split()
+    page_tokens = re.sub(r"[^a-zA-Z\- ]", "", m.group(1)).strip().split()
+    if len(expected_tokens) < 2 or len(page_tokens) < 2:
         return False
-    overlap = expected & page
-    return len(overlap) >= max(1, len(expected) - 1)  # tolera 1 token de diferencia (ej. inicial vs nombre completo)
+    expected_first, expected_last = expected_tokens[0].lower(), " ".join(expected_tokens[1:]).lower().replace("-", " ")
+    page_first, page_last = page_tokens[0].lower(), " ".join(page_tokens[1:]).lower().replace("-", " ")
+    if expected_last != page_last:
+        return False
+    if expected_first == page_first:
+        return True
+    if len(expected_first) == 1 or len(page_first) == 1:
+        return expected_first[0] == page_first[0]
+    # tolera apodo/nombre corto real (ej. "Alex" vs "Alexandra") -- SOLO
+    # si es un prefijo real de al menos 3 letras, para no aceptar
+    # coincidencias débiles de 1-2 letras que igual podrían ser 2
+    # personas distintas.
+    shorter, longer = sorted((expected_first, page_first), key=len)
+    if len(shorter) >= 3 and longer.startswith(shorter):
+        return True
+    return False
 
 
 def guess_player_slug(player_name: str) -> str | None:
