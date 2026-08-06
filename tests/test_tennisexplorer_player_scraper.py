@@ -13,6 +13,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     get_player_match_history, guess_player_slug, _parse_year_html,
     _verify_player_page, _reorient_score_to_self,
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
+    resolve_player_slug, _extract_href_slug,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -307,3 +308,56 @@ def test_get_player_recent_matches_sorted_most_recent_first_and_capped_at_n():
         result = get_player_recent_matches("Alexandra Eala", n=1)
 
     assert len(result) == 1  # respeta el límite n
+
+
+def test_parse_year_html_extracts_real_opponent_slug():
+    # 2026-08-06, pedido explícito del usuario: "corrige la data de
+    # matches por confusión de nombres" -- el `href` real del rival
+    # (ej. "/player/alcaraz-5ab70/") ya viene en el HTML descargado.
+    html = _page(_row(self_first=True, opponent="Pegula J.", score="4-6, 6-4, 6-0", odds_self="2.36", odds_opp="1.58"))
+    results = _parse_year_html(html, "Alexandra Eala")
+    assert results[0]["opponent_slug"] == "x"  # ver _row: opp_block usa href="/player/x/"
+
+
+def test_extract_href_slug_real_disambiguated_slug():
+    block = '<a href="/player/alcaraz-5ab70/">Alcaraz C.</a>'
+    assert _extract_href_slug(block) == "alcaraz-5ab70"
+
+
+def test_extract_href_slug_fail_closed_no_link():
+    assert _extract_href_slug("no hay link acá") is None
+
+
+def test_resolve_player_slug_uses_naive_guess_first():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="eala",
+    ):
+        assert resolve_player_slug("Alexandra Eala", candidate_slugs=["should-not-be-tried"]) == "eala"
+
+
+def test_resolve_player_slug_falls_back_to_verified_candidate():
+    # 2026-08-06, caso real: "Casper Ruud" -- el slug naive "ruud" NO
+    # verifica (es la página de su padre Christian Ruud), pero un slug
+    # candidato REAL cosechado (ej. "ruud-c1234") sí.
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value=None,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        side_effect=lambda slug, year=None: "<html>x</html>" if slug == "ruud-c1234" else None,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._verify_player_page",
+        side_effect=lambda html, name: True,
+    ):
+        result = resolve_player_slug("Casper Ruud", candidate_slugs=["ruud-wrong", "ruud-c1234"])
+    assert result == "ruud-c1234"
+
+
+def test_resolve_player_slug_fail_closed_when_no_candidate_verifies():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value=None,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value="<html>x</html>",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._verify_player_page", return_value=False,
+    ):
+        assert resolve_player_slug("Naomi Osaka", candidate_slugs=["osaka-mari"]) is None

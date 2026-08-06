@@ -38,9 +38,10 @@ from datetime import date as dt_date, datetime, timezone
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
+from database.historical.tennis.tennisexplorerplayerslug import TennisExplorerPlayerSlug
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
-    guess_player_slug, _fetch, _parse_year_html,
+    guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
 )
 
 _YEARS = list(range(2016, 2027))
@@ -62,8 +63,62 @@ def _to_iso_date(raw_date: str, reference_year: int) -> str | None:
         return None
 
 
+def _surname_key_from_full_name(name: str) -> str:
+    """Nombre COMPLETO, convención "Nombre Apellido" (ej. "Casper Ruud",
+    "Pablo Carreno Busta") -- el apellido es TODO menos el primer
+    token. Mismo criterio de normalización que `_norm_surname`
+    (wta_favorite_surface_winrate_filter_backtest.py): minúsculas,
+    guion->espacio."""
+    tokens = name.strip().split(" ")
+    if len(tokens) < 2:
+        return ""
+    surname = " ".join(tokens[1:])
+    return surname.replace("-", " ").strip().lower()
+
+
+def _surname_key_from_abbrev(abbrev: str) -> str:
+    """Nombre ABREVIADO tal cual lo guarda TennisExplorer, convención
+    "Apellido Inicial." (ej. "Osaka N.", "Carreno-Busta P.") -- el
+    apellido es TODO menos el ÚLTIMO token (el orden es el INVERSO del
+    nombre completo). Bug real encontrado en vivo al escribir esta
+    función: usar el mismo criterio que el nombre completo tomaba la
+    inicial como si fuera el apellido."""
+    parts = abbrev.strip().rstrip(".").rsplit(" ", 1)
+    if len(parts) != 2:
+        return ""
+    surname = parts[0]
+    return surname.replace("-", " ").strip().lower()
+
+
+def _get_candidate_slugs(player_name: str) -> list[str]:
+    """Slugs REALES ya cosechados (de `hrefs` de partidos previamente
+    fetcheados) para el apellido de `player_name` (nombre COMPLETO) --
+    ver `TennisExplorerPlayerSlug`/`resolve_player_slug`."""
+    key = _surname_key_from_full_name(player_name)
+    if not key:
+        return []
+    init_db_historical()
+    with db_historical.connection_context():
+        return [r.slug for r in TennisExplorerPlayerSlug.select().where(TennisExplorerPlayerSlug.surname_key == key)]
+
+
+def _harvest_opponent_slug(opponent_abbrev: str, opponent_slug: str | None, now: datetime) -> None:
+    """Persiste (apellido normalizado del rival, slug real visto en el
+    `href`) -- `opponent_abbrev` viene en convención ABREVIADA
+    ("Apellido Inicial.") -- 2026-08-06, pedido explícito del usuario.
+    Idempotente (índice único (surname_key, slug))."""
+    if not opponent_slug:
+        return
+    key = _surname_key_from_abbrev(opponent_abbrev)
+    if not key:
+        return
+    TennisExplorerPlayerSlug.get_or_create(
+        surname_key=key, slug=opponent_slug, defaults={"discovered_at": now},
+    )
+
+
 def backfill_player(player_name: str) -> dict:
-    slug = guess_player_slug(player_name)
+    slug = resolve_player_slug(player_name, candidate_slugs=_get_candidate_slugs(player_name))
     if slug is None:
         return {"player": player_name, "status": "skipped_no_slug", "matches_inserted": 0, "odds_inserted": 0}
 
@@ -79,6 +134,8 @@ def backfill_player(player_name: str) -> dict:
     now = datetime.now(timezone.utc)
     inserted_matches = inserted_odds = repaired_matches = 0
     with db_historical.connection_context():
+        for _year, m in matches_by_year:
+            _harvest_opponent_slug(m["opponent"], m.get("opponent_slug"), now)
         for year, m in matches_by_year:
             iso_date = _to_iso_date(m["date"], year)
             if iso_date is None:
@@ -149,28 +206,71 @@ def backfill_player(player_name: str) -> dict:
     }
 
 
-def _run_backfill_for_names(names: list[str], tag: str) -> list[dict]:
+def _run_backfill_for_names(names: list[str], tag: str, max_workers: int = 1) -> list[dict]:
     """Loop real compartido -- extraído 2026-08-05, pedido explícito del
     usuario ("¿tenemos menos matches de WTA en base? ampliemos el
     backfill") para poder correr contra un roster AMPLIO (no solo el
-    top-200 actual), sin duplicar la lógica de fetch/pausas/reporte."""
-    init_db_historical()
-    print(f"[{tag}_backfill] {len(names)} jugadoras/es reales a procesar", flush=True)
+    top-200 actual), sin duplicar la lógica de fetch/pausas/reporte.
 
-    summary = []
-    for i, name in enumerate(names, start=1):
+    `max_workers` (2026-08-06, pedido explícito del usuario -- "usaremos
+    ... threads o similar" para acelerar): default 1 = comportamiento
+    secuencial exacto de siempre (sin cambios). Con >1, corre
+    `backfill_player` en un pool de threads -- SEGURO porque:
+      - `tennisexplorer_throttle` (0.5s mínimo entre requests) es
+        thread-safe y GLOBAL (compartido por todos los threads), nunca
+        se supera el ritmo real seguro contra el servidor sin importar
+        cuántos threads corran en paralelo -- solo se solapa la ESPERA
+        de nuestras propias pausas conservadoras (`_PAUSE_BETWEEN_REQUESTS_S`/
+        `_PAUSE_BETWEEN_PLAYERS_S`), no el throttle real.
+      - SQLite ya corre en modo WAL + `busy_timeout=15000` (ver
+        `database/db.py`), diseñado para escrituras concurrentes desde
+        múltiples threads/conexiones sin "database is locked".
+      - NO se usó proxy (BrightData) -- innecesario mientras no haya
+        bloqueos reales del origen (nunca los hubo en esta sesión con
+        requests directos); queda como opción B si aparecen 403/429 al
+        escalar la concurrencia."""
+    init_db_historical()
+    print(f"[{tag}_backfill] {len(names)} jugadoras/es reales a procesar (max_workers={max_workers})", flush=True)
+
+    summary: list[dict] = []
+    done = 0
+
+    def _run_one(name: str) -> dict:
         t0 = time.monotonic()
         result = backfill_player(name)
-        elapsed = time.monotonic() - t0
-        print(
-            f"[{tag}_backfill] ({i}/{len(names)}) {name} "
-            f"-> {result['status']}, matches+{result.get('matches_inserted', 0)}, "
-            f"repaired+{result.get('matches_repaired', 0)}, "
-            f"odds+{result.get('odds_inserted', 0)} ({elapsed:.1f}s)",
-            flush=True,
-        )
-        summary.append(result)
+        result["_elapsed"] = time.monotonic() - t0
+        result["_name"] = name
         time.sleep(_PAUSE_BETWEEN_PLAYERS_S)
+        return result
+
+    if max_workers <= 1:
+        for name in names:
+            summary.append(_run_one(name))
+            r = summary[-1]
+            done += 1
+            print(
+                f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
+                f"-> {r['status']}, matches+{r.get('matches_inserted', 0)}, "
+                f"repaired+{r.get('matches_repaired', 0)}, "
+                f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
+                flush=True,
+            )
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_one, name): name for name in names}
+            for future in as_completed(futures):
+                r = future.result()
+                summary.append(r)
+                done += 1
+                print(
+                    f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
+                    f"-> {r['status']}, matches+{r.get('matches_inserted', 0)}, "
+                    f"repaired+{r.get('matches_repaired', 0)}, "
+                    f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
+                    flush=True,
+                )
 
     ok = sum(1 for r in summary if r["status"] == "ok")
     skipped = sum(1 for r in summary if r["status"] != "ok")
@@ -186,7 +286,7 @@ def _run_backfill_for_names(names: list[str], tag: str) -> list[dict]:
     return summary
 
 
-def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
+def run_backfill(n_players: int = 200, tour: str = "WTA", max_workers: int = 1) -> list[dict]:
     """`tour`: "WTA" | "ATP" -- generalizado 2026-08-03, pedido explícito
     del usuario tras el backfill WTA ("puedes sacar las cuotas
     históricas de los matches de ATP?"). El scraper de TennisExplorer
@@ -195,10 +295,10 @@ def run_backfill(n_players: int = 200, tour: str = "WTA") -> list[dict]:
     ranking (`get_top_rankings(tour=...)`)."""
     players = get_top_rankings(n=n_players, tour=tour)
     names = [p["nombre"] for p in players]
-    return _run_backfill_for_names(names, tag=tour.lower())
+    return _run_backfill_for_names(names, tag=tour.lower(), max_workers=max_workers)
 
 
-def run_backfill_from_wta_roster() -> list[dict]:
+def run_backfill_from_wta_roster(max_workers: int = 1) -> list[dict]:
     """2026-08-05, pedido explícito del usuario: "¿tenemos menos matches
     de WTA en base [que ATP]? ampliemos el backfill" -- hallazgo real
     que lo motivó: `TennisMatchHistory` solo tenía el historial de
@@ -217,10 +317,10 @@ def run_backfill_from_wta_roster() -> list[dict]:
 
     init_db_historical()
     names = sorted({r.player_name for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct()})
-    return _run_backfill_for_names(names, tag="wta_full_roster")
+    return _run_backfill_for_names(names, tag="wta_full_roster", max_workers=max_workers)
 
 
-def run_backfill_from_atp_roster() -> list[dict]:
+def run_backfill_from_atp_roster(max_workers: int = 1) -> list[dict]:
     """2026-08-05, pedido explícito del usuario: "verificar si tenemos
     todos los matches históricos con sus respectivas cuotas, sino
     lanzar el backfill para fetchear las cuotas históricas" -- hallazgo
@@ -251,10 +351,10 @@ def run_backfill_from_atp_roster() -> list[dict]:
     ):
         names.add(r.winner_name)
         names.add(r.loser_name)
-    return _run_backfill_for_names(sorted(names), tag="atp_full_roster")
+    return _run_backfill_for_names(sorted(names), tag="atp_full_roster", max_workers=max_workers)
 
 
-def run_backfill_for_missing_odds_opponents() -> list[dict]:
+def run_backfill_for_missing_odds_opponents(max_workers: int = 1) -> list[dict]:
     """"Segundo grado" de backfill -- 2026-08-06, pedido explícito del
     usuario: "expandir el backfill a TennisExplorer para matches que no
     tienen las cuotas históricas, mismo principio para wta".
@@ -330,16 +430,25 @@ def run_backfill_for_missing_odds_opponents() -> list[dict]:
             continue
         missing_opponents.add(full_opp)
 
-    return _run_backfill_for_names(sorted(missing_opponents), tag="missing_odds_opponents")
+    return _run_backfill_for_names(sorted(missing_opponents), tag="missing_odds_opponents", max_workers=max_workers)
+
+
+def _cli_max_workers(default: int = 1) -> int:
+    """2026-08-06, pedido explícito del usuario ("usaremos ... threads")
+    -- segundo argumento opcional de la CLI, ej.
+    `... missing_odds_opponents 8` = 8 threads en paralelo."""
+    if len(sys.argv) > 2:
+        return int(sys.argv[2])
+    return default
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "full_roster":
-        run_backfill_from_wta_roster()
+        run_backfill_from_wta_roster(max_workers=_cli_max_workers())
     elif len(sys.argv) > 1 and sys.argv[1] == "atp_full_roster":
-        run_backfill_from_atp_roster()
+        run_backfill_from_atp_roster(max_workers=_cli_max_workers())
     elif len(sys.argv) > 1 and sys.argv[1] == "missing_odds_opponents":
-        run_backfill_for_missing_odds_opponents()
+        run_backfill_for_missing_odds_opponents(max_workers=_cli_max_workers())
     else:
         n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
         run_backfill(n_players=n, tour="WTA")

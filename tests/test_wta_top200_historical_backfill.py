@@ -13,7 +13,7 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
 from scripts.tennis.wta_top200_historical_backfill import (
-    backfill_player, run_backfill, run_backfill_from_wta_roster, _to_iso_date,
+    backfill_player, run_backfill, run_backfill_from_wta_roster, _to_iso_date, _run_backfill_for_names,
 )
 from database.historical.tennis import WtaPlayerRankingHistory
 
@@ -44,7 +44,7 @@ def test_to_iso_date_fail_closed_on_garbage():
 
 def test_backfill_player_skips_when_no_slug():
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value=None,
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value=None,
     ):
         result = backfill_player("Nonexistent Player")
     assert result["status"] == "skipped_no_slug"
@@ -67,7 +67,7 @@ def test_backfill_player_inserts_match_and_odds():
         return [fake_match] if html == "year=2026" else []
 
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
     ), patch(
@@ -101,7 +101,7 @@ def test_backfill_player_idempotent_on_second_run():
         "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
     }
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
@@ -154,7 +154,7 @@ def test_backfill_player_repairs_existing_row_with_null_tournament():
         return [fake_match] if html == "year=2026" else []
 
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
     ), patch(
@@ -180,7 +180,7 @@ def test_backfill_player_skips_match_without_valid_date():
         "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
     }
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
@@ -199,7 +199,7 @@ def test_backfill_player_no_odds_row_when_both_odds_none():
         "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
     }
     with patch(
-        "scripts.tennis.wta_top200_historical_backfill.guess_player_slug", return_value="testplayer",
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
@@ -364,3 +364,90 @@ def test_run_backfill_for_missing_odds_opponents_skips_rows_with_real_odds():
         run_backfill_for_missing_odds_opponents()
 
     mock_bp.assert_not_called()
+
+
+def test_surname_key_from_full_name_normalizes_hyphens():
+    from scripts.tennis.wta_top200_historical_backfill import _surname_key_from_full_name
+    assert _surname_key_from_full_name("Pablo Carreno Busta") == "carreno busta"
+
+
+def test_surname_key_from_abbrev_normalizes_hyphens():
+    from scripts.tennis.wta_top200_historical_backfill import _surname_key_from_abbrev
+    assert _surname_key_from_abbrev("Carreno-Busta P.") == "carreno busta"
+
+
+def test_harvest_opponent_slug_persists_real_slug():
+    from datetime import datetime, timezone
+    from database.historical.tennis import TennisExplorerPlayerSlug
+    from scripts.tennis.wta_top200_historical_backfill import _harvest_opponent_slug
+
+    TennisExplorerPlayerSlug.delete().execute()
+    _harvest_opponent_slug("Osaka M.", "osaka-mari123", datetime.now(timezone.utc))
+    row = TennisExplorerPlayerSlug.get(TennisExplorerPlayerSlug.surname_key == "osaka")
+    assert row.slug == "osaka-mari123"
+
+
+def test_harvest_opponent_slug_noop_when_no_slug():
+    from datetime import datetime, timezone
+    from database.historical.tennis import TennisExplorerPlayerSlug
+    from scripts.tennis.wta_top200_historical_backfill import _harvest_opponent_slug
+
+    TennisExplorerPlayerSlug.delete().execute()
+    _harvest_opponent_slug("Osaka M.", None, datetime.now(timezone.utc))
+    assert TennisExplorerPlayerSlug.select().count() == 0
+
+
+def test_get_candidate_slugs_returns_harvested_matches():
+    from datetime import datetime, timezone
+    from database.historical.tennis import TennisExplorerPlayerSlug
+    from scripts.tennis.wta_top200_historical_backfill import _get_candidate_slugs
+
+    TennisExplorerPlayerSlug.delete().execute()
+    now = datetime.now(timezone.utc)
+    TennisExplorerPlayerSlug.create(surname_key="ruud", slug="ruud-c1234", discovered_at=now)
+    candidates = _get_candidate_slugs("Casper Ruud")
+    assert candidates == ["ruud-c1234"]
+
+
+def test_backfill_player_harvests_opponent_slugs_from_matches():
+    from database.historical.tennis import TennisExplorerPlayerSlug
+
+    TennisExplorerPlayerSlug.delete().execute()
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "opponent_slug": "pegula-real123", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
+    }
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        backfill_player("Test Player")
+
+    assert TennisExplorerPlayerSlug.select().where(TennisExplorerPlayerSlug.slug == "pegula-real123").exists()
+
+
+def test_run_backfill_for_names_sequential_by_default():
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        summary = _run_backfill_for_names(["A", "B", "C"], tag="test")
+    assert mock_bp.call_count == 3
+    assert len(summary) == 3
+
+
+def test_run_backfill_for_names_with_thread_pool():
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={"player": "x", "status": "ok", "matches_inserted": 1, "odds_inserted": 1},
+    ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
+        summary = _run_backfill_for_names(["A", "B", "C", "D"], tag="test", max_workers=4)
+    assert mock_bp.call_count == 4
+    assert len(summary) == 4
+    assert sum(r["matches_inserted"] for r in summary) == 4

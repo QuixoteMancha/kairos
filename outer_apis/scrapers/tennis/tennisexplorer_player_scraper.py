@@ -133,6 +133,35 @@ def guess_player_slug(player_name: str) -> str | None:
     return last_name
 
 
+def resolve_player_slug(player_name: str, candidate_slugs: list[str] = ()) -> str | None:
+    """2026-08-06, pedido explícito del usuario: "corrige la data de
+    matches por confusión de nombres" -- supera la LIMITACIÓN CONOCIDA
+    de `guess_player_slug` (apellido homónimo entre hermanos/parientes
+    en el circuito, ej. Naomi/Mari Osaka, Serena/Venus Williams,
+    Alexander/Mischa Zverev, Stefanos/Apostolos Tsitsipas -- todos
+    confirmados en vivo: el slug naive por apellido apunta al
+    HERMANO/A, no a quien buscamos).
+
+    Primero intenta la heurística naive (rápido, funciona para la
+    mayoría sin colisión real). Si falla, prueba cada `candidate_slugs`
+    (slugs REALES cosechados de los `href` de partidos ya fetcheados
+    contra ese apellido, ver `TennisExplorerPlayerSlug` -- NO son
+    adivinados, son URLs reales vistas en vivo) hasta encontrar uno que
+    verifique. Fail-closed: `None` si ninguno confirma -- nunca se
+    adivina cuál de los candidatos es, se exige verificación real
+    contra el `<title>` de la página."""
+    slug = guess_player_slug(player_name)
+    if slug is not None:
+        return slug
+    for candidate in candidate_slugs:
+        if not candidate:
+            continue
+        html = _fetch(candidate)
+        if html is not None and _verify_player_page(html, player_name):
+            return candidate
+    return None
+
+
 _MATCH_RE = re.compile(
     r'<td class="first time">(?P<date>[^<]*)</td>\s*'
     r'<td class="s-color"><span title="(?P<surface>[^"]*)"[^>]*>&nbsp;</span></td>\s*'
@@ -155,6 +184,17 @@ _MATCH_RE = re.compile(
 
 _NOTU_RE = re.compile(r'class="notU"[^>]*><strong>([^<]*)</strong>')
 _PLAIN_NAME_RE = re.compile(r'<a[^>]*>([^<]*)</a>')
+_HREF_SLUG_RE = re.compile(r'href="/player/([a-z0-9\-]+)/?"')
+
+
+def _extract_href_slug(block: str) -> str | None:
+    """"/player/alcaraz-5ab70/" -> "alcaraz-5ab70" -- el slug REAL
+    (con sufijo hash de desambiguación cuando aplica) tal cual lo usa
+    TennisExplorer, extraído del link ya presente en cualquier fila de
+    partido (sin request extra). Fail-closed: None si el bloque no
+    tiene un link de jugador reconocible."""
+    m = _HREF_SLUG_RE.search(block)
+    return m.group(1) if m else None
 
 def _clean_score(raw: str) -> str:
     """Quita los tiebreaks en `<sup>` (ej. '7-6<sup>1</sup>' -> '7-6') --
@@ -257,9 +297,19 @@ def _parse_year_html(html: str, self_name_hint: str) -> list[dict[str, Any]]:
             pm = _PLAIN_NAME_RE.search(block)
             return pm.group(1).strip() if pm else None
 
-        opponent = _plain_name(rm.group("player2_block") if self_is_first else rm.group("player1_block"))
+        opponent_block = rm.group("player2_block") if self_is_first else rm.group("player1_block")
+        opponent = _plain_name(opponent_block)
         if not opponent:
             continue
+        # 2026-08-06, pedido explícito del usuario -- "corrige la data
+        # de matches por confusión de nombres" -- el HREF real del
+        # rival (ej. "/player/alcaraz-5ab70/") YA viene en el HTML que
+        # se descarga (verificado en vivo), sin ningún request extra.
+        # Cosecharlo acá permite desambiguar hermanos/homónimos
+        # (Osaka/Williams/Zverev/Tsitsipas) sin adivinar por apellido
+        # ni necesitar una búsqueda real -- ver
+        # `resolve_player_slug`/`TennisExplorerPlayerSlug`.
+        opponent_slug = _extract_href_slug(opponent_block)
         odds_self = rm.group("odds_col1") if self_is_first else rm.group("odds_col2")
         odds_opp = rm.group("odds_col2") if self_is_first else rm.group("odds_col1")
         score = _reorient_score_to_self(score, self_is_first)
@@ -269,6 +319,7 @@ def _parse_year_html(html: str, self_name_hint: str) -> list[dict[str, Any]]:
             "tournament": current_tournament,
             "surface": rm.group("surface"),
             "opponent": opponent,
+            "opponent_slug": opponent_slug,
             "round": rm.group("round").strip(),
             "round_full": rm.group("round_full"),
             "score": score,

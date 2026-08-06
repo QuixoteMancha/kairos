@@ -31,6 +31,9 @@ from database.historical.tennis.wtaplayerranking import WtaPlayerRankingHistory
 # 2026-08-05, pedido explícito del usuario -- categoría real de torneo
 # (250/500/1000/Slam vs ITF/125), ver wtatournamentlevel.py.
 from database.historical.tennis.wtatournamentlevel import WtaTournamentLevel
+# 2026-08-06, pedido explícito del usuario -- cache de slugs reales de
+# TennisExplorer cosechados de hrefs, ver tennisexplorerplayerslug.py.
+from database.historical.tennis.tennisexplorerplayerslug import TennisExplorerPlayerSlug
 from database.historical.tennis.tournamentlocationcache import TournamentLocationCache
 from database.historical.tennis.tennisheadtohead import TennisHeadToHead
 from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
@@ -69,6 +72,7 @@ from database.historical.tennis.writer import (
 __all__ = [
     "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHistoricalOdds", "TennisHeadToHead",
     "TmlDatabaseMatch", "TournamentLocationCache", "WtaPlayerRankingHistory", "WtaTournamentLevel",
+    "TennisExplorerPlayerSlug",
     "TennisSurfaceMatchHistory", "TennisAbstractElo", "TennisAbstractYelo",
     "TennisAbstractCareerSplit", "TennisAbstractH2H",
     "save_rankings_snapshot", "save_serve_calibration_snapshot",

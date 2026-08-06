@@ -248,7 +248,7 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
-        WtaPlayerRankingHistory, WtaTournamentLevel,
+        WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
     )
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
@@ -275,6 +275,9 @@ def init_db_historical() -> None:
         # 2026-08-05, pedido explícito del usuario -- categoría real de
         # torneo WTA (250/500/1000/Slam vs ITF/125), tabla nueva.
         WtaTournamentLevel,
+        # 2026-08-06, pedido explícito del usuario -- cache de slugs
+        # reales de TennisExplorer cosechados de hrefs, tabla nueva.
+        TennisExplorerPlayerSlug,
     ], safe=True)
 
     # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):
