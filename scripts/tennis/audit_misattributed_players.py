@@ -72,12 +72,23 @@ def find_at_risk_players() -> list[str]:
     apellido") con otro nombre real conocido, sin importar si hoy
     tiene o no filas en `TennisMatchHistory` (a propósito -- así se
     detectan también los purgados por el incidente, que ya no
-    aparecen ahí)."""
+    aparecen ahí).
+
+    ATP restringido a 2016+/250+ (`TOUR_LEVELS_250_PLUS`, mismo
+    criterio que `run_backfill_from_atp_roster`) -- 2026-08-06,
+    corregido tras medir en vivo que sin este filtro el universo salta
+    a 2,605 candidatos (todo el historial 1968-2026, con colisiones
+    irrelevantes entre jugadores de épocas totalmente distintas que
+    nunca aparecerían en ningún pool evaluable actual)."""
     init_db_historical()
+    from outer_apis.scrapers.tennis.tml_database_scraper import TOUR_LEVELS_250_PLUS
+
     full_universe: set[str] = set()
-    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.winner_name).distinct():
+    tml_query = TmlDatabaseMatch.select().where(
+        (TmlDatabaseMatch.date >= "2016-01-01") & (TmlDatabaseMatch.level.in_(list(TOUR_LEVELS_250_PLUS)))
+    )
+    for r in tml_query:
         full_universe.add(r.winner_name)
-    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.loser_name).distinct():
         full_universe.add(r.loser_name)
     for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct():
         full_universe.add(r.player_name)
