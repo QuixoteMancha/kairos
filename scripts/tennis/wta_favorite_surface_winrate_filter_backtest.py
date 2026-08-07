@@ -245,6 +245,30 @@ def _self_won_set1(score: str | None) -> bool | None:
     return _self_won_set_n(score, 1)
 
 
+def _normalize_score_separators(score: str) -> str:
+    """2026-08-06, bug real encontrado en vivo (usuario preguntó por el
+    winrate de Svitolina tras ganar el set1, 28 de sus 563 partidos
+    reales quedaban sin dato de set1) -- `TennisMatchHistory` es una
+    tabla COMPARTIDA entre 2 scrapers reales: TennisExplorer
+    (`source="tennisexplorer"`, sets separados por COMA, ej.
+    "6-4, 4-6, 6-3") y Flashscore (`source="flashscore"`, un pipeline
+    más viejo/paralelo que sigue activo para tracking en vivo -- sets
+    separados por ESPACIO, ej. "7-6 6-4", verificado en vivo: 7,738 de
+    8,050 filas `source="flashscore"` tienen este formato). Ninguno de
+    los 2 parsers de set1/set2 sabía de esta segunda convención --
+    fail-closed correcto (nunca corrompió nada), pero descartaba
+    partidos reales con set1 perfectamente determinable.
+
+    Normaliza a la convención de coma (que el resto del pipeline ya
+    espera) SOLO si el string no trae comas -- si ya viene con coma
+    (TennisExplorer, o cualquier score de un solo set) se devuelve tal
+    cual, sin tocarlo."""
+    if "," in score:
+        return score
+    import re
+    return re.sub(r"(?<=\d)\s+(?=\d+-\d+)", ", ", score.strip())
+
+
 def _self_won_set_n(score: str | None, set_number: int) -> bool | None:
     """Generalización de `_self_won_set1` para cualquier set --
     2026-08-05, pedido explícito del usuario: "apliquemos las mismas
@@ -256,7 +280,7 @@ def _self_won_set_n(score: str | None, set_number: int) -> bool | None:
     if not score:
         return None
     import re
-    sets = [s.strip() for s in score.strip().split(",")]
+    sets = [s.strip() for s in _normalize_score_separators(score).split(",")]
     if len(sets) < set_number:
         return None
     m = re.match(r"^(\d+)-(\d+)$", sets[set_number - 1])
@@ -282,7 +306,7 @@ def _self_set1_game_diff(score: str | None) -> int | None:
     if not score:
         return None
     import re
-    first_set = score.strip().split(",")[0].strip()
+    first_set = _normalize_score_separators(score).split(",")[0].strip()
     m = re.match(r"^(\d+)-(\d+)$", first_set)
     if not m:
         return None

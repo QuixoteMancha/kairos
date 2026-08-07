@@ -151,6 +151,18 @@ def test_self_won_set1_fail_closed():
     assert _self_won_set1("6-6, 6-3") is None  # set 1 empatado, dato inconsistente
 
 
+def test_self_won_set1_handles_flashscore_space_separated_format():
+    # 2026-08-06, bug real encontrado en vivo (usuario preguntó por el
+    # winrate de Svitolina tras ganar el set1) -- `TennisMatchHistory`
+    # mezcla filas `source="tennisexplorer"` (comas: "7-6, 6-4") y
+    # `source="flashscore"` (espacios: "7-6 6-4", pipeline distinto y
+    # más viejo, sigue activo) -- ambas deben parsear igual.
+    assert _self_won_set1("7-6 6-4") is True
+    assert _self_won_set1("5-7 2-6") is False
+    assert _self_won_set_n("7-6 4-6 6-2", 2) is False
+    assert _self_set1_game_diff("7-6 6-4") == 1
+
+
 def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
     # Ivanovic es favorita (rank 5 < 300) y es "self" en esta fila -- ganó el set1 (6-4 self-first)
