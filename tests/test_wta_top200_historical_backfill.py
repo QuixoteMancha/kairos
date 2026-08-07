@@ -451,3 +451,49 @@ def test_run_backfill_for_names_with_thread_pool():
     assert mock_bp.call_count == 4
     assert len(summary) == 4
     assert sum(r["matches_inserted"] for r in summary) == 4
+
+
+def test_backfill_player_repairs_existing_row_with_empty_score():
+    # 2026-08-06, pedido explícito del usuario: "junta todos los
+    # matches sin score y sin cuotas y arma un script que haga fill de
+    # ambos campos" -- fila que quedó con score vacío en una corrida
+    # previa (fallo puntual, no de la fuente) debe repararse igual que
+    # ya se reparaba tournament=NULL.
+    from datetime import datetime, timezone
+    TennisMatchHistory.create(
+        player_name="Test Player", opponent_name="Kudermetova P.", match_date="2026-07-31",
+        result="L", score="", source="flashscore",
+        tournament="Washington", round="R16", surface="hard",
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+    fake_match = {
+        "date": "31.07.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Kudermetova P.", "round": "R16", "round_full": "round of 16",
+        "score": "7-6, 6-4", "odds_self": 1.21, "odds_opponent": 4.30,
+    }
+
+    def fake_fetch(slug, year=None):
+        return f"year={year}"
+
+    def fake_parse(html, name):
+        return [fake_match] if html == "year=2026" else []
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        result = backfill_player("Test Player")
+
+    assert result["matches_inserted"] == 0
+    assert result["matches_repaired"] == 1
+    assert result["odds_inserted"] == 1
+    with db_historical.connection_context():
+        row = TennisMatchHistory.get(TennisMatchHistory.player_name == "Test Player")
+        assert row.score == "7-6, 6-4"
+        assert row.result == "W"  # recalculado desde el score real (antes tenía "L" viejo/vacío)

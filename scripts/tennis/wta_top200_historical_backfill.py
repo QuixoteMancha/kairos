@@ -117,6 +117,30 @@ def _harvest_opponent_slug(opponent_abbrev: str, opponent_slug: str | None, now:
     )
 
 
+def _derive_result_from_comma_score(score: str) -> str:
+    """"W"/"L" contando sets ganados vs perdidos en un score YA en
+    convención coma (self primero por set) -- extraído 2026-08-06 para
+    reusar entre el alta de una fila nueva y la reparación de una fila
+    existente con `score` vacío (ver `backfill_player`, pedido
+    explícito del usuario: "junta todos los matches sin score y sin
+    cuotas y arma un script que haga fill de ambos campos")."""
+    sets_won = sets_lost = 0
+    for set_str in score.split(","):
+        set_str = set_str.strip()
+        if "-" not in set_str:
+            continue
+        a, b = set_str.split("-")[:2]
+        try:
+            a, b = int(a), int(b)
+        except ValueError:
+            continue
+        if a > b:
+            sets_won += 1
+        elif b > a:
+            sets_lost += 1
+    return "W" if sets_won > sets_lost else "L"
+
+
 def backfill_player(player_name: str) -> dict:
     slug = resolve_player_slug(player_name, candidate_slugs=_get_candidate_slugs(player_name))
     if slug is None:
@@ -147,23 +171,7 @@ def backfill_player(player_name: str) -> dict:
                 & (TennisMatchHistory.match_date == iso_date)
             )
             if existing_row is None:
-                # W/L real: contar sets ganados vs perdidos en el score reorientado
-                sets_won = sets_lost = 0
-                for set_str in m["score"].split(","):
-                    set_str = set_str.strip()
-                    if "-" not in set_str:
-                        continue
-                    a, b = set_str.split("-")[:2]
-                    try:
-                        a, b = int(a), int(b)
-                    except ValueError:
-                        continue
-                    if a > b:
-                        sets_won += 1
-                    elif b > a:
-                        sets_lost += 1
-                result = "W" if sets_won > sets_lost else "L"
-
+                result = _derive_result_from_comma_score(m["score"])
                 TennisMatchHistory.create(
                     player_name=player_name, opponent_name=m["opponent"], match_date=iso_date,
                     result=result, score=m["score"], source="tennisexplorer",
@@ -171,19 +179,33 @@ def backfill_player(player_name: str) -> dict:
                     fetched_at=now,
                 )
                 inserted_matches += 1
-            elif existing_row.tournament is None and m["tournament"] is not None:
-                # 2026-08-04, pedido explícito -- REPARAR filas ya
-                # existentes que quedaron con tournament=NULL por el
-                # bug real de `type-women2` hardcodeado (ver
-                # tennisexplorer_player_scraper.py), ahora corregido.
-                # Sin esto, re-correr el backfill saltearía estas filas
-                # para siempre (el chequeo de existencia de arriba las
-                # trata como "ya migradas") sin repararlas nunca.
-                existing_row.tournament = m["tournament"]
-                existing_row.round = m["round"]
-                existing_row.surface = m["surface"]
-                existing_row.save()
-                repaired_matches += 1
+            else:
+                repaired_this_row = False
+                if existing_row.tournament is None and m["tournament"] is not None:
+                    # 2026-08-04, pedido explícito -- REPARAR filas ya
+                    # existentes que quedaron con tournament=NULL por el
+                    # bug real de `type-women2` hardcodeado (ver
+                    # tennisexplorer_player_scraper.py), ahora corregido.
+                    # Sin esto, re-correr el backfill saltearía estas filas
+                    # para siempre (el chequeo de existencia de arriba las
+                    # trata como "ya migradas") sin repararlas nunca.
+                    existing_row.tournament = m["tournament"]
+                    existing_row.round = m["round"]
+                    existing_row.surface = m["surface"]
+                    repaired_this_row = True
+                if not existing_row.score and m["score"]:
+                    # 2026-08-06, pedido explícito del usuario: "junta
+                    # todos los matches sin score y sin cuotas y arma un
+                    # script que haga fill de ambos campos" -- filas que
+                    # quedaron con `score` vacío en un fetch previo (fallo
+                    # puntual de esa corrida, no de la fuente -- re-fetch
+                    # real puede traer el dato esta vez).
+                    existing_row.score = m["score"]
+                    existing_row.result = _derive_result_from_comma_score(m["score"])
+                    repaired_this_row = True
+                if repaired_this_row:
+                    existing_row.save()
+                    repaired_matches += 1
 
             if m["odds_self"] is not None or m["odds_opponent"] is not None:
                 if not TennisHistoricalOdds.select().where(
