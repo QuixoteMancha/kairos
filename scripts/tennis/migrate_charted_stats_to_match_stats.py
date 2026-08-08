@@ -87,7 +87,7 @@ def run_migration() -> dict:
                                           MatchHistory.player_b_name, MatchHistory.match_date)
         ]
         charted = [
-            {"stats_id": s.id, "match_id": s.match_id, "raw_stats_json": s.raw_stats_json,
+            {"stats_id": s.id, "charted_match_id": s.match.match_id, "raw_stats_json": s.raw_stats_json,
              "player_a_name": s.match.player_a_name, "player_b_name": s.match.player_b_name,
              "match_date": s.match.match_date}
             for s in ChartedMatchStats.select().join(ChartedMatch)
@@ -117,6 +117,14 @@ def run_migration() -> dict:
                 continue
             MatchStats.create(
                 match_history=mh_id, source="sackmann_match_charting_project",
+                # 2026-08-08, bug real encontrado en producción: la tabla
+                # real `tennis_match_stats` tiene `market_id` NOT NULL
+                # (desalineación legacy con el modelo, que lo marca
+                # `null=True` -- SQLite no permite relajar un NOT NULL
+                # existente vía ALTER TABLE) -- valor sintético único y
+                # trazable (id real de ChartingProject) para satisfacer
+                # el constraint sin inventar un market_id de Kalshi falso.
+                market_id=f"charted:{c['charted_match_id']}",
                 raw_stats_json=c["raw_stats_json"], fetched_at=now,
             )
             created += 1
