@@ -331,6 +331,14 @@ def init_db_historical() -> None:
         ("serve_games_played_a", "INTEGER"), ("serve_games_played_b", "INTEGER"),
     ]:
         _add_column_if_missing(db_historical, "tennis_match_stats", _col, _sql_type)
+    # 2026-08-08, pedido explícito del usuario -- fusión de
+    # `ChartedMatchStats` dentro de `MatchStats`: nueva FK opcional a
+    # `MatchHistory` (columna real `match_history_id`, NO reemplaza la
+    # FK legacy `match_id` -- ver docstring del modelo) + `source` para
+    # distinguir origen ("flashscore" default retrocompatible con las
+    # 66 filas reales, o "sackmann_match_charting_project").
+    _add_column_if_missing(db_historical, "tennis_match_stats", "match_history_id", "INTEGER")
+    _add_column_if_missing(db_historical, "tennis_match_stats", "source", "VARCHAR(255) DEFAULT 'flashscore'")
     # 2026-08-02, pedido explícito del usuario: clima para ChartedMatch
     # (Match Charting Project) -- agregado DESPUÉS del import inicial de
     # 7744 filas, requiere ALTER TABLE igual que los casos de arriba.

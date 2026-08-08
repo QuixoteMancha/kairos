@@ -23,7 +23,10 @@ esta estructura (en ese momento, decidir explícitamente si conviene
 renombrar las tablas reales a algo sport-agnostic -- ESO SÍ requeriría
 una migración real de datos, no se hace a ciegas)."""
 
-from peewee import BooleanField, CharField, DateField, DateTimeField, FloatField, ForeignKeyField, IntegerField, TextField
+from peewee import (
+    BooleanField, CharField, DateField, DateTimeField, DeferredForeignKey, FloatField,
+    ForeignKeyField, IntegerField, TextField,
+)
 
 from database.base_models import HistoricalBaseModel
 
@@ -93,6 +96,18 @@ class MatchStats(HistoricalBaseModel):
         indexes = ((("match",), True),)
 
     match = ForeignKeyField(Match, backref="stats", on_delete="CASCADE", unique=True, null=True)
+    # 2026-08-08, pedido explícito del usuario -- fusión de `ChartedMatchStats`
+    # acá: `match` (arriba) sigue apuntando a `Match` (el tracker VIVO de
+    # Kalshi, Categoría B, fuera de la consolidación) por retrocompatibilidad
+    # de las 66 filas reales ya vinculadas así -- NO se re-apunta (no hay
+    # vínculo cierto entre esas 66 filas y `MatchHistory` sin el mismo
+    # matching fuzzy que se viene evitando toda la sesión). `match_history`
+    # es el vínculo NUEVO, para partidos con identidad ya cierta (Charting
+    # Project migrado, y a futuro el worker de Kalshi que cree la fila de
+    # `MatchHistory` en el momento con el nombre real del ticker -- ver
+    # docstring de ese worker cuando exista).
+    match_history = DeferredForeignKey("MatchHistory", backref="stats", on_delete="CASCADE", unique=True, null=True)
+    source = CharField(default="flashscore")  # "flashscore" | "sackmann_match_charting_project"
     # Backwards-compatible identifier fields used by legacy code/tests
     market_id = CharField(null=True, unique=True)
     flashscore_match_id = CharField(null=True)
