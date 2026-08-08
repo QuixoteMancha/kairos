@@ -24,7 +24,21 @@ investigado en sesiones previas) -- se copia tal cual a
 `MatchHistory.match_date` por ser la mejor aproximación disponible para
 estas filas (sin cruce contra TennisExplorer no hay fecha más precisa),
 pero quien consuma esa columna debe saber que es aproximada para las
-filas `source="sackmann"`."""
+filas `source="sackmann"`.
+
+ORDEN DE CORRIDA -- IMPORTANTE, regresión real encontrada 2026-08-08:
+correr ESTE script (`migrate_all_tml_rows`, cobertura masiva, fecha
+aproximada de torneo) DESPUÉS de
+`validate_match_history_against_sackmann.py::run_validation` (más
+preciso: fecha real de partido + torneo real, cruzado contra
+TennisExplorer) SOBRESCRIBE esos ~24,853 partidos ya refinados con la
+fecha/torneo menos precisos, perdiendo la mejora. El orden correcto es
+SIEMPRE: (1) este script primero (base completa), (2)
+`validate_match_history_against_sackmann.py` después (refina el
+subconjunto que cruza con TennisExplorer). Si se corre en el orden
+equivocado, re-correr (2) al final para restaurar la precisión --
+ambos son idempotentes por el mismo esquema de `match_id`, así que
+"reparar" el orden es seguro."""
 
 from __future__ import annotations
 

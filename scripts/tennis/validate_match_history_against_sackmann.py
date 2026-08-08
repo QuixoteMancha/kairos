@@ -23,7 +23,16 @@ documentado -- así que NO se usa como clave de join):
      `result_a`).
 
 Fail-closed: 0 candidatos o 2+ candidatos sin que el score desempate a
-exactamente 1 -> NO se valida, va a `TennisMatchHistoryUnvalidated`."""
+exactamente 1 -> NO se valida, va a `TennisMatchHistoryUnvalidated`.
+
+ORDEN DE CORRIDA -- correr ESTE script DESPUÉS de
+`migrate_tml_to_match_history.py::migrate_all_tml_rows` (ver ese
+docstring para el detalle de la regresión real 2026-08-08 que motivó
+esta nota): este script escribe fecha real de partido + torneo real
+(más preciso), el otro escribe fecha de inicio de torneo (más
+aproximado, pero cobertura completa de Sackmann). Corrido en el orden
+correcto, este script refina el subconjunto que sí cruza con
+TennisExplorer sin perder cobertura del resto."""
 
 from __future__ import annotations
 
