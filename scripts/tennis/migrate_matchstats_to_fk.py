@@ -23,7 +23,7 @@ relación."""
 from __future__ import annotations
 
 from database.db import init_db_historical, db_historical
-from database.historical.models import Match, MatchStats
+from database.historical.tennis.models import Match, MatchStats
 
 
 def run_migration(dry_run: bool = False) -> dict:

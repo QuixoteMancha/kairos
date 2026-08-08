@@ -20,14 +20,12 @@ using player NAME as the identifier (no surrogate Player table/FK chain):
 on a fresh fetch (never on a cache hit).
 """
 
-from database.historical.models import (
+from database.historical.tennis.models import (
     Match as TennisScannedMatch,
     ProbabilityTick as TennisMatchProbabilityTick,
     MatchWeather as TennisMatchWeather,
     MatchStats as TennisMatchStats,
     MatchStatsSet as TennisMatchStatsSet,
-)
-from database.historical.tennis.models import (
     TennisPlayerBio,
     TennisPlayerRanking,
     TennisServeCalibration,
@@ -49,11 +47,15 @@ from database.historical.tennis.models import (
     ChartedMatchStats,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
-# 2026-08-08: los modelos GENÉRICOS (match-tracking + clima, reusables
-# entre deportes) viven en `database.historical.models`; los
-# ESPECÍFICOS de tenis en `database.historical.tennis.models` -- ver
-# docstrings de ambos módulos. Este paquete reexporta ambos grupos bajo
-# los nombres históricos (`TennisScannedMatch`, etc.) para no romper el
+# 2026-08-08, corregido tras revisión del usuario ("dejaste un modelo
+# propio de tennis en models.py"): `Match`/`ProbabilityTick`/
+# `MatchWeather`/`MatchStats`/`MatchStatsSet` son 100% tenis en la
+# práctica (table_name literal "tennis_*", ningún otro deporte los usa
+# hoy) -- viven en `database.historical.tennis.models` junto con el
+# resto de lo específico de tenis, NO en `database.historical.models`
+# (reservado para modelos base genuinamente compartidos entre 2+
+# deportes, que hoy no existen). Este paquete reexporta todo bajo los
+# nombres históricos (`TennisScannedMatch`, etc.) para no romper el
 # código existente.
 from database.historical.tennis.chartedmatchimport import (
     find_overlapping_scanned_match, save_charted_match, save_charted_match_stats,

@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.models import Match as TennisScannedMatch
-from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 
 
 def _now():

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.models import MatchStats as TennisMatchStats
+from database.historical.tennis.models import MatchStats as TennisMatchStats
 
 
 def _now():

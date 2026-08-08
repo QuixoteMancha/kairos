@@ -14,8 +14,8 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.models import Match as TennisScannedMatch
-from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis import archive_db
 from database.historical.tennis.archiver import should_archive, archive_oldest_half, ARCHIVE_TRIGGER_RATIO
 

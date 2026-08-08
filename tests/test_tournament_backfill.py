@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.models import Match as TennisScannedMatch
+from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.matchtracking import backfill_missing_tournaments
 
 

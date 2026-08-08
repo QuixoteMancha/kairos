@@ -11,8 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.models import Match as TennisScannedMatch
-from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.archive_db import ArchiveNotMountedError
 from outer_apis.sports.tennis.volatility_calibration import (
     _bucket_for_rank, _matchup_buckets_match, get_empirical_volatility_for_matchup, MIN_MATCHES_FOR_STAT,

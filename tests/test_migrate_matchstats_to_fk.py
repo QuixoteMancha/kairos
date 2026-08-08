@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.models import Match, MatchStats
+from database.historical.tennis.models import Match, MatchStats
 from scripts.tennis.migrate_matchstats_to_fk import run_migration
 
 

@@ -24,8 +24,8 @@ import shutil
 from typing import Any
 
 from database.db import DB_HISTORICAL_PATH, init_db_historical
-from database.historical.models import Match as TennisScannedMatch
-from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.archive_db import (
     ArchivedTennisScannedMatch, ArchivedTennisMatchProbabilityTick,
     ArchiveNotMountedError, _ensure_archive_db_initialized,

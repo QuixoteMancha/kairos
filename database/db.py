@@ -22,13 +22,15 @@ Estructura del paquete `database/` (carpetas por tema, mismo patrón que
     │   ├── limitarbsignal.py
     │   └── writer.py
     └── historical/                 (db_historical, DB_HISTORICAL_PATH — referencia)
-        ├── models.py               (2026-08-08: modelos BASE de match-tracking+clima,
-        │                            reusables entre deportes -- Match/ProbabilityTick/
-        │                            MatchWeather/MatchStats/MatchStatsSet)
+        ├── models.py               (2026-08-08: modelos BASE genuinamente reusables
+        │                            entre 2+ deportes -- HOY VACÍO de modelos
+        │                            concretos, ver su docstring)
         ├── market_data/            (KalshiMarketTick, CryptoPriceSnapshot — rescatadas)
         ├── team_sports/            (TeamRating, TeamMatchHistory, TeamHeadToHead + writer.py)
         └── tennis/                 (models.py: TODO lo específico de tenis en un solo
-                                      archivo, ver su docstring; writer.py)
+                                      archivo -- incluye Match/ProbabilityTick/
+                                      MatchWeather/MatchStats (100% tenis en la
+                                      práctica hoy, ver su docstring); writer.py)
 
 Rescatado (patrón, no el código completo) de la arquitectura pre-"extreme
 makeover" (`src/database/database.py`, borrado en `02d7f35`): mismo motor
@@ -292,7 +294,7 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "tennis_recent_result", "round", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_scanned_match", "round", "VARCHAR(255)")
     # 2026-08-08, revisión del consolidado de modelos (pedido explícito
-    # del usuario) -- `MatchStats` (database/historical/models.py)
+    # del usuario) -- `MatchStats` (database/historical/tennis/models.py)
     # agrega la FK `match` (columna real `match_id`) + 28 columnas de
     # stats tipificadas nuevas sobre la tabla YA EXISTENTE
     # `tennis_match_stats` (66 filas reales en producción al momento de

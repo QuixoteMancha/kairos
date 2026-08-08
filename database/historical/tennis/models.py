@@ -1,20 +1,183 @@
 """Modelos ESPECÍFICOS de tenis -- 2026-08-08, pedido explícito del
 usuario: "definiendo modelos específicos en un solo file dentro de las
-carpetas de deportes" (ver docstring de `database/historical/models.py`
-para el criterio completo de qué queda genérico vs. qué es específico
-de un deporte).
+carpetas de deportes".
 
-Todo lo que hay acá es SOLO tenis (ATP+WTA): historial de partidos,
-cuotas, ranking, calibración de saque, Match Charting Project, cache de
-slugs de TennisExplorer, ubicación de torneos. Lo genérico/reusable
-(match-tracking + clima, hoy solo usado por tenis pero agnóstico de
-deporte en estructura) vive en `database/historical/models.py` --
-`database/historical/tennis/__init__.py` reexporta ambos grupos bajo
-los nombres históricos (`TennisScannedMatch`, etc.)."""
+Todo lo que hay acá es SOLO tenis (ATP+WTA): match-tracking en vivo
+(scan de Kalshi, ticks de precio, clima, stats de partido/set),
+historial de partidos, cuotas, ranking, calibración de saque, Match
+Charting Project, cache de slugs de TennisExplorer, ubicación de
+torneos.
+
+2026-08-08, corrección tras revisión del usuario ("dejaste un modelo
+propio de tennis en models.py"): `Match`/`ProbabilityTick`/
+`MatchWeather`/`MatchStats`/`MatchStatsSet` se habían dejado en
+`database/historical/models.py` (el archivo de modelos BASE,
+supuestamente genéricos/reusables entre deportes) razonando que su
+ESTRUCTURA era agnóstica de deporte -- pero en la realidad su
+`table_name` es literalmente tenis (`tennis_scanned_match`,
+`tennis_match_probability_tick`, etc.) y HOY ningún otro deporte los
+usa. Contradice la regla de "solo modelos base reales" en `models.py`
+-- movidos acá. `database/historical/models.py` queda sin modelos
+concretos hasta que exista un segundo deporte que de verdad comparta
+esta estructura (en ese momento, decidir explícitamente si conviene
+renombrar las tablas reales a algo sport-agnostic -- ESO SÍ requeriría
+una migración real de datos, no se hace a ciegas)."""
 
 from peewee import BooleanField, CharField, DateField, DateTimeField, FloatField, ForeignKeyField, IntegerField, TextField
 
 from database.base_models import HistoricalBaseModel
+
+
+class Match(HistoricalBaseModel):
+    """Un registro por CADA partido detectado en un scan real.
+    `market_id`/`ticker_a`/`ticker_b` para el tracking de Kalshi,
+    `player_a/b_rank_at_match` con el ranking REAL al momento del
+    partido (no el actual), `tournament`/`round` agregados después vía
+    ALTER TABLE (ver `_add_column_if_missing` en `database/db.py`),
+    `winner`/`settled_at` NULL hasta que el mercado resuelva."""
+
+    class Meta:
+        table_name = "tennis_scanned_match"
+        indexes = ((("market_id",), True),)
+
+    market_id = CharField(unique=True)
+    ticker_a = CharField()
+    ticker_b = CharField()
+    tour = CharField()
+    surface = CharField(null=True)
+    tournament = CharField(null=True)
+    round = CharField(null=True)
+    player_a_name = CharField()
+    player_b_name = CharField()
+    player_a_rank_at_match = IntegerField(null=True)
+    player_b_rank_at_match = IntegerField(null=True)
+    best_of = IntegerField()
+    close_time = CharField(null=True)
+    detected_at = DateTimeField()
+    winner = CharField(null=True)
+    settled_at = DateTimeField(null=True)
+
+
+class ProbabilityTick(HistoricalBaseModel):
+    class Meta:
+        table_name = "tennis_match_probability_tick"
+        indexes = ((("match", "observed_at"), False),)
+
+    match = ForeignKeyField(Match, backref="ticks", on_delete="CASCADE")
+    observed_at = DateTimeField()
+    market_price_a = FloatField(null=True)
+    model_fair_a = FloatField(null=True)
+
+
+class MatchWeather(HistoricalBaseModel):
+    class Meta:
+        table_name = "tennis_match_weather"
+        indexes = ((("match", "phase"), True),)
+
+    match = ForeignKeyField(Match, backref="weather", on_delete="CASCADE")
+    phase = CharField()  # before|during|end
+    observed_at = DateTimeField()
+    temperature_c = FloatField(null=True)
+    humidity_pct = FloatField(null=True)
+    wind_kmh = FloatField(null=True)
+    fetched_at = DateTimeField(null=True)
+
+
+class MatchStats(HistoricalBaseModel):
+    """Raw and normalized match-level stats, vía Flashscore.
+    `raw_stats_json` conserva el contenido original; los campos
+    tipificados abajo son las métricas más habituales."""
+
+    class Meta:
+        table_name = "tennis_match_stats"
+        indexes = ((("match",), True),)
+
+    match = ForeignKeyField(Match, backref="stats", on_delete="CASCADE", unique=True, null=True)
+    # Backwards-compatible identifier fields used by legacy code/tests
+    market_id = CharField(null=True, unique=True)
+    flashscore_match_id = CharField(null=True)
+    raw_stats_json = TextField()
+    fetched_at = DateTimeField()
+
+    # Match-level totals
+    aces_a = IntegerField(null=True)
+    aces_b = IntegerField(null=True)
+    double_faults_a = IntegerField(null=True)
+    double_faults_b = IntegerField(null=True)
+    winners_a = IntegerField(null=True)
+    winners_b = IntegerField(null=True)
+    unforced_errors_a = IntegerField(null=True)
+    unforced_errors_b = IntegerField(null=True)
+    total_points_won_a = IntegerField(null=True)
+    total_points_won_b = IntegerField(null=True)
+    service_games_won_a = IntegerField(null=True)
+    service_games_won_b = IntegerField(null=True)
+    return_games_won_a = IntegerField(null=True)
+    return_games_won_b = IntegerField(null=True)
+
+    # Percentage stats
+    first_serve_pct_a = FloatField(null=True)
+    first_serve_pct_b = FloatField(null=True)
+    second_serve_pct_a = FloatField(null=True)
+    second_serve_pct_b = FloatField(null=True)
+    first_serve_points_won_pct_a = FloatField(null=True)
+    first_serve_points_won_pct_b = FloatField(null=True)
+    second_serve_points_won_pct_a = FloatField(null=True)
+    second_serve_points_won_pct_b = FloatField(null=True)
+    break_points_won_a = IntegerField(null=True)
+    break_points_won_b = IntegerField(null=True)
+    break_points_faced_a = IntegerField(null=True)
+    break_points_faced_b = IntegerField(null=True)
+    break_points_saved_a = IntegerField(null=True)
+    break_points_saved_b = IntegerField(null=True)
+    serve_games_played_a = IntegerField(null=True)
+    serve_games_played_b = IntegerField(null=True)
+
+
+class MatchStatsSet(HistoricalBaseModel):
+    """Set-level stats -- una fila por set dentro de un `Match`, mismos
+    campos tipificados que `MatchStats` pero para ese set individual."""
+
+    class Meta:
+        table_name = "tennis_match_stats_set"
+        indexes = ((("match", "set_number"), True),)
+
+    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE")
+    set_number = IntegerField()
+    raw_stats_json = TextField(null=True)
+    fetched_at = DateTimeField(null=True)
+
+    aces_a = IntegerField(null=True)
+    aces_b = IntegerField(null=True)
+    double_faults_a = IntegerField(null=True)
+    double_faults_b = IntegerField(null=True)
+    winners_a = IntegerField(null=True)
+    winners_b = IntegerField(null=True)
+    unforced_errors_a = IntegerField(null=True)
+    unforced_errors_b = IntegerField(null=True)
+    total_points_won_a = IntegerField(null=True)
+    total_points_won_b = IntegerField(null=True)
+    service_games_won_a = IntegerField(null=True)
+    service_games_won_b = IntegerField(null=True)
+    return_games_won_a = IntegerField(null=True)
+    return_games_won_b = IntegerField(null=True)
+
+    first_serve_pct_a = FloatField(null=True)
+    first_serve_pct_b = FloatField(null=True)
+    second_serve_pct_a = FloatField(null=True)
+    second_serve_pct_b = FloatField(null=True)
+    first_serve_points_won_pct_a = FloatField(null=True)
+    first_serve_points_won_pct_b = FloatField(null=True)
+    second_serve_points_won_pct_a = FloatField(null=True)
+    second_serve_points_won_pct_b = FloatField(null=True)
+    break_points_won_a = IntegerField(null=True)
+    break_points_won_b = IntegerField(null=True)
+    break_points_faced_a = IntegerField(null=True)
+    break_points_faced_b = IntegerField(null=True)
+    break_points_saved_a = IntegerField(null=True)
+    break_points_saved_b = IntegerField(null=True)
+    serve_games_played_a = IntegerField(null=True)
+    serve_games_played_b = IntegerField(null=True)
 
 
 class TennisPlayerBio(HistoricalBaseModel):
