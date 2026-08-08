@@ -40,8 +40,17 @@ def migrate_all_tml_rows() -> dict:
     created = updated = unchanged = skipped_invalid = 0
 
     with db_historical.connection_context():
-        total = TmlDatabaseMatch.select().count()
-        for row in TmlDatabaseMatch.select().iterator():
+        # Materializar TODO en memoria antes de escribir -- 2026-08-08,
+        # bug real encontrado en producción: `.iterator()` (streaming)
+        # mantiene un cursor de lectura abierto sobre la misma conexión
+        # mientras se hacen los INSERT/UPDATE de abajo, y SQLite tira
+        # "database is locked" -- 197,998 filas caben cómodo en memoria,
+        # no hace falta streaming acá.
+        tml_rows = list(TmlDatabaseMatch.select())
+        total = len(tml_rows)
+
+    with db_historical.connection_context():
+        for row in tml_rows:
             if not row.winner_name or not row.loser_name:
                 skipped_invalid += 1
                 continue
