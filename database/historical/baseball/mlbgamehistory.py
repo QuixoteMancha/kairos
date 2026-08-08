@@ -1,11 +1,6 @@
-from peewee import BooleanField, CharField, DateTimeField, FloatField, IntegerField, Model, TextField
+from peewee import BooleanField, CharField, DateTimeField, FloatField, IntegerField, TextField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class MlbGameHistory(HistoricalBaseModel):

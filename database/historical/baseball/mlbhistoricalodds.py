@@ -1,11 +1,6 @@
-from peewee import CharField, DateTimeField, FloatField, IntegerField, Model
+from peewee import CharField, DateTimeField, FloatField, IntegerField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class MlbHistoricalOdds(HistoricalBaseModel):

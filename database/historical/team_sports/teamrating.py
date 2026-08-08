@@ -4,14 +4,9 @@ database/historical/team_sports/__init__.py for the full research context
 (which sports have live sources, which don't).
 """
 
-from peewee import CharField, DateTimeField, FloatField, IntegerField, Model, TextField
+from peewee import CharField, DateTimeField, FloatField, IntegerField, TextField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class TeamRating(HistoricalBaseModel):

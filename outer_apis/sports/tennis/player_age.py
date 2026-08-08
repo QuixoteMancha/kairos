@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from database.db import init_db_historical
-from database.historical.tennis.tennisplayerbio import TennisPlayerBio
+from database.historical.match_models import TennisPlayerBio
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import get_date_of_birth as _fetch_dob
 
 

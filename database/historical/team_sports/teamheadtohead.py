@@ -1,11 +1,6 @@
-from peewee import CharField, DateTimeField, IntegerField, Model
+from peewee import CharField, DateTimeField, IntegerField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class TeamHeadToHead(HistoricalBaseModel):

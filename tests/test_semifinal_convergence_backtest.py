@@ -13,8 +13,8 @@ import pytest
 
 from database.db import init_db_historical, db_historical, init_db, db as db_accounting
 from database.accounting.limitarbsignal import LimitArbSignal
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
+from database.historical.match_models import Match as TennisScannedMatch
+from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
 from scripts.tennis.semifinal_convergence_backtest import run_backtest
 
 _VALID_GATE = {

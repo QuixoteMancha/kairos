@@ -36,9 +36,9 @@ import time
 from datetime import date as dt_date, datetime, timezone
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
-from database.historical.tennis.tennisexplorerplayerslug import TennisExplorerPlayerSlug
+from database.historical.tennis import TennisMatchHistory
+from database.historical.tennis import TennisHistoricalOdds
+from database.historical.tennis import TennisExplorerPlayerSlug
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
@@ -363,7 +363,7 @@ def run_backfill_from_atp_roster(max_workers: int = 1) -> list[dict]:
     1968-2026 sin filtrar) -- acotar al rango/nivel relevante evita un
     backfill de +50h innecesario sobre jugadores que nunca calificarían
     para el pool filtrado igual."""
-    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from database.historical.tennis import TmlDatabaseMatch
     from outer_apis.scrapers.tennis.tml_database_scraper import TOUR_LEVELS_250_PLUS
 
     init_db_historical()
@@ -404,7 +404,7 @@ def run_backfill_for_missing_odds_opponents(max_workers: int = 1) -> list[dict]:
     ya es conservador (739 jugadores ATP corridos de un tirón sin
     incidentes en la sesión anterior)."""
     from database.historical.tennis import TennisHistoricalOdds, WtaPlayerRankingHistory
-    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from database.historical.tennis import TmlDatabaseMatch
 
     init_db_historical()
 

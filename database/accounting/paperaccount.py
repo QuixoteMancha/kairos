@@ -6,14 +6,9 @@ the hard red line: this is 100% simulated money, never real.
 
 from datetime import datetime
 
-from peewee import DateTimeField, FloatField, Model
+from peewee import DateTimeField, FloatField
 
-from database.db import db
-
-
-class BaseModel(Model):
-    class Meta:
-        database = db
+from database.base_models import BaseModel
 
 
 class PaperAccount(BaseModel):

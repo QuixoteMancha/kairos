@@ -18,14 +18,9 @@ real capital at risk.
 
 from datetime import datetime
 
-from peewee import CharField, DateTimeField, FloatField, IntegerField, Model
+from peewee import CharField, DateTimeField, FloatField, IntegerField
 
-from database.db import db
-
-
-class BaseModel(Model):
-    class Meta:
-        database = db
+from database.base_models import BaseModel
 
 
 class PaperTrade(BaseModel):

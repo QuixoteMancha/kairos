@@ -9,8 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
+from database.historical.tennis import TennisMatchHistory, TennisHistoricalOdds
 from scripts.tennis.real_market_odds_backtest import (
     _devig_prob, _load_priced_matches, calibration_by_real_odds, run_strategy1_with_real_odds,
 )

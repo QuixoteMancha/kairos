@@ -37,8 +37,8 @@ import statistics
 from typing import Any
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
+from database.historical.tennis import TennisMatchHistory
+from database.historical.tennis import TennisHistoricalOdds
 from outer_apis.kalshi.fees import leg_fee_fraction
 
 

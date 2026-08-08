@@ -21,12 +21,12 @@ from typing import Any
 LOOKBACK_DAYS_DEFAULT = 365.0
 
 from database.db import init_db_historical
-from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
-from database.historical.tennis.tennisservecalibration import TennisServeCalibration
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennisheadtohead import TennisHeadToHead
-from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
-from database.historical.tennis.tennisabstractelo import TennisAbstractElo, TennisAbstractYelo
+from database.historical.match_models import (
+    TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory,
+    TennisHeadToHead, TennisSurfaceMatchHistory, TennisAbstractElo,
+    TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
+    TennisRecentResult,
+)
 
 
 def _now():
@@ -525,8 +525,9 @@ def get_current_tennisabstract_yelo(tour: str, max_age_hours: float = _TA_ELO_FR
         return None
 
 
-from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
-from database.historical.tennis.tennisrecentresult import TennisRecentResult
+from database.historical.match_models import (
+    TennisAbstractCareerSplit, TennisAbstractH2H, TennisRecentResult,
+)
 
 _TA_PLAYER_STATS_FRESHNESS_HOURS = 24 * 7  # 1 semana -- career splits/H2H cambian muy lento partido a partido
 

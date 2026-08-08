@@ -20,34 +20,36 @@ using player NAME as the identifier (no surrogate Player table/FK chain):
 on a fresh fetch (never on a cache hit).
 """
 
-from database.historical.tennis.tennisplayerranking import TennisPlayerRanking
-from database.historical.tennis.tennisservecalibration import TennisServeCalibration
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
-from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
-# 2026-08-05, pedido explícito del usuario -- ranking real semanal WTA
-# (equivalente al de TML-Database para ATP), ver wtaplayerranking.py.
-from database.historical.tennis.wtaplayerranking import WtaPlayerRankingHistory
-# 2026-08-05, pedido explícito del usuario -- categoría real de torneo
-# (250/500/1000/Slam vs ITF/125), ver wtatournamentlevel.py.
-from database.historical.tennis.wtatournamentlevel import WtaTournamentLevel
-# 2026-08-06, pedido explícito del usuario -- cache de slugs reales de
-# TennisExplorer cosechados de hrefs, ver tennisexplorerplayerslug.py.
-from database.historical.tennis.tennisexplorerplayerslug import TennisExplorerPlayerSlug
-from database.historical.tennis.tournamentlocationcache import TournamentLocationCache
-from database.historical.tennis.tennisheadtohead import TennisHeadToHead
-from database.historical.tennis.tennissurfacematchhistory import TennisSurfaceMatchHistory
-from database.historical.tennis.tennisabstractelo import TennisAbstractElo, TennisAbstractYelo
-from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
-from database.historical.tennis.tennisrecentresult import TennisRecentResult
-from database.historical.tennis.tennismatchweather import TennisMatchWeather
-from database.historical.tennis.tennismatchstats import TennisMatchStats
+from database.historical.match_models import (
+    Match as TennisScannedMatch,
+    ProbabilityTick as TennisMatchProbabilityTick,
+    MatchWeather as TennisMatchWeather,
+    MatchStats as TennisMatchStats,
+    TennisPlayerBio,
+    TennisPlayerRanking,
+    TennisServeCalibration,
+    TennisMatchHistory,
+    TennisHistoricalOdds,
+    TmlDatabaseMatch,
+    WtaPlayerRankingHistory,
+    WtaTournamentLevel,
+    TennisExplorerPlayerSlug,
+    TournamentLocationCache,
+    TennisHeadToHead,
+    TennisSurfaceMatchHistory,
+    TennisAbstractElo,
+    TennisAbstractYelo,
+    TennisAbstractCareerSplit,
+    TennisAbstractH2H,
+    TennisRecentResult,
+    ChartedMatch,
+    ChartedMatchStats,
+)
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
-from database.historical.tennis.tennisplayerbio import TennisPlayerBio
-from database.historical.tennis.chartedmatch import ChartedMatch
-from database.historical.tennis.chartedmatchstats import ChartedMatchStats
+# Prefer consolidated models where available; keep legacy modules available for
+# functions that still import them directly. Above we mapped common names to
+# the consolidated `database.historical.match_models` classes so existing
+# imports that expect e.g. `TennisScannedMatch` continue to work.
 from database.historical.tennis.chartedmatchimport import (
     find_overlapping_scanned_match, save_charted_match, save_charted_match_stats,
     import_or_merge_match,

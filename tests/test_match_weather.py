@@ -9,9 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
-from database.historical.tennis.tennismatchweather import TennisMatchWeather
+from database.historical.match_models import Match as TennisScannedMatch
+from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.match_models import MatchWeather as TennisMatchWeather
 from outer_apis.scrapers.tennis.tournament_location import get_location
 from outer_apis.sports.tennis.match_weather import populate_weather_for_match, populate_weather_for_all_resolved_matches
 

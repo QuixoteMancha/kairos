@@ -7,14 +7,9 @@ production data still living in the mini-pc's `kairos_kairos_data` volume
 (inspected directly via SSH 2026-07-21, not guessed).
 """
 
-from peewee import CharField, DateTimeField, FloatField, Model
+from peewee import CharField, DateTimeField, FloatField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class KalshiMarketTick(HistoricalBaseModel):

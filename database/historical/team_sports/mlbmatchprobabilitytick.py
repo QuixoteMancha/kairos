@@ -1,12 +1,7 @@
-from peewee import DateTimeField, FloatField, ForeignKeyField, Model
+from peewee import DateTimeField, FloatField, ForeignKeyField
 
-from database.db import db_historical
+from database.base_models import HistoricalBaseModel
 from database.historical.team_sports.mlbscannedmatch import MlbScannedMatch
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
 
 
 class MlbMatchProbabilityTick(HistoricalBaseModel):

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.chartedmatch import ChartedMatch
+from database.historical.tennis import ChartedMatch
 from outer_apis.sports.tennis.match_weather import (
     populate_weather_for_charted_match, populate_weather_for_all_charted_matches,
     _CHARTED_MATCH_SNAPSHOT_HOUR_UTC,

@@ -33,9 +33,9 @@ from typing import Any
 import peewee
 
 from database.db import init_db_historical
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
-from database.historical.tennis.tennismatchweather import TennisMatchWeather
+from database.historical.match_models import Match as TennisScannedMatch
+from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.match_models import MatchWeather as TennisMatchWeather
 from outer_apis.scrapers.tennis.tournament_location import get_location, extract_city_candidate
 from outer_apis.scrapers.weather import open_meteo
 
@@ -317,7 +317,7 @@ def populate_weather_for_all_charted_matches() -> dict[str, Any]:
     patrón que `populate_weather_for_all_resolved_matches`, con
     throttle explícito (ver `_OPEN_METEO_MIN_INTERVAL_S`) porque acá el
     volumen puede ser de miles de partidos en una sola corrida."""
-    from database.historical.tennis.chartedmatch import ChartedMatch
+    from database.historical.tennis import ChartedMatch
 
     init_db_historical()
     # Materializado a lista ANTES del loop -- el filtro es "sin clima
@@ -404,7 +404,7 @@ def populate_weather_for_all_match_history() -> dict[str, Any]:
     poblado -- mismo patrón/throttle que
     `populate_weather_for_all_charted_matches`, para el backfill masivo
     top-200 WTA (potencialmente decenas de miles de filas)."""
-    from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+    from database.historical.tennis import TennisMatchHistory
 
     init_db_historical()
     rows = list(TennisMatchHistory.select().where(TennisMatchHistory.weather_fetched_at.is_null()))

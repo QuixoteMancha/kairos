@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennisabstractplayerstats import TennisAbstractCareerSplit, TennisAbstractH2H
+from database.historical.tennis import TennisAbstractCareerSplit, TennisAbstractH2H
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
     _slug_for_player, _parse_float_pct, _extract_section,
 )

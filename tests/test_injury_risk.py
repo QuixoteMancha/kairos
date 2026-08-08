@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennisrecentresult import TennisRecentResult
+from database.historical.tennis import TennisRecentResult
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
     _parse_date, get_recent_results as scraper_get_recent_results,
 )

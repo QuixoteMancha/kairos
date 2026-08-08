@@ -10,10 +10,10 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
+from database.historical.match_models import Match as TennisScannedMatch
+from database.historical.tennis import TennisMatchHistory
 from database.historical.tennis.matchtracking import filter_new_markets
 from database.historical.tennis.writer import get_any_match_history
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
 from outer_apis.sports.tennis import match_history
 
 

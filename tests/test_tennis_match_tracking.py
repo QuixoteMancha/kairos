@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.tennismatchprobabilitytick import TennisMatchProbabilityTick
+from database.historical.match_models import Match as TennisScannedMatch
+from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled,

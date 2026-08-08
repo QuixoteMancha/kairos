@@ -36,7 +36,7 @@ import time
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory
-from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+from database.historical.tennis import TmlDatabaseMatch
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import _fetch, _verify_player_page
 from scripts.tennis.wta_top200_historical_backfill import backfill_player
 

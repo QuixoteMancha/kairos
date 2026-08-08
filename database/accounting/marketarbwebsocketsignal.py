@@ -1,13 +1,8 @@
 from datetime import datetime
 
-from peewee import CharField, DateTimeField, FloatField, Model
+from peewee import CharField, DateTimeField, FloatField
 
-from database.db import db
-
-
-class BaseModel(Model):
-    class Meta:
-        database = db
+from database.base_models import BaseModel
 
 
 class MarketArbWebsocketSignal(BaseModel):

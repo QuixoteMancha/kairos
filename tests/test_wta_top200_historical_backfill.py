@@ -10,8 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis.tennishistoricalodds import TennisHistoricalOdds
+from database.historical.tennis import TennisMatchHistory, TennisHistoricalOdds
 from scripts.tennis.wta_top200_historical_backfill import (
     backfill_player, run_backfill, run_backfill_from_wta_roster, _to_iso_date, _run_backfill_for_names,
 )
@@ -266,7 +265,7 @@ def test_run_backfill_from_wta_roster_uses_distinct_names_from_ranking_table():
 
 def test_run_backfill_from_atp_roster_uses_2016plus_250plus_names():
     from datetime import datetime, timezone
-    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_from_atp_roster
 
     now = datetime.now(timezone.utc)
@@ -301,7 +300,7 @@ def test_run_backfill_from_atp_roster_uses_2016plus_250plus_names():
 
 def test_run_backfill_for_missing_odds_opponents_targets_unfetched_rival():
     from datetime import datetime, timezone
-    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
 
     now = datetime.now(timezone.utc)
@@ -336,7 +335,7 @@ def test_run_backfill_for_missing_odds_opponents_targets_unfetched_rival():
 
 def test_run_backfill_for_missing_odds_opponents_skips_rows_with_real_odds():
     from datetime import datetime, timezone
-    from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
 
     now = datetime.now(timezone.utc)

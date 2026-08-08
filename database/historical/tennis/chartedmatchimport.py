@@ -15,9 +15,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis.tennisscannedmatch import TennisScannedMatch
-from database.historical.tennis.chartedmatch import ChartedMatch
-from database.historical.tennis.chartedmatchstats import ChartedMatchStats
+from database.historical.match_models import (
+    Match as TennisScannedMatch, ChartedMatch, ChartedMatchStats,
+)
 from database.historical.tennis.matchstats import merge_match_stats, save_match_stats, has_match_stats
 
 

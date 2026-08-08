@@ -4,14 +4,9 @@ from the pre-"extreme makeover" schema, see kalshimarkettick.py's
 docstring for the full rescue context (same investigation, same volume).
 """
 
-from peewee import CharField, DateTimeField, FloatField, Model
+from peewee import CharField, DateTimeField, FloatField
 
-from database.db import db_historical
-
-
-class HistoricalBaseModel(Model):
-    class Meta:
-        database = db_historical
+from database.base_models import HistoricalBaseModel
 
 
 class CryptoPriceSnapshot(HistoricalBaseModel):

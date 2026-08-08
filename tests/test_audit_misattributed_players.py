@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory, TennisHistoricalOdds, WtaPlayerRankingHistory
-from database.historical.tennis.tmldatabasematch import TmlDatabaseMatch
+from database.historical.tennis import (
+    TennisMatchHistory, TennisHistoricalOdds, TmlDatabaseMatch,
+    WtaPlayerRankingHistory,
+)
 from scripts.tennis.audit_misattributed_players import find_at_risk_players, run_audit_and_repair, _verify_identity
 
 

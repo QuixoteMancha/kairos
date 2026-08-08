@@ -11,8 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
-from database.historical.tennis import TournamentLocationCache
+from database.historical.tennis import TennisMatchHistory, TournamentLocationCache
 from outer_apis.sports.tennis.match_weather import (
     populate_weather_for_match_history_row, populate_weather_for_all_match_history,
     _CHARTED_MATCH_SNAPSHOT_HOUR_UTC,

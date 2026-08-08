@@ -25,7 +25,7 @@ from database.historical.tennis.writer import _last_midnight_utc
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.tennismatchhistory import TennisMatchHistory
+from database.historical.tennis import TennisMatchHistory
 from database.historical.tennis.writer import get_recent_match_history
 from outer_apis.sports.tennis import match_history
 
