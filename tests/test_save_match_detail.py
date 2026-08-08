@@ -9,17 +9,17 @@ from __future__ import annotations
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchDetail, save_match_detail
+from database.historical.tennis import MatchHistory, save_match_detail
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisMatchDetail.delete().execute()
+        MatchHistory.delete().execute()
     yield
     with db_historical.connection_context():
-        TennisMatchDetail.delete().execute()
+        MatchHistory.delete().execute()
 
 
 def _detail(**overrides) -> dict:
@@ -53,7 +53,7 @@ def _detail(**overrides) -> dict:
 def test_creates_new_row_on_first_save():
     status = save_match_detail(_detail())
     assert status == "created"
-    row = TennisMatchDetail.get(TennisMatchDetail.match_id == "2692781")
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
     assert row.player_a_name == "Anisimova Amanda"
     assert row.player_b_name == "Sabalenka Aryna"
     assert row.player_a_ranking == 10
@@ -65,28 +65,28 @@ def test_does_not_duplicate_on_second_save_with_identical_data():
     save_match_detail(_detail())
     status = save_match_detail(_detail())
     assert status == "unchanged"
-    assert TennisMatchDetail.select().where(TennisMatchDetail.match_id == "2692781").count() == 1
+    assert MatchHistory.select().where(MatchHistory.match_id == "2692781").count() == 1
 
 
 def test_updates_only_when_a_real_field_changed():
     save_match_detail(_detail())
     status = save_match_detail(_detail(player_a_ranking=8))  # ranking "corregido" por la fuente
     assert status == "updated"
-    row = TennisMatchDetail.get(TennisMatchDetail.match_id == "2692781")
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
     assert row.player_a_ranking == 8
     assert row.updated_at is not None
-    assert TennisMatchDetail.select().count() == 1  # sigue siendo 1 sola fila, no se duplicó
+    assert MatchHistory.select().count() == 1  # sigue siendo 1 sola fila, no se duplicó
 
 
 def test_invalid_without_match_id():
     assert save_match_detail(_detail(match_id=None)) == "invalid"
-    assert TennisMatchDetail.select().count() == 0
+    assert MatchHistory.select().count() == 0
 
 
 def test_invalid_without_player_names():
     assert save_match_detail(_detail(player_a_name=None)) == "invalid"
     assert save_match_detail(_detail(player_b_name=None)) == "invalid"
-    assert TennisMatchDetail.select().count() == 0
+    assert MatchHistory.select().count() == 0
 
 
 def test_tolerates_missing_optional_bio_fields():
@@ -97,6 +97,6 @@ def test_tolerates_missing_optional_bio_fields():
     }
     status = save_match_detail(minimal)
     assert status == "created"
-    row = TennisMatchDetail.get(TennisMatchDetail.match_id == "42")
+    row = MatchHistory.get(MatchHistory.match_id == "42")
     assert row.player_a_ranking is None
     assert row.player_a_birthdate is None

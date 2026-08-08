@@ -171,14 +171,14 @@ def validate_singleton(singleton: list[dict], by_name: dict) -> tuple[list[dict]
 
 def run_validation() -> dict:
     """Corre dedup + validación contra Sackmann sobre la base REAL,
-    escribe resultados: validados -> `TennisMatchDetail` (source=
+    escribe resultados: validados -> `MatchHistory` (source=
     "sackmann"), no validados (incl. los `conflict` del dedup mismo) ->
     `TennisMatchHistoryUnvalidated`. Idempotente en ambos casos."""
     from datetime import datetime, timezone
 
     from database.db import init_db_historical, db_historical
     from database.historical.tennis import (
-        TennisMatchHistory, TmlDatabaseMatch, TennisMatchDetail, TennisMatchHistoryUnvalidated,
+        TennisMatchHistory, TmlDatabaseMatch, MatchHistory, TennisMatchHistoryUnvalidated,
     )
     from scripts.tennis.dedupe_match_history_candidates import find_match_candidates
 
@@ -199,7 +199,7 @@ def run_validation() -> dict:
         ]
         tml_rows = [
             {
-                "year": r.year, "winner_name": r.winner_name, "loser_name": r.loser_name,
+                "id": r.id, "year": r.year, "winner_name": r.winner_name, "loser_name": r.loser_name,
                 "winner_rank": r.winner_rank, "winner_age": r.winner_age,
                 "loser_rank": r.loser_rank, "loser_age": r.loser_age,
                 "score": r.score, "tourney_name": r.tourney_name,
@@ -218,7 +218,15 @@ def run_validation() -> dict:
     with db_historical.connection_context():
         for c in paired_validated + singleton_validated:
             row = c["sackmann_row"]
-            match_id = f"sackmann:{row['winner_name']}|{row['loser_name']}|{_year_of(c['match_date'])}"
+            # 2026-08-08, bug real encontrado y arreglado: el id sintético
+            # anterior (`sackmann:{winner}|{loser}|{year}`) NO era único
+            # cuando 2 personas se enfrentan más de una vez el mismo año
+            # (confirmado real en producción, ver `pares que se repiten
+            # mismo año` en la investigación) -- causó 2,983 colisiones
+            # silenciosas (partidos reales distintos pisándose entre sí)
+            # en la primera corrida. Fix: usar el PK real (autoincrement,
+            # único por diseño) de la fila de `TmlDatabaseMatch`.
+            match_id = f"sackmann:{row['id']}"
             fields = {
                 "source": "sackmann",
                 "match_date": c["match_date"], "tournament": c.get("tournament"),
@@ -228,9 +236,9 @@ def run_validation() -> dict:
                 "player_a_name": c["player_a"], "player_a_ranking": c.get("player_a_ranking"),
                 "player_b_name": c["player_b"], "player_b_ranking": c.get("player_b_ranking"),
             }
-            existing = TennisMatchDetail.get_or_none(TennisMatchDetail.match_id == match_id)
+            existing = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
             if existing is None:
-                TennisMatchDetail.create(match_id=match_id, fetched_at=now, **fields)
+                MatchHistory.create(match_id=match_id, fetched_at=now, **fields)
                 created += 1
             else:
                 changed = False

@@ -1,6 +1,6 @@
 """Tests de `find_match_candidates` -- 2026-08-08, pedido explícito del
 usuario: dedup de `TennisMatchHistory` (2 filas/partido) SIN red, como
-filtro de eficiencia previo al backfill de `TennisMatchDetail`."""
+filtro de eficiencia previo al backfill de `MatchHistory`."""
 
 from __future__ import annotations
 

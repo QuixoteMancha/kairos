@@ -1,7 +1,7 @@
 """Deduplica `TennisMatchHistory` (2 filas por partido real, una por
 jugador) en candidatos de partido ÚNICO, SIN red -- 2026-08-08, pedido
 explícito del usuario: "Primero deduplica las filas, es posible?"
-(paso previo al backfill masivo de `TennisMatchDetail`).
+(paso previo al backfill masivo de `MatchHistory`).
 
 CRITERIO -- esto es un FILTRO DE EFICIENCIA, nunca la fuente de verdad
 de identidad (esa sigue siendo `get_match_detail` contra la página

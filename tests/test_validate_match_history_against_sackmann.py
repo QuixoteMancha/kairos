@@ -51,9 +51,12 @@ def test_scores_match_fail_closed_without_result():
     assert scores_match("6-4 6-2", "6-4, 6-2", a_is_winner=None) is False
 
 
+_tml_row_id_counter = iter(range(1, 10_000))
+
+
 def _tml_row(winner, loser, year=2024, score="6-4 6-2", w_rank=10, l_rank=20):
     return {
-        "year": year, "winner_name": winner, "loser_name": loser,
+        "id": next(_tml_row_id_counter), "year": year, "winner_name": winner, "loser_name": loser,
         "winner_rank": w_rank, "winner_age": 25.0, "loser_rank": l_rank, "loser_age": 27.0,
         "score": score, "tourney_name": "Toronto",
     }
@@ -146,3 +149,75 @@ def test_validate_singleton_unvalidated_when_abbreviation_does_not_resolve():
     validated, unvalidated = validate_singleton(singleton, by_name)
     assert validated == []
     assert unvalidated[0]["reason"] == "no_sackmann_match"
+
+
+# --- regresión del bug real de colisión de id sintético (2026-08-08) ---
+# `sackmann:{winner}|{loser}|{year}` NO era único cuando el mismo par se
+# enfrenta 2+ veces el mismo año (confirmado real en producción) -- causó
+# 2,983 partidos reales distintos pisándose entre sí en la primera
+# corrida. Fix: usar el PK real (único) de la fila de TmlDatabaseMatch.
+
+def test_run_validation_does_not_collide_same_pair_multiple_meetings_same_year():
+    from database.db import init_db_historical, db_historical
+    from database.historical.tennis import (
+        TennisMatchHistory, TmlDatabaseMatch, MatchHistory, TennisMatchHistoryUnvalidated,
+    )
+    from scripts.tennis import validate_match_history_against_sackmann as mod
+
+    init_db_historical()
+    with db_historical.connection_context():
+        TennisMatchHistory.delete().execute()
+        TmlDatabaseMatch.delete().execute()
+        MatchHistory.delete().execute()
+        TennisMatchHistoryUnvalidated.delete().execute()
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        # 2 partidos REALES DISTINTOS entre el mismo par, mismo año, con
+        # scores distintos -- deben terminar como 2 filas separadas.
+        TennisMatchHistory.create(
+            player_name="Amanda Anisimova", opponent_name="Sabalenka A.", match_date="2024-06-01",
+            tournament="Torneo Uno", round="QF", surface="clay", score="6-4, 6-2", result="W",
+            source="tennisexplorer", fetched_at=now,
+        )
+        TennisMatchHistory.create(
+            player_name="Aryna Sabalenka", opponent_name="Anisimova A.", match_date="2024-06-01",
+            tournament="Torneo Uno", round="QF", surface="clay", score="4-6, 2-6", result="L",
+            source="tennisexplorer", fetched_at=now,
+        )
+        TennisMatchHistory.create(
+            player_name="Amanda Anisimova", opponent_name="Sabalenka A.", match_date="2024-08-10",
+            tournament="Torneo Dos", round="F", surface="hard", score="7-5, 6-3", result="W",
+            source="tennisexplorer", fetched_at=now,
+        )
+        TennisMatchHistory.create(
+            player_name="Aryna Sabalenka", opponent_name="Anisimova A.", match_date="2024-08-10",
+            tournament="Torneo Dos", round="F", surface="hard", score="5-7, 3-6", result="L",
+            source="tennisexplorer", fetched_at=now,
+        )
+        TmlDatabaseMatch.create(
+            year=2024, tourney_name="Torneo Uno", date="2024-05-28", round="QF",
+            winner_name="Amanda Anisimova", winner_rank=10, loser_name="Aryna Sabalenka", loser_rank=1,
+            score="6-4 6-2",
+        )
+        TmlDatabaseMatch.create(
+            year=2024, tourney_name="Torneo Dos", date="2024-08-05", round="F",
+            winner_name="Amanda Anisimova", winner_rank=8, loser_name="Aryna Sabalenka", loser_rank=1,
+            score="7-5 6-3",
+        )
+
+    try:
+        summary = mod.run_validation()
+        assert summary["paired_validated"] == 2
+
+        with db_historical.connection_context():
+            detail_rows = list(MatchHistory.select().where(MatchHistory.source == "sackmann"))
+        assert len(detail_rows) == 2  # ANTES del fix, colisionaban en 1 sola fila
+        scores = {r.score for r in detail_rows}
+        assert scores == {"6-4 6-2", "7-5 6-3"}
+    finally:
+        with db_historical.connection_context():
+            TennisMatchHistory.delete().execute()
+            TmlDatabaseMatch.delete().execute()
+            MatchHistory.delete().execute()
+            TennisMatchHistoryUnvalidated.delete().execute()

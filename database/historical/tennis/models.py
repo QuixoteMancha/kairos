@@ -195,7 +195,7 @@ class TennisPlayerBio(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
-class TennisMatchDetail(HistoricalBaseModel):
+class MatchHistory(HistoricalBaseModel):
     """Un registro por partido REAL (1 fila, NO duplicado por jugador
     como `TennisMatchHistory`) -- 2026-08-08, pedido explícito del
     usuario tras descubrir que la página `match-detail` de
@@ -219,7 +219,7 @@ class TennisMatchDetail(HistoricalBaseModel):
     posible por error/corrección de la fuente)."""
 
     class Meta:
-        table_name = "tennis_match_detail"
+        table_name = "match_history"
         indexes = ((("match_id",), True),)
 
     match_id = CharField(unique=True)

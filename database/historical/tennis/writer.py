@@ -25,10 +25,10 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory,
     TennisHeadToHead, TennisSurfaceMatchHistory, TennisAbstractElo,
     TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
-    TennisRecentResult, TennisMatchDetail,
+    TennisRecentResult, MatchHistory,
 )
 
-# Campos comparables de `TennisMatchDetail` para detectar cambios reales
+# Campos comparables de `MatchHistory` para detectar cambios reales
 # de la fuente en `save_match_detail` -- excluye `match_id` (la clave) y
 # los timestamps propios (`fetched_at`/`updated_at`, nunca son "el dato
 # cambió", son metadata nuestra).
@@ -201,9 +201,9 @@ def save_match_detail(detail: dict[str, Any]) -> str:
             "player_b_plays": detail.get("player_b_plays"),
         }
 
-        existing = TennisMatchDetail.get_or_none(TennisMatchDetail.match_id == match_id)
+        existing = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
         if existing is None:
-            TennisMatchDetail.create(match_id=match_id, fetched_at=now, **fields)
+            MatchHistory.create(match_id=match_id, fetched_at=now, **fields)
             return "created"
 
         changed = False

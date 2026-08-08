@@ -39,7 +39,7 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisMatchHistory
 from database.historical.tennis import TennisHistoricalOdds
 from database.historical.tennis import TennisExplorerPlayerSlug
-from database.historical.tennis import TennisMatchDetail, save_match_detail
+from database.historical.tennis import MatchHistory, save_match_detail
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html, get_match_detail,
@@ -222,19 +222,19 @@ def backfill_player(player_name: str) -> dict:
                     inserted_odds += 1
 
     # 2026-08-08, pedido explícito del usuario -- "adapta el scraper...
-    # para que sólo guarde una fila por match" (ver `TennisMatchDetail`):
+    # para que sólo guarde una fila por match" (ver `MatchHistory`):
     # 1 fila REAL por partido (identidad cierta, no heurística), idempotente
     # por `match_id`. Se cosecha DESPUÉS del loop principal, y solo para los
     # `match_id` que todavía no tengamos -- cada partido real aparece en la
     # página de LOS 2 jugadores (mismo match_id), así que el backfill del
     # segundo jugador no vuelve a pedir la página de detalle, solo lee de
-    # `TennisMatchDetail` (ya existe) y sigue de largo.
+    # `MatchHistory` (ya existe) y sigue de largo.
     unique_match_ids = {m["match_id"] for _year, m in matches_by_year if m.get("match_id")}
     details_created = details_updated = details_unchanged = details_error = 0
     with db_historical.connection_context():
         already_have = {
-            r.match_id for r in TennisMatchDetail.select(TennisMatchDetail.match_id)
-            .where(TennisMatchDetail.match_id.in_(list(unique_match_ids)))
+            r.match_id for r in MatchHistory.select(MatchHistory.match_id)
+            .where(MatchHistory.match_id.in_(list(unique_match_ids)))
         }
     for match_id in unique_match_ids - already_have:
         detail = get_match_detail(match_id)
