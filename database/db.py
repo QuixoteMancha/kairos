@@ -302,6 +302,9 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "tennis_scanned_match", "tournament", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_recent_result", "round", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_scanned_match", "round", "VARCHAR(255)")
+    # 2026-08-08, pedido explícito del usuario -- worker nuevo que
+    # sincroniza MatchHistory/ranking/stats por partido detectado.
+    _add_column_if_missing(db_historical, "tennis_scanned_match", "history_synced_at", "DATETIME")
     # 2026-08-08, revisión del consolidado de modelos (pedido explícito
     # del usuario) -- `MatchStats` (database/historical/tennis/models.py)
     # agrega la FK `match` (columna real `match_id`) + 28 columnas de

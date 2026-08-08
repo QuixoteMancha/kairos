@@ -142,13 +142,19 @@ def _derive_result_from_comma_score(score: str) -> str:
     return "W" if sets_won > sets_lost else "L"
 
 
-def backfill_player(player_name: str) -> dict:
+def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
+    """`years`: default `_YEARS` (2016-2026, backfill histórico
+    completo). 2026-08-08, pedido explícito del usuario -- el worker de
+    sync en vivo (`workers/tennis_match_history_sync_worker.py`) pasa
+    solo el año actual +/- 1 para no re-fetchear una década completa
+    cada vez que aparece un partido nuevo en Kalshi."""
     slug = resolve_player_slug(player_name, candidate_slugs=_get_candidate_slugs(player_name))
     if slug is None:
         return {"player": player_name, "status": "skipped_no_slug", "matches_inserted": 0, "odds_inserted": 0}
 
+    year_list = years if years is not None else _YEARS
     matches_by_year: list[tuple[int, dict]] = []
-    for year in _YEARS:
+    for year in year_list:
         html = _fetch(slug, year=year)
         time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
         if html is None:

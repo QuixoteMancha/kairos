@@ -49,6 +49,46 @@ def save_match_stats(market_id: str, flashscore_match_id: str, stats: dict[str, 
         pass
 
 
+def has_match_stats_for_history(match_history_id: int) -> bool:
+    """Igual que `has_match_stats` pero para partidos vinculados por
+    `MatchHistory` en vez de `market_id` de Kalshi (2026-08-08, pedido
+    explícito del usuario -- worker de sync que rellena stats para
+    partidos de `MatchHistory` sin cobertura). Fail-closed: False si
+    falla la query."""
+    try:
+        init_db_historical()
+        return TennisMatchStats.select().where(TennisMatchStats.match_history == match_history_id).exists()
+    except Exception:
+        return False
+
+
+def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str, stats: dict[str, Any]) -> bool:
+    """Igual que `save_match_stats` pero vinculando por `MatchHistory`
+    (`source="flashscore"`) en vez de `market_id` de Kalshi -- ver
+    docstring del módulo y `has_match_stats_for_history`. `market_id`
+    sintético y único (`history:{match_history_id}`) porque la columna
+    real en producción es NOT NULL pese a que el modelo la marca
+    `null=True` (mismo hallazgo real que en
+    `migrate_charted_stats_to_match_stats.py`).
+
+    Returns: True si escribió una fila nueva, False si ya existía o
+    falló (fail-closed, nunca duplica ni lanza)."""
+    if not stats:
+        return False
+    try:
+        init_db_historical()
+        if has_match_stats_for_history(match_history_id):
+            return False
+        TennisMatchStats.create(
+            match_history=match_history_id, source="flashscore",
+            market_id=f"history:{match_history_id}", flashscore_match_id=flashscore_match_id,
+            raw_stats_json=json.dumps(stats), fetched_at=_now(),
+        )
+        return True
+    except Exception:
+        return False
+
+
 def get_match_stats(market_id: str) -> dict[str, Any] | None:
     """Fail-closed: None si no hay estadísticas guardadas para este
     partido o falla la query."""

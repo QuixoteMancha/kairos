@@ -59,6 +59,11 @@ class Match(HistoricalBaseModel):
     detected_at = DateTimeField()
     winner = CharField(null=True)
     settled_at = DateTimeField(null=True)
+    # 2026-08-08, pedido explícito del usuario -- worker nuevo
+    # (`workers/tennis_match_history_sync_worker.py`) que sincroniza
+    # MatchHistory/ranking/stats para los jugadores de cada partido
+    # nuevo detectado acá. NULL = todavía no procesado por ese worker.
+    history_synced_at = DateTimeField(null=True)
 
 
 class ProbabilityTick(HistoricalBaseModel):
