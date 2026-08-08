@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.match_models import Match as TennisScannedMatch
-from database.historical.match_models import MatchStats as TennisMatchStats
+from database.historical.models import Match as TennisScannedMatch
+from database.historical.models import MatchStats as TennisMatchStats
 from database.historical.tennis import ChartedMatch, ChartedMatchStats
 from database.historical.tennis.chartedmatchimport import (
     find_overlapping_scanned_match, save_charted_match, import_or_merge_match,

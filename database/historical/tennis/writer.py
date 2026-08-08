@@ -21,7 +21,7 @@ from typing import Any
 LOOKBACK_DAYS_DEFAULT = 365.0
 
 from database.db import init_db_historical
-from database.historical.match_models import (
+from database.historical.tennis.models import (
     TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory,
     TennisHeadToHead, TennisSurfaceMatchHistory, TennisAbstractElo,
     TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
@@ -525,7 +525,7 @@ def get_current_tennisabstract_yelo(tour: str, max_age_hours: float = _TA_ELO_FR
         return None
 
 
-from database.historical.match_models import (
+from database.historical.tennis.models import (
     TennisAbstractCareerSplit, TennisAbstractH2H, TennisRecentResult,
 )
 

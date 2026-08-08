@@ -1,5 +1,5 @@
 """Migración: puebla la columna FK `match` (nueva, ver `MatchStats` en
-`database/historical/match_models.py`) para las filas YA existentes de
+`database/historical/models.py`) para las filas YA existentes de
 `tennis_match_stats`, vinculándolas con su `Match`(=TennisScannedMatch)
 real por `market_id` -- 2026-08-08, pedido explícito del usuario tras
 revisar el consolidado de modelos hecho con Copilot ("modificar tablas
@@ -23,7 +23,7 @@ relación."""
 from __future__ import annotations
 
 from database.db import init_db_historical, db_historical
-from database.historical.match_models import Match, MatchStats
+from database.historical.models import Match, MatchStats
 
 
 def run_migration(dry_run: bool = False) -> dict:

@@ -20,11 +20,14 @@ using player NAME as the identifier (no surrogate Player table/FK chain):
 on a fresh fetch (never on a cache hit).
 """
 
-from database.historical.match_models import (
+from database.historical.models import (
     Match as TennisScannedMatch,
     ProbabilityTick as TennisMatchProbabilityTick,
     MatchWeather as TennisMatchWeather,
     MatchStats as TennisMatchStats,
+    MatchStatsSet as TennisMatchStatsSet,
+)
+from database.historical.tennis.models import (
     TennisPlayerBio,
     TennisPlayerRanking,
     TennisServeCalibration,
@@ -46,10 +49,12 @@ from database.historical.match_models import (
     ChartedMatchStats,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
-# Prefer consolidated models where available; keep legacy modules available for
-# functions that still import them directly. Above we mapped common names to
-# the consolidated `database.historical.match_models` classes so existing
-# imports that expect e.g. `TennisScannedMatch` continue to work.
+# 2026-08-08: los modelos GENÉRICOS (match-tracking + clima, reusables
+# entre deportes) viven en `database.historical.models`; los
+# ESPECÍFICOS de tenis en `database.historical.tennis.models` -- ver
+# docstrings de ambos módulos. Este paquete reexporta ambos grupos bajo
+# los nombres históricos (`TennisScannedMatch`, etc.) para no romper el
+# código existente.
 from database.historical.tennis.chartedmatchimport import (
     find_overlapping_scanned_match, save_charted_match, save_charted_match_stats,
     import_or_merge_match,

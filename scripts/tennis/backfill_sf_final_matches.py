@@ -43,8 +43,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.match_models import Match as TennisScannedMatch
-from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.models import Match as TennisScannedMatch
+from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.matchstats import save_match_stats, has_match_stats
 from outer_apis.sports.tennis.match_weather import populate_weather_for_match
 from outer_apis.sports.tennis.recent_results_cache import fetch_and_cache

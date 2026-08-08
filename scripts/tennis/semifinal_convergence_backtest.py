@@ -84,8 +84,8 @@ from __future__ import annotations
 
 from database.db import init_db_historical
 from database.accounting.limitarbsignal import LimitArbSignal
-from database.historical.match_models import Match as TennisScannedMatch
-from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.models import Match as TennisScannedMatch
+from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
 from outer_apis.sports.tennis.injury_risk import get_injury_risk_flag
 from outer_apis.sports.tennis.fatigue import calculate_fatigue_index
 from outer_apis.sports.tennis.player_age import get_age

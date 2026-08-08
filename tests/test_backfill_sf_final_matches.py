@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.match_models import Match as TennisScannedMatch
-from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
-from database.historical.match_models import MatchStats as TennisMatchStats
+from database.historical.models import Match as TennisScannedMatch
+from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.models import MatchStats as TennisMatchStats
 from scripts.tennis.backfill_sf_final_matches import backfill_match, _parse_trades, _find_real_score
 
 

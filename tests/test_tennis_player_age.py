@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.match_models import TennisPlayerBio
+from database.historical.tennis.models import TennisPlayerBio
 from outer_apis.sports.tennis.player_age import get_date_of_birth_cached, get_age
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import get_date_of_birth
 

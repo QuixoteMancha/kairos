@@ -33,9 +33,9 @@ from typing import Any
 import peewee
 
 from database.db import init_db_historical
-from database.historical.match_models import Match as TennisScannedMatch
-from database.historical.match_models import ProbabilityTick as TennisMatchProbabilityTick
-from database.historical.match_models import MatchWeather as TennisMatchWeather
+from database.historical.models import Match as TennisScannedMatch
+from database.historical.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.models import MatchWeather as TennisMatchWeather
 from outer_apis.scrapers.tennis.tournament_location import get_location, extract_city_candidate
 from outer_apis.scrapers.weather import open_meteo
 

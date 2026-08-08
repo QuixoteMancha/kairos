@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.match_models import MatchStats as TennisMatchStats
+from database.historical.models import MatchStats as TennisMatchStats
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from outer_apis.scrapers.tennis.flashscore_scraper import (
     _extract_tournament_name, get_match_statistics, find_match_id, _parse_record,
