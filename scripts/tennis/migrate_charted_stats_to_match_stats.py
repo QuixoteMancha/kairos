@@ -75,7 +75,8 @@ def resolve_match_history_id(player_a: str, player_b: str, charted_date: date, i
 
 def run_migration() -> dict:
     from database.db import init_db_historical, db_historical
-    from database.historical.tennis import ChartedMatch, ChartedMatchStats, MatchHistory, MatchStats
+    from database.historical.tennis import ChartedMatch, ChartedMatchStats, MatchHistory
+    from database.historical.tennis import TennisMatchStats as MatchStats
 
     init_db_historical()
     with db_historical.connection_context():
