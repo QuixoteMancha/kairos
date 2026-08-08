@@ -118,13 +118,15 @@ def run_migration() -> dict:
             MatchStats.create(
                 match_history=mh_id, source="sackmann_match_charting_project",
                 # 2026-08-08, bug real encontrado en producción: la tabla
-                # real `tennis_match_stats` tiene `market_id` NOT NULL
-                # (desalineación legacy con el modelo, que lo marca
-                # `null=True` -- SQLite no permite relajar un NOT NULL
-                # existente vía ALTER TABLE) -- valor sintético único y
-                # trazable (id real de ChartingProject) para satisfacer
-                # el constraint sin inventar un market_id de Kalshi falso.
+                # real `tennis_match_stats` tiene `market_id` Y
+                # `flashscore_match_id` NOT NULL (desalineación legacy con
+                # el modelo, que los marca `null=True` -- SQLite no
+                # permite relajar un NOT NULL existente vía ALTER TABLE)
+                # -- valores sintéticos únicos y trazables (id real de
+                # ChartingProject) para satisfacer el constraint sin
+                # inventar identificadores de Kalshi/Flashscore falsos.
                 market_id=f"charted:{c['charted_match_id']}",
+                flashscore_match_id=f"charted:{c['charted_match_id']}",
                 raw_stats_json=c["raw_stats_json"], fetched_at=now,
             )
             created += 1
