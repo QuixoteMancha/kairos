@@ -44,6 +44,7 @@ import requests
 from outer_apis.scrapers.tennis._request_throttle import tennisexplorer_throttle
 
 _PLAYER_URL = "https://www.tennisexplorer.com/player/{slug}/"
+_MATCH_DETAIL_URL = "https://www.tennisexplorer.com/match-detail/?id={match_id}"
 _REQUEST_TIMEOUT_S = 20
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -175,8 +176,13 @@ _MATCH_RE = re.compile(
     # reales sin ronda asignada vienen como `<td class="round">&nbsp;</td>`.
     r'<td class="round"(?:[^>]*title="(?P<round_full>[^"]*)")?[^>]*>(?P<round>[^<]*)</td>\s*'
     # score puede traer tiebreak en <sup>N</sup> dentro del propio <a> --
-    # `.*?` (no `[^<]*`) para no cortar antes de esa subetiqueta.
-    r'<td class="tl">(?:<a[^>]*>(?P<score_a>.*?)</a>|(?P<score_b>[^<]*))</td>\s*'
+    # `.*?` (no `[^<]*`) para no cortar antes de esa subetiqueta. El
+    # mismo <a> trae el `id` real de `/match-detail/?id=...` -- 2026-08-08,
+    # pedido explícito del usuario (ver `get_match_detail` más abajo):
+    # esa página resuelve identidad con certeza (nombre completo real +
+    # ranking/edad/altura de AMBOS jugadores), y el id ya viene gratis
+    # en este mismo HTML, sin request extra.
+    r'<td class="tl">(?:<a[^>]*href="/match-detail/\?id=(?P<match_id>\d+)[^"]*"[^>]*>(?P<score_a>.*?)</a>|(?P<score_b>[^<]*))</td>\s*'
     r'<td class="course">(?P<odds_col1>[^<]*)</td>\s*'
     r'<td class="course">(?P<odds_col2>[^<]*)</td>',
     re.DOTALL,
@@ -325,6 +331,7 @@ def _parse_year_html(html: str, self_name_hint: str) -> list[dict[str, Any]]:
             "score": score,
             "odds_self": _odds_or_none(odds_self),
             "odds_opponent": _odds_or_none(odds_opp),
+            "match_id": rm.group("match_id"),  # None si la fila no traía link a match-detail (raro, pero posible)
         })
     return results
 
@@ -441,3 +448,149 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, A
 
     out.sort(key=lambda r: r["fecha"], reverse=True)
     return out[:n]
+
+
+def _fetch_match_detail(match_id: str) -> str | None:
+    """Fail-closed: None ante cualquier fallo de red/status, mismo
+    throttle compartido que `_fetch` (misma fuente, mismo servidor)."""
+    tennisexplorer_throttle.wait()
+    url = _MATCH_DETAIL_URL.format(match_id=match_id)
+    try:
+        resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    return resp.text
+
+
+_MATCH_DETAIL_HEADER_RE = re.compile(
+    r'<th class="plName"[^>]*><a href="/player/([a-z0-9\-]+)/?"[^>]*>([^<]*)</a></th>\s*'
+    r'<td class="gScore">([^<]*)<br\s*/?>\s*<span>\(([^)]*)\)</span></td>\s*'
+    r'<th class="plName"[^>]*><a href="/player/([a-z0-9\-]+)/?"[^>]*>([^<]*)</a></th>',
+    re.DOTALL,
+)
+_MATCH_DETAIL_MATCH_INFO_RE = re.compile(
+    r'<span class="upper">([^<]*)</span>,\s*[\d:]*,?\s*<a[^>]*>([^<]*)</a>,\s*([^,<]*),\s*([^<]*)<'
+)
+
+
+def _bio_row(html: str, label: str) -> tuple[str | None, str | None]:
+    """Extrae (izquierda, derecha) de una fila `<th>{label}</th>` de la
+    tabla de bio del match-detail -- ej. "Singles ranking", "Birthdate",
+    "Height", "Weight", "Plays". Fail-closed: (None, None) si la fila
+    no existe (algunos partidos viejos/de nivel bajo no tienen todos
+    los campos, nunca se fabrica un valor)."""
+    m = re.search(
+        rf'<td class="tr">([^<]*)</td>\s*<th>{re.escape(label)}</th>\s*<td class="tl">([^<]*)</td>',
+        html,
+    )
+    if not m:
+        return None, None
+    left, right = m.group(1).strip(), m.group(2).strip()
+    return (left or None), (right or None)
+
+
+def _parse_birthdate(raw: str | None) -> str | None:
+    """"31. 8. 2001" -> "2001-08-31" (ISO). Fail-closed: None si no
+    parsea con exactamente 3 partes numéricas."""
+    if not raw or raw == "-":
+        return None
+    parts = [p.strip() for p in raw.split(".") if p.strip()]
+    if len(parts) != 3:
+        return None
+    try:
+        return _date(int(parts[2]), int(parts[1]), int(parts[0])).isoformat()
+    except ValueError:
+        return None
+
+
+def _parse_int_prefix(raw: str | None) -> int | None:
+    """"10." -> 10, "180 cm" -> 180, "59 kg" -> 59, "-" -> None.
+    Fail-closed: None si no hay dígitos al inicio."""
+    if not raw:
+        return None
+    m = re.match(r"(\d+)", raw)
+    return int(m.group(1)) if m else None
+
+
+def get_match_detail(match_id: str) -> dict[str, Any] | None:
+    """Página `match-detail/?id=...` de TennisExplorer -- resuelve
+    identidad de AMBOS jugadores de un partido con CERTEZA (nombre
+    completo real + slug ya desambiguado, sin heurística de apellido),
+    más ranking al momento del partido, fecha de nacimiento, altura,
+    peso y mano dominante -- 2026-08-08, pedido explícito del usuario
+    tras descubrir esta página investigando cómo evitar el matching
+    fuzzy por apellido+fecha que causó los incidentes de misattribution
+    de esta sesión (ver `_verify_player_page` para el detalle de esos
+    incidentes).
+
+    El `match_id` de cada fila de historial ya viene gratis en el HTML
+    que se descarga de todos modos (ver `_MATCH_RE`), así que esto es 1
+    request adicional por partido ÚNICO (no por fila -- cada partido
+    real aparece 2 veces, una en la página de cada jugador, mismo id).
+
+    Returns: dict con match_date/tournament/round/surface/score +
+    player_a_*/player_b_* (name, slug, ranking, birthdate ISO, height_cm,
+    weight_kg, plays) + winner_side ("a"|"b"|None). Fail-closed: None si
+    el fetch falla o el header de jugadores no parsea (nunca se fabrica
+    un partido a medias) -- los campos de bio individuales SÍ pueden
+    venir None por separado (fail-closed por campo, ver `_bio_row`)."""
+    html = _fetch_match_detail(match_id)
+    if html is None:
+        return None
+
+    header = _MATCH_DETAIL_HEADER_RE.search(html)
+    if header is None:
+        return None
+    a_slug, a_name, score_a_sets, sets_score, b_slug, b_name = header.groups()
+
+    winner_side = None
+    sets_m = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*", score_a_sets)
+    if sets_m:
+        a_sets, b_sets = int(sets_m.group(1)), int(sets_m.group(2))
+        if a_sets > b_sets:
+            winner_side = "a"
+        elif b_sets > a_sets:
+            winner_side = "b"
+
+    info = _MATCH_DETAIL_MATCH_INFO_RE.search(html)
+    match_date = tournament = round_ = surface = None
+    if info:
+        raw_date, tournament, round_, surface = info.groups()
+        d = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", raw_date.strip())
+        if d:
+            match_date = f"{d.group(3)}-{d.group(2)}-{d.group(1)}"
+        tournament = tournament.strip() or None
+        round_ = round_.strip() or None
+        surface = surface.strip() or None
+
+    a_rank_raw, b_rank_raw = _bio_row(html, "Singles ranking")
+    a_birth_raw, b_birth_raw = _bio_row(html, "Birthdate")
+    a_height_raw, b_height_raw = _bio_row(html, "Height")
+    a_weight_raw, b_weight_raw = _bio_row(html, "Weight")
+    a_plays_raw, b_plays_raw = _bio_row(html, "Plays")
+
+    return {
+        "match_id": match_id,
+        "match_date": match_date,
+        "tournament": tournament,
+        "round": round_,
+        "surface": surface,
+        "score": sets_score.strip() or None,
+        "winner_side": winner_side,
+        "player_a_name": a_name.strip(),
+        "player_a_slug": a_slug,
+        "player_a_ranking": _parse_int_prefix(a_rank_raw),
+        "player_a_birthdate": _parse_birthdate(a_birth_raw),
+        "player_a_height_cm": _parse_int_prefix(a_height_raw),
+        "player_a_weight_kg": _parse_int_prefix(a_weight_raw),
+        "player_a_plays": a_plays_raw if a_plays_raw and a_plays_raw != "-" else None,
+        "player_b_name": b_name.strip(),
+        "player_b_slug": b_slug,
+        "player_b_ranking": _parse_int_prefix(b_rank_raw),
+        "player_b_birthdate": _parse_birthdate(b_birth_raw),
+        "player_b_height_cm": _parse_int_prefix(b_height_raw),
+        "player_b_weight_kg": _parse_int_prefix(b_weight_raw),
+        "player_b_plays": b_plays_raw if b_plays_raw and b_plays_raw != "-" else None,
+    }

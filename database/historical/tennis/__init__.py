@@ -30,6 +30,7 @@ from database.historical.tennis.models import (
     TennisPlayerRanking,
     TennisServeCalibration,
     TennisMatchHistory,
+    TennisMatchDetail,
     TennisHistoricalOdds,
     TmlDatabaseMatch,
     WtaPlayerRankingHistory,
@@ -76,10 +77,12 @@ from database.historical.tennis.writer import (
     save_tennisabstract_career_splits, get_current_career_splits,
     save_tennisabstract_h2h, get_current_tennisabstract_h2h,
     get_all_career_splits_for_surface, get_latest_rankings, get_all_surface_matches,
+    save_match_detail,
 )
 
 __all__ = [
-    "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisHistoricalOdds", "TennisHeadToHead",
+    "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "TennisMatchDetail", "save_match_detail",
+    "TennisHistoricalOdds", "TennisHeadToHead",
     "TmlDatabaseMatch", "TournamentLocationCache", "WtaPlayerRankingHistory", "WtaTournamentLevel",
     "TennisExplorerPlayerSlug",
     "TennisSurfaceMatchHistory", "TennisAbstractElo", "TennisAbstractYelo",

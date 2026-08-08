@@ -39,9 +39,10 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisMatchHistory
 from database.historical.tennis import TennisHistoricalOdds
 from database.historical.tennis import TennisExplorerPlayerSlug
+from database.historical.tennis import TennisMatchDetail, save_match_detail
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
-    guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
+    guess_player_slug, resolve_player_slug, _fetch, _parse_year_html, get_match_detail,
 )
 
 _YEARS = list(range(2016, 2027))
@@ -220,11 +221,44 @@ def backfill_player(player_name: str) -> dict:
                     )
                     inserted_odds += 1
 
+    # 2026-08-08, pedido explícito del usuario -- "adapta el scraper...
+    # para que sólo guarde una fila por match" (ver `TennisMatchDetail`):
+    # 1 fila REAL por partido (identidad cierta, no heurística), idempotente
+    # por `match_id`. Se cosecha DESPUÉS del loop principal, y solo para los
+    # `match_id` que todavía no tengamos -- cada partido real aparece en la
+    # página de LOS 2 jugadores (mismo match_id), así que el backfill del
+    # segundo jugador no vuelve a pedir la página de detalle, solo lee de
+    # `TennisMatchDetail` (ya existe) y sigue de largo.
+    unique_match_ids = {m["match_id"] for _year, m in matches_by_year if m.get("match_id")}
+    details_created = details_updated = details_unchanged = details_error = 0
+    with db_historical.connection_context():
+        already_have = {
+            r.match_id for r in TennisMatchDetail.select(TennisMatchDetail.match_id)
+            .where(TennisMatchDetail.match_id.in_(list(unique_match_ids)))
+        }
+    for match_id in unique_match_ids - already_have:
+        detail = get_match_detail(match_id)
+        time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
+        if detail is None:
+            details_error += 1
+            continue
+        status = save_match_detail(detail)
+        if status == "created":
+            details_created += 1
+        elif status == "updated":
+            details_updated += 1
+        elif status == "unchanged":
+            details_unchanged += 1
+        else:
+            details_error += 1
+
     return {
         "player": player_name, "status": "ok", "slug": slug,
         "matches_found": len(matches_by_year),
         "matches_inserted": inserted_matches, "odds_inserted": inserted_odds,
         "matches_repaired": repaired_matches,
+        "match_details_created": details_created, "match_details_updated": details_updated,
+        "match_details_unchanged": details_unchanged, "match_details_error": details_error,
     }
 
 

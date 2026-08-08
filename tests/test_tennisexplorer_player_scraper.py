@@ -14,6 +14,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     _verify_player_page, _reorient_score_to_self,
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
     resolve_player_slug, _extract_href_slug,
+    get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -361,3 +362,163 @@ def test_resolve_player_slug_fail_closed_when_no_candidate_verifies():
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._verify_player_page", return_value=False,
     ):
         assert resolve_player_slug("Naomi Osaka", candidate_slugs=["osaka-mari"]) is None
+
+
+# --- get_match_detail (2026-08-08, pedido explícito del usuario --
+# resolver identidad con certeza vía la página match-detail, en vez de
+# heurística de apellido+fecha) ---
+
+def test_parse_year_html_extracts_match_id_from_score_link():
+    # `_row()` ya incluye `href="/match-detail/?id=1"` en su fixture --
+    # confirma que el regex extendido lo captura sin romper nada más.
+    page = _page(_row(self_first=True, opponent="Rival R.", score="6-4, 6-2", odds_self="1.50", odds_opp="2.50"))
+    results = _parse_year_html(page, "Alexandra Eala")
+    assert len(results) == 1
+    assert results[0]["match_id"] == "1"
+
+
+_MATCH_DETAIL_HTML = '''
+<h1 class="bg">Anisimova - Sabalenka</h1>
+<table class="result gDetail noMgB" cellspacing="0">
+    <thead>
+        <tr>
+            <th class="plName" colspan="2"><a href="/player/anisimova-3be62">Anisimova Amanda</a></th>
+            <td class="gScore">2 : 0<br /><span>(6-4, 6-2)</span></td>
+            <th class="plName" colspan="2"><a href="/player/sabalenka">Sabalenka Aryna</a></th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr class="one">
+            <td class="tr">10.</td>
+            <th>Singles ranking</th>
+            <td class="tl">1.</td>
+        </tr>
+        <tr class="two">
+            <td class="tr">31. 8. 2001</td>
+            <th>Birthdate</th>
+            <td class="tl">5. 5. 1998</td>
+        </tr>
+        <tr class="one">
+            <td class="tr">180 cm</td>
+            <th>Height</th>
+            <td class="tl">182 cm</td>
+        </tr>
+        <tr class="two">
+            <td class="tr">59 kg</td>
+            <th>Weight</th>
+            <td class="tl">80 kg</td>
+        </tr>
+        <tr class="one">
+            <td class="tr">right</td>
+            <th>Plays</th>
+            <td class="tl">right</td>
+        </tr>
+    </tbody>
+</table>
+<div class="box boxBasic lGray"><span class="upper">10.08.2024</span>, 22:10, <a href="/toronto-wta/2024/wta-women/">Toronto WTA</a>, quarterfinal, hard</div>
+'''
+
+
+def test_get_match_detail_parses_real_page_structure():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail",
+        return_value=_MATCH_DETAIL_HTML,
+    ):
+        result = get_match_detail("2692781")
+    assert result == {
+        "match_id": "2692781",
+        "match_date": "2024-08-10",
+        "tournament": "Toronto WTA",
+        "round": "quarterfinal",
+        "surface": "hard",
+        "score": "6-4, 6-2",
+        "winner_side": "a",
+        "player_a_name": "Anisimova Amanda",
+        "player_a_slug": "anisimova-3be62",
+        "player_a_ranking": 10,
+        "player_a_birthdate": "2001-08-31",
+        "player_a_height_cm": 180,
+        "player_a_weight_kg": 59,
+        "player_a_plays": "right",
+        "player_b_name": "Sabalenka Aryna",
+        "player_b_slug": "sabalenka",
+        "player_b_ranking": 1,
+        "player_b_birthdate": "1998-05-05",
+        "player_b_height_cm": 182,
+        "player_b_weight_kg": 80,
+        "player_b_plays": "right",
+    }
+
+
+def test_get_match_detail_fail_closed_on_fetch_failure():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail", return_value=None,
+    ):
+        assert get_match_detail("999") is None
+
+
+def test_get_match_detail_fail_closed_on_unparseable_header():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail",
+        return_value="<html>no header here</html>",
+    ):
+        assert get_match_detail("999") is None
+
+
+def test_get_match_detail_winner_side_b_when_second_player_won_more_sets():
+    html = _MATCH_DETAIL_HTML.replace("2 : 0", "0 : 2")
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail", return_value=html,
+    ):
+        result = get_match_detail("1")
+    assert result["winner_side"] == "b"
+
+
+def test_get_match_detail_bio_fields_optional_fail_closed():
+    # Partido sin tabla de bio (nivel bajo, algunos partidos reales no
+    # la traen) -- nunca debe fabricar ranking/edad/altura/peso/mano.
+    html = (
+        '<h1 class="bg">A - B</h1>'
+        '<table class="result gDetail noMgB"><thead><tr>'
+        '<th class="plName" colspan="2"><a href="/player/a-1">Player A</a></th>'
+        '<td class="gScore">2 : 1<br /><span>(6-4, 3-6, 6-2)</span></td>'
+        '<th class="plName" colspan="2"><a href="/player/b-1">Player B</a></th>'
+        '</tr></thead></table>'
+    )
+    result = None
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail", return_value=html,
+    ):
+        result = get_match_detail("1")
+    assert result is not None
+    assert result["player_a_ranking"] is None
+    assert result["player_a_birthdate"] is None
+    assert result["player_a_height_cm"] is None
+    assert result["player_a_plays"] is None
+
+
+def test_bio_row_fail_closed_when_label_missing():
+    assert _bio_row("<html>no rows</html>", "Singles ranking") == (None, None)
+
+
+def test_parse_birthdate_valid():
+    assert _parse_birthdate("31. 8. 2001") == "2001-08-31"
+
+
+def test_parse_birthdate_fail_closed_on_dash():
+    assert _parse_birthdate("-") is None
+
+
+def test_parse_birthdate_fail_closed_on_garbage():
+    assert _parse_birthdate("not a date") is None
+
+
+def test_parse_int_prefix_strips_unit_suffix():
+    assert _parse_int_prefix("180 cm") == 180
+    assert _parse_int_prefix("59 kg") == 59
+    assert _parse_int_prefix("10.") == 10
+
+
+def test_parse_int_prefix_fail_closed_on_dash():
+    assert _parse_int_prefix("-") is None
+    assert _parse_int_prefix(None) is None

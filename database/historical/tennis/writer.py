@@ -25,7 +25,19 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory,
     TennisHeadToHead, TennisSurfaceMatchHistory, TennisAbstractElo,
     TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
-    TennisRecentResult,
+    TennisRecentResult, TennisMatchDetail,
+)
+
+# Campos comparables de `TennisMatchDetail` para detectar cambios reales
+# de la fuente en `save_match_detail` -- excluye `match_id` (la clave) y
+# los timestamps propios (`fetched_at`/`updated_at`, nunca son "el dato
+# cambió", son metadata nuestra).
+_MATCH_DETAIL_COMPARABLE_FIELDS = (
+    "match_date", "tournament", "round", "surface", "score", "winner_side",
+    "player_a_name", "player_a_slug", "player_a_ranking", "player_a_birthdate",
+    "player_a_height_cm", "player_a_weight_kg", "player_a_plays",
+    "player_b_name", "player_b_slug", "player_b_ranking", "player_b_birthdate",
+    "player_b_height_cm", "player_b_weight_kg", "player_b_plays",
 )
 
 
@@ -132,6 +144,80 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
             )
     except Exception:
         pass
+
+
+def save_match_detail(detail: dict[str, Any]) -> str:
+    """Idempotente por `match_id` -- 2026-08-08, pedido explícito del
+    usuario: "si el match ya existe en las tablas, no hay que agregarlo
+    nuevamente, sólo actualizar si se verifica que es el mismo match y
+    los datos han cambiado". 1 fila por partido REAL (a diferencia de
+    `save_match_history`, que guarda 2 filas por partido, una por
+    jugador).
+
+    `detail` es el dict que devuelve `get_match_detail` (fechas ya en
+    ISO string). Fail-closed: si falta `match_id`/`player_a_name`/
+    `player_b_name` (los únicos campos NOT NULL del modelo), no escribe
+    nada y devuelve "invalid" -- nunca fabrica un partido a medias.
+
+    Returns: "created" | "updated" | "unchanged" | "invalid" | "error"
+    -- para que el caller (harvesting en el backfill) pueda reportar un
+    resumen real de qué pasó, no solo "terminó sin excepción"."""
+    match_id = detail.get("match_id")
+    if not match_id or not detail.get("player_a_name") or not detail.get("player_b_name"):
+        return "invalid"
+    try:
+        init_db_historical()
+        now = _now()
+
+        def _parse_date_field(raw):
+            if not raw:
+                return None
+            from datetime import date as _d
+            try:
+                return _d.fromisoformat(raw)
+            except ValueError:
+                return None
+
+        fields = {
+            "match_date": detail.get("match_date"),
+            "tournament": detail.get("tournament"),
+            "round": detail.get("round"),
+            "surface": detail.get("surface"),
+            "score": detail.get("score"),
+            "winner_side": detail.get("winner_side"),
+            "player_a_name": detail["player_a_name"],
+            "player_a_slug": detail.get("player_a_slug"),
+            "player_a_ranking": detail.get("player_a_ranking"),
+            "player_a_birthdate": _parse_date_field(detail.get("player_a_birthdate")),
+            "player_a_height_cm": detail.get("player_a_height_cm"),
+            "player_a_weight_kg": detail.get("player_a_weight_kg"),
+            "player_a_plays": detail.get("player_a_plays"),
+            "player_b_name": detail["player_b_name"],
+            "player_b_slug": detail.get("player_b_slug"),
+            "player_b_ranking": detail.get("player_b_ranking"),
+            "player_b_birthdate": _parse_date_field(detail.get("player_b_birthdate")),
+            "player_b_height_cm": detail.get("player_b_height_cm"),
+            "player_b_weight_kg": detail.get("player_b_weight_kg"),
+            "player_b_plays": detail.get("player_b_plays"),
+        }
+
+        existing = TennisMatchDetail.get_or_none(TennisMatchDetail.match_id == match_id)
+        if existing is None:
+            TennisMatchDetail.create(match_id=match_id, fetched_at=now, **fields)
+            return "created"
+
+        changed = False
+        for f in _MATCH_DETAIL_COMPARABLE_FIELDS:
+            if getattr(existing, f) != fields[f]:
+                setattr(existing, f, fields[f])
+                changed = True
+        if changed:
+            existing.updated_at = now
+            existing.save()
+            return "updated"
+        return "unchanged"
+    except Exception:
+        return "error"
 
 
 def _last_midnight_utc():

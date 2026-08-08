@@ -255,6 +255,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
+        TennisMatchDetail,
     )
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
@@ -267,6 +268,10 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
+        # 2026-08-08, pedido explícito del usuario -- 1 fila por partido
+        # real (no 2 como TennisMatchHistory), con identidad resuelta
+        # con certeza vía match-detail de TennisExplorer. Tabla nueva.
+        TennisMatchDetail,
         TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
         # 2026-08-05, pedido explícito del usuario -- tracking de scan +
         # ticks tick-by-tick para MLB, mismo patrón que tenis (tablas

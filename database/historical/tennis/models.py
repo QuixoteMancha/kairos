@@ -195,6 +195,61 @@ class TennisPlayerBio(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
+class TennisMatchDetail(HistoricalBaseModel):
+    """Un registro por partido REAL (1 fila, NO duplicado por jugador
+    como `TennisMatchHistory`) -- 2026-08-08, pedido explícito del
+    usuario tras descubrir que la página `match-detail` de
+    TennisExplorer resuelve identidad de AMBOS jugadores con CERTEZA
+    (nombre completo real + slug ya desambiguado, ver
+    `outer_apis/scrapers/tennis/tennisexplorer_player_scraper.py::
+    get_match_detail`), evitando el matching fuzzy por apellido+fecha
+    que causó los incidentes de misattribution de esta sesión.
+
+    Trae además datos bio de ambos jugadores AL MOMENTO del partido
+    (ranking, no snapshot actual como `TennisPlayerRanking`) y datos
+    permanentes (fecha de nacimiento, altura, peso, mano dominante) que
+    hoy no existen en ninguna otra tabla con este detalle.
+
+    Idempotente por `match_id` (el ID real de TennisExplorer, cosechado
+    gratis del link `/match-detail/?id=...` que ya viene en cada fila
+    de historial, sin request extra para descubrirlo) -- ver
+    `database/historical/tennis/writer.py::save_match_detail`: si el
+    partido ya existe, NUNCA se duplica; solo se actualiza si algún
+    campo cambió de verdad respecto a lo guardado (poco probable, pero
+    posible por error/corrección de la fuente)."""
+
+    class Meta:
+        table_name = "tennis_match_detail"
+        indexes = ((("match_id",), True),)
+
+    match_id = CharField(unique=True)
+    match_date = CharField(null=True)
+    tournament = CharField(null=True)
+    round = CharField(null=True)
+    surface = CharField(null=True)
+    score = CharField(null=True)
+    winner_side = CharField(null=True)  # "a" | "b" | None si no determinable
+
+    player_a_name = CharField()  # nombre completo real, ej. "Anisimova Amanda"
+    player_a_slug = CharField(null=True)
+    player_a_ranking = IntegerField(null=True)
+    player_a_birthdate = DateField(null=True)
+    player_a_height_cm = IntegerField(null=True)
+    player_a_weight_kg = IntegerField(null=True)
+    player_a_plays = CharField(null=True)
+
+    player_b_name = CharField()
+    player_b_slug = CharField(null=True)
+    player_b_ranking = IntegerField(null=True)
+    player_b_birthdate = DateField(null=True)
+    player_b_height_cm = IntegerField(null=True)
+    player_b_weight_kg = IntegerField(null=True)
+    player_b_plays = CharField(null=True)
+
+    fetched_at = DateTimeField()
+    updated_at = DateTimeField(null=True)  # solo se setea si una re-verificación cambió algún campo
+
+
 class ChartedMatch(HistoricalBaseModel):
     class Meta:
         table_name = "charted_match"
