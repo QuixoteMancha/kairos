@@ -255,7 +255,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
-        TennisMatchDetail,
+        TennisMatchDetail, TennisMatchHistoryUnvalidated,
     )
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
@@ -272,6 +272,10 @@ def init_db_historical() -> None:
         # real (no 2 como TennisMatchHistory), con identidad resuelta
         # con certeza vía match-detail de TennisExplorer. Tabla nueva.
         TennisMatchDetail,
+        # 2026-08-08, pedido explícito del usuario -- candidatos de dedup
+        # que no se pudieron validar contra Sackmann, "en una tabla
+        # aparte" (nunca se descartan). Tabla nueva.
+        TennisMatchHistoryUnvalidated,
         TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
         # 2026-08-05, pedido explícito del usuario -- tracking de scan +
         # ticks tick-by-tick para MLB, mismo patrón que tenis (tablas

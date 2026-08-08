@@ -120,6 +120,37 @@ def _verify_player_page(html: str, expected_name: str) -> bool:
     return False
 
 
+def expected_opponent_abbreviation(full_name: str) -> str | None:
+    """Reconstruye cómo TennisExplorer abreviaría a `full_name` cuando
+    aparece como RIVAL en la página de otro jugador -- 2026-08-08,
+    pedido explícito del usuario para deduplicar `TennisMatchHistory`
+    (2 filas por partido real) sin fetch de red.
+
+    Regla real verificada en vivo contra 1,471 jugadores/as reales de
+    producción (97.5% match directo, el resto son casos que nunca
+    fueron rival de nadie ya backfilleado -- no fallas de la regla):
+    TODO menos el PRIMER token del nombre + espacio + inicial del
+    primer token + "." -- NO es "solo el último apellido" (confirmado
+    con apellidos compuestos reales: "Alan Fernando Rubio Fierros" ->
+    rival aparece como "Rubio Fierros A.", "Adrian Menendez-Maceiras"
+    -> "Menendez-Maceiras A.").
+
+    LIMITACIÓN CONOCIDA: nombres de pila compuestos (ej. "Anna Karolina
+    Schmiedlova", donde "Anna Karolina" es el nombre completo, no solo
+    "Anna") rompen esta regla -- no hay forma de distinguir "nombre de
+    pila compuesto" de "apellido compuesto" solo a partir del string
+    plano. Por eso esto es SOLO un filtro de eficiencia para decidir
+    qué re-fetchear, NUNCA la fuente de verdad de identidad -- eso lo
+    resuelve `get_match_detail` contra la página real. Fail-closed:
+    None si `full_name` es una sola palabra (no hay nombre+apellido que
+    separar)."""
+    parts = full_name.strip().split(" ")
+    if len(parts) < 2:
+        return None
+    first, rest = parts[0], " ".join(parts[1:])
+    return f"{rest} {first[0]}."
+
+
 def guess_player_slug(player_name: str) -> str | None:
     """Ver LIMITACIÓN CONOCIDA en el docstring del módulo -- heurística
     verificada, no búsqueda real. Fail-closed: None si no hay match

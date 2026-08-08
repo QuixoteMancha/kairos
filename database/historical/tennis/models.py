@@ -223,6 +223,14 @@ class TennisMatchDetail(HistoricalBaseModel):
         indexes = ((("match_id",), True),)
 
     match_id = CharField(unique=True)
+    # 2026-08-08, pedido explícito del usuario -- "validaremos los
+    # matches de tennisexplorer con la data de sackmann histórica para
+    # validar la deduplicación": los partidos validados así NO tienen
+    # `match_id` real de TennisExplorer (no hubo fetch de match-detail,
+    # es validación contra `TmlDatabaseMatch`, sin red) -- usan un id
+    # sintético determinístico (`sackmann:{year}:{winner}:{loser}`).
+    # `source` distingue el origen real del dato para quien lo consuma.
+    source = CharField(default="tennisexplorer")  # "tennisexplorer" | "sackmann"
     match_date = CharField(null=True)
     tournament = CharField(null=True)
     round = CharField(null=True)
@@ -249,6 +257,41 @@ class TennisMatchDetail(HistoricalBaseModel):
     fetched_at = DateTimeField()
     updated_at = DateTimeField(null=True)  # solo se setea si una re-verificación cambió algún campo
 
+
+class TennisMatchHistoryUnvalidated(HistoricalBaseModel):
+    """Candidatos de partido único (salidos de `dedupe_match_history_
+    candidates.py`) que NO se pudieron confirmar contra `TmlDatabaseMatch`
+    -- 2026-08-08, pedido explícito del usuario: "los que no se puedan
+    validar los dejamos en una tabla aparte" (nunca se descartan, nunca
+    se fuerza una identidad sin confirmar).
+
+    `reason` explica por qué: "no_sackmann_match" (Sackmann no cubre
+    ese nivel/torneo -- esperable, ITF/challenger bajo no siempre está),
+    "ambiguous_sackmann_match" (2+ partidos candidatos el mismo año
+    entre las mismas 2 personas, el score no alcanzó para desambiguar),
+    "dedup_conflict" (ya venía ambiguo desde el dedup mismo, ver
+    `find_match_candidates`).
+
+    Idempotente por (match_date, tournament, player_a_name,
+    player_b_name_or_abbrev) -- re-correr la validación no duplica."""
+
+    class Meta:
+        table_name = "tennis_match_history_unvalidated"
+        indexes = ((("match_date", "tournament", "player_a_name", "player_b_name_or_abbrev"), True),)
+
+    match_date = CharField(null=True)
+    tournament = CharField(null=True)
+    round = CharField(null=True)
+    surface = CharField(null=True)
+    score_from_a = CharField(null=True)
+    player_a_name = CharField()
+    # nombre completo si el dedup ya lo resolvió (candidato "paired"),
+    # o la abreviación cruda si no ("singleton"/"conflict") -- por eso
+    # el nombre genérico del campo, no "player_b_name".
+    player_b_name_or_abbrev = CharField()
+    player_b_is_full_name = BooleanField()
+    reason = CharField()
+    fetched_at = DateTimeField()
 
 class ChartedMatch(HistoricalBaseModel):
     class Meta:
