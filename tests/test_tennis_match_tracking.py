@@ -105,17 +105,18 @@ def test_tick_worker_winner_logic_and_batching():
 
     with patch("workers.tennis_match_tick_worker.KalshiAPI") as mock_api_cls, \
          patch.object(worker._fmodel, "calculate_fair_price", return_value={"fair_a_price": 0.6, "fair_b_price": 0.4}), \
-         patch("workers.tennis_match_tick_worker.find_match_id", return_value=None) as mock_find_match_id, \
          patch("workers.tennis_match_tick_worker.check_and_save_set1_signal", return_value="skipped") as mock_set1:
         mock_api = mock_api_cls.return_value
         mock_api.get_markets_by_tickers.return_value = fake_cache
         result = worker.run_once()
 
-    # el partido que resolvió (W1) dispara el intento de fetch de stats
-    # (best-effort, ver _fetch_and_save_match_stats) -- acá no encuentra
-    # match_id (mockeado a None) así que no guarda nada, pero confirma
-    # que el settlement SIEMPRE intenta el fetch, sin tumbar el ciclo.
-    mock_find_match_id.assert_called_once()
+    # 2026-08-08, pedido explícito del usuario -- el fetch de stats vía
+    # Flashscore se removió de este worker (pasó a
+    # tennis_match_history_sync_worker.py). El settlement de W1 ya NO
+    # dispara ningún fetch acá, solo actualiza winner/settled_at.
+    match_w1 = TennisScannedMatch.get(TennisScannedMatch.market_id == "KXATPMATCH-W1")
+    assert match_w1.winner == "a"
+    assert match_w1.settled_at is not None
 
     # 2026-08-02, fusión de set1_favorite_reaction_worker: se llama para
     # AMBOS partidos abiertos (W1 y W2), sin importar si después
