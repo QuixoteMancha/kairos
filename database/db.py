@@ -287,6 +287,35 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "tennis_scanned_match", "tournament", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_recent_result", "round", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_scanned_match", "round", "VARCHAR(255)")
+    # 2026-08-08, revisión del consolidado de modelos (pedido explícito
+    # del usuario) -- `MatchStats` (database/historical/match_models.py)
+    # agrega la FK `match` (columna real `match_id`) + 28 columnas de
+    # stats tipificadas nuevas sobre la tabla YA EXISTENTE
+    # `tennis_match_stats` (66 filas reales en producción al momento de
+    # este cambio) -- `create_tables(safe=True)` NUNCA hace ALTER TABLE
+    # sobre una tabla ya creada, así que sin esto cualquier lectura real
+    # (`MatchStats.select()`) hubiera fallado con "no such column".
+    # Todas nullable -- filas existentes quedan con NULL, fail-closed,
+    # nunca se inventa un valor.
+    _add_column_if_missing(db_historical, "tennis_match_stats", "match_id", "INTEGER")
+    for _col, _sql_type in [
+        ("aces_a", "INTEGER"), ("aces_b", "INTEGER"),
+        ("double_faults_a", "INTEGER"), ("double_faults_b", "INTEGER"),
+        ("winners_a", "INTEGER"), ("winners_b", "INTEGER"),
+        ("unforced_errors_a", "INTEGER"), ("unforced_errors_b", "INTEGER"),
+        ("total_points_won_a", "INTEGER"), ("total_points_won_b", "INTEGER"),
+        ("service_games_won_a", "INTEGER"), ("service_games_won_b", "INTEGER"),
+        ("return_games_won_a", "INTEGER"), ("return_games_won_b", "INTEGER"),
+        ("first_serve_pct_a", "REAL"), ("first_serve_pct_b", "REAL"),
+        ("second_serve_pct_a", "REAL"), ("second_serve_pct_b", "REAL"),
+        ("first_serve_points_won_pct_a", "REAL"), ("first_serve_points_won_pct_b", "REAL"),
+        ("second_serve_points_won_pct_a", "REAL"), ("second_serve_points_won_pct_b", "REAL"),
+        ("break_points_won_a", "INTEGER"), ("break_points_won_b", "INTEGER"),
+        ("break_points_faced_a", "INTEGER"), ("break_points_faced_b", "INTEGER"),
+        ("break_points_saved_a", "INTEGER"), ("break_points_saved_b", "INTEGER"),
+        ("serve_games_played_a", "INTEGER"), ("serve_games_played_b", "INTEGER"),
+    ]:
+        _add_column_if_missing(db_historical, "tennis_match_stats", _col, _sql_type)
     # 2026-08-02, pedido explícito del usuario: clima para ChartedMatch
     # (Match Charting Project) -- agregado DESPUÉS del import inicial de
     # 7744 filas, requiere ALTER TABLE igual que los casos de arriba.
