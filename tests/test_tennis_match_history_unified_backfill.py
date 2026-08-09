@@ -74,6 +74,21 @@ def test_run_cycle_one_phase_failing_does_not_block_the_others():
     assert result["tour_by_sex_phase"] == {"players_resolved": 3}
 
 
+def test_run_cycle_does_not_cap_batch_size():
+    # 2026-08-09, pedido explícito del usuario: "tiene que hacer el
+    # backfill de los matches que efectivamente carecen de los campos...
+    # no de 200 jugadores" -- ambas fases deben llamarse SIN tope
+    # artificial (None = procesa todo lo realmente pendiente).
+    with patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_match_detail_phase", return_value={},
+    ) as mock_md, patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_tour_by_sex_phase", return_value={},
+    ) as mock_sex:
+        run_cycle(cycle_number=1)
+    mock_md.assert_called_once_with(batch_players=None)
+    mock_sex.assert_called_once_with(limit_players=None)
+
+
 def test_bar_reflects_percentage_filled():
     assert _bar(0.0, width=10) == "[----------]"
     assert _bar(100.0, width=10) == "[##########]"

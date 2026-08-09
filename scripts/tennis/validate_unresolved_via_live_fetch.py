@@ -126,9 +126,12 @@ def process_player(player_a_name: str, candidates: list) -> dict:
     return {"player": player_a_name, "resolved": resolved, "unresolved": len(remaining)}
 
 
-def run_once(batch_players: int = 200) -> dict:
+def run_once(batch_players: int | None = 200) -> dict:
     """Procesa hasta `batch_players` jugadores distintos con candidatos
-    pendientes, en paralelo (`_MAX_WORKERS` threads)."""
+    pendientes, en paralelo (`_MAX_WORKERS` threads). `batch_players=None`
+    -- sin tope, procesa TODOS los jugadores con candidatos pendientes
+    (2026-08-09, pedido explícito del usuario: el backfill debe ir por
+    lo que realmente falta, no por un tope arbitrario)."""
     from database.db import init_db_historical, db_historical
     from database.historical.tennis import TennisMatchHistoryUnvalidated
 

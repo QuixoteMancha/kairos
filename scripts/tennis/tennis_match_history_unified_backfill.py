@@ -53,8 +53,18 @@ from scripts.tennis.backfill_match_history_tour_via_sex import run_backfill as r
 from scripts.tennis.backfill_matchhistory_level_from_sackmann import run_backfill as run_derive_phase
 
 _SLEEP_BETWEEN_CYCLES_S = 30.0
-_MATCH_DETAIL_BATCH_PLAYERS = 200
-_TOUR_BY_SEX_BATCH_PLAYERS = 200
+# 2026-08-09, pedido explícito del usuario: "tiene que hacer el
+# backfill de los matches que efectivamente carecen de los campos que
+# estamos backfilleando, no de 200 jugadores" -- `None` = sin tope
+# artificial, procesa TODO lo que esté realmente pendiente en cada
+# ciclo (ambas funciones reusadas ya soportan `None` vía slice `[:None]`
+# de Python, que devuelve la lista completa -- no requirió cambio en
+# esas funciones). El ritmo real sigue estando gobernado por el
+# throttle de request (0.5s+ delay aleatorio por fetch), no por este
+# tope -- subir/bajar el tope solo cambiaba cada cuánto se imprimía el
+# progreso, nunca la velocidad real de la red.
+_MATCH_DETAIL_BATCH_PLAYERS = None
+_TOUR_BY_SEX_BATCH_PLAYERS = None
 _DERIVE_EVERY_N_CYCLES = 20  # full-table scan -- no repetir en cada ciclo de 30s
 
 _BAR_WIDTH = 24
