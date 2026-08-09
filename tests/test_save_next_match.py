@@ -14,6 +14,7 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory, save_next_match
+from database.historical.tennis.writer import _hint_matches_match_text
 
 
 @pytest.fixture(autouse=True)
@@ -98,6 +99,23 @@ def test_save_next_match_validates_against_expected_opponent_hint():
     assert MatchHistory.select().count() == 0
 
 
+def test_save_next_match_passes_validation_when_hint_is_full_name_in_reversed_order():
+    # 2026-08-09, bug real encontrado en producción (verificado en vivo
+    # con "Elina Svitolina vs Ekaterina Alexandrova", 8/8 fallos en el
+    # primer ciclo del hilo de enriquecimiento): el hint viene en
+    # formato "Nombre Apellido" (convención de Kalshi/TennisScannedMatch,
+    # ej. "Ekaterina Alexandrova"), pero `match_text` viene en el orden
+    # nativo de TennisExplorer ("Apellido Inicial.", ej. "Alexandrova
+    # E."). Un substring exacto NUNCA matcheaba.
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_next_match", return_value=_NEXT_MATCH,
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_match_detail", return_value=_DETAIL,
+    ):
+        result = save_next_match("Elina Svitolina", expected_opponent_hint="Ekaterina Alexandrova")
+    assert result is True
+
+
 def test_save_next_match_passes_validation_when_hint_matches():
     with patch(
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_next_match", return_value=_NEXT_MATCH,
@@ -117,3 +135,9 @@ def test_save_next_match_false_when_identity_does_not_confirm():
     ):
         result = save_next_match("Elina Svitolina")
     assert result is False
+
+
+def test_hint_matches_match_text_ignores_token_order():
+    assert _hint_matches_match_text("Ekaterina Alexandrova", "Alexandrova E. - Svitolina E.") is True
+    assert _hint_matches_match_text("Alexandrova", "Alexandrova E. - Svitolina E.") is True
+    assert _hint_matches_match_text("Someone Unrelated", "Alexandrova E. - Svitolina E.") is False

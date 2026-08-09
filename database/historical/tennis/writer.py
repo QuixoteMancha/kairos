@@ -271,6 +271,23 @@ def _resolve_and_save_via_match_detail(known_player_name: str, match_id: str) ->
         return False
 
 
+def _hint_matches_match_text(hint: str, match_text: str) -> bool:
+    """`True` si algún token real (>1 char) de `hint` aparece como
+    palabra completa en `match_text` -- 2026-08-09, bug real encontrado
+    en producción: `expected_opponent_hint` viene en el orden que use el
+    caller (ej. Kalshi: "Nombre Apellido"), pero `match_text` viene en
+    el orden nativo de TennisExplorer ("Apellido Inicial.", ej.
+    "Alexandrova E. - Svitolina E.") -- una comparación de SUBSTRING
+    directa (el nombre completo del hint dentro del string crudo)
+    NUNCA matcheaba por el orden invertido, tumbando el 100% de las
+    validaciones reales (verificado en vivo: 8/8 fallos en el primer
+    ciclo del hilo de enriquecimiento, incluyendo un caso real conocido,
+    Alexandrova-Svitolina). Comparación por tokens, no por orden."""
+    hint_tokens = {t.lower() for t in hint.replace("-", " ").split() if len(t) > 1}
+    text_tokens = {t.strip(".,").lower() for t in match_text.replace("-", " ").split()}
+    return bool(hint_tokens & text_tokens)
+
+
 def save_next_match(player_name: str, expected_opponent_hint: str | None = None) -> bool:
     """Resuelve+persiste el partido PROGRAMADO (aún no jugado) de la
     sección "Next match" del perfil de `player_name` -- 2026-08-09,
@@ -306,7 +323,9 @@ def save_next_match(player_name: str, expected_opponent_hint: str | None = None)
         next_match = get_next_match(player_name)
         if next_match is None or not next_match.get("match_id"):
             return False
-        if expected_opponent_hint and expected_opponent_hint.lower() not in (next_match.get("match_text") or "").lower():
+        if expected_opponent_hint and not _hint_matches_match_text(
+            expected_opponent_hint, next_match.get("match_text") or "",
+        ):
             return False
         return _resolve_and_save_via_match_detail(player_name, next_match["match_id"])
     except Exception:
