@@ -18,13 +18,23 @@ from unittest.mock import patch
 from database.db import init_db_historical
 from database.historical.tennis import MatchHistory, WtaTournamentLevel
 from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
-    _rank_at, _build_surface_winrate_tracker, collect_wta_cases, run_backtest, _MIN_RANK_GAP, _BEST_OF,
+    _rank_at, _name_token_key, _build_surface_winrate_tracker, collect_wta_cases, run_backtest,
+    _MIN_RANK_GAP, _BEST_OF,
     _self_won_set1, _simulate_bet_after_set1_win,
     _normalize_tournament_name, _is_main_tour_level, _WTA_MAIN_TOUR_LEVELS,
     _self_won_set_n, _self_set1_game_diff, run_all_variants_backtest,
 )
 
 _next_match_id = iter(range(1, 10_000))
+
+
+def _idx(plain: dict[str, list]) -> dict:
+    """Convierte un ranking_index de test escrito con nombres crudos
+    ({"Ana Ivanovic": [...]}) al esquema real keyed por `_name_token_key`
+    (2026-08-09, bug real: WtaPlayerRankingHistory usa "Nombre Apellido",
+    MatchHistory/TennisExplorer usa "Apellido Nombre" -- ver docstring de
+    `_name_token_key`)."""
+    return {_name_token_key(name): entries for name, entries in plain.items()}
 
 
 def setup_function(_fn):
@@ -55,13 +65,13 @@ def test_min_rank_gap_is_30_for_wta():
 
 
 def test_rank_at_finds_most_recent_entry_leq_date():
-    index = {"Iga Swiatek": [("2020-01-01", 50), ("2021-01-01", 10), ("2022-01-01", 1)]}
+    index = _idx({"Iga Swiatek": [("2020-01-01", 50), ("2021-01-01", 10), ("2022-01-01", 1)]})
     assert _rank_at("Iga Swiatek", "2021-06-01", index) == 10
     assert _rank_at("Iga Swiatek", "2022-06-01", index) == 1
 
 
 def test_rank_at_fail_closed_before_first_entry():
-    index = {"Iga Swiatek": [("2021-01-01", 10)]}
+    index = _idx({"Iga Swiatek": [("2021-01-01", 10)]})
     assert _rank_at("Iga Swiatek", "2019-01-01", index) is None
 
 
@@ -74,13 +84,42 @@ def test_collect_wta_cases_excludes_players_outside_roster():
     _real_row("Ana Ivanovic", "Beatriz Zonta", "2016-01-01", "W")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
         cases, meta = collect_wta_cases()
     assert cases == []
     assert meta["skipped_not_wta_roster"] == 1
+
+
+def test_name_token_key_matches_regardless_of_first_last_order():
+    # 2026-08-09, bug real encontrado en vivo: WtaPlayerRankingHistory
+    # (API oficial WTA) guarda "Nombre Apellido" ("Serena Williams"),
+    # MatchHistory (TennisExplorer, TODAS las fuentes) guarda "Apellido
+    # Nombre" ("Williams Serena") -- el backtest daba 0 casos porque
+    # comparaba las strings crudas.
+    assert _name_token_key("Serena Williams") == _name_token_key("Williams Serena")
+    # apellidos compuestos, cualquier posición
+    assert _name_token_key("Pablo Carreno Busta") == _name_token_key("Carreno Busta Pablo")
+    assert _name_token_key("Serena Williams") != _name_token_key("Venus Williams")
+
+
+def test_collect_wta_cases_matches_roster_despite_reversed_name_order():
+    # Reproduce el bug real: fila de MatchHistory en convención
+    # TennisExplorer ("Apellido Nombre"), roster en convención WTA
+    # oficial ("Nombre Apellido") -- deben matchear igual.
+    ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
+    _real_row("Ivanovic Ana", "Kvitova Petra", "2016-01-01", "W")  # orden invertido, como TennisExplorer real
+    with patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
+        return_value=_idx(ranking_index),
+    ), patch(
+        "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
+    ):
+        cases, meta = collect_wta_cases()
+    assert len(cases) == 1
+    assert meta["skipped_not_wta_roster"] == 0
 
 
 def test_collect_wta_cases_single_row_per_match_no_duplicate():
@@ -92,7 +131,7 @@ def test_collect_wta_cases_single_row_per_match_no_duplicate():
     _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
@@ -157,7 +196,7 @@ def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
     _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W", score="6-4, 6-3")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
@@ -175,7 +214,7 @@ def test_collect_wta_cases_favorite_is_opponent_flips_set1_result():
     _real_row("Petra Kvitova", "Ana Ivanovic", "2016-01-01", "W", score="6-4, 6-3")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):
@@ -241,7 +280,7 @@ def test_collect_wta_cases_excludes_below_250_level_tournament():
     level_index = {(2016, "MAKARSKA"): "WTA 125"}
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_tournament_level_index",
         return_value=level_index,
@@ -304,7 +343,7 @@ def test_collect_wta_cases_includes_fields_needed_for_all_variants():
     _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W", score="6-4, 4-6, 6-3", tournament="Miami")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
-        return_value=ranking_index,
+        return_value=_idx(ranking_index),
     ), patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._is_main_tour_level", return_value=True,
     ):

@@ -260,24 +260,42 @@ def _single_set_win_prob_wta(rank_a: int, rank_b: int, surface: str | None) -> f
     return _p_win_set(pa_game, pb_game, a_serves_first=True, pa_serve=pa_serve, pb_serve=pb_serve)
 
 
-def _load_ranking_index() -> dict[str, list[tuple[str, int]]]:
-    """{player_name: [(ranked_at, singles_ranking), ...]} ordenado
+def _name_token_key(name: str) -> frozenset[str]:
+    """Clave de comparación de nombre INDEPENDIENTE del orden -- 2026-08-09,
+    bug real encontrado en vivo: `WtaPlayerRankingHistory.player_name`
+    (API oficial WTA) usa convención "Nombre Apellido" ("Serena
+    Williams"), pero `MatchHistory.player_a_name`/`player_b_name`
+    (TennisExplorer, TODAS las variantes -- match-detail real y
+    recentform en vivo) usa SIEMPRE "Apellido Nombre" ("Williams
+    Serena"). El backtest daba 0 casos porque comparaba las strings
+    exactas sin resolver el orden invertido.
+
+    Set de tokens en vez de invertir 2 palabras a mano -- soporta
+    apellidos compuestos en cualquier posición ("Pablo Carreno Busta" y
+    "Carreno Busta Pablo" dan la MISMA clave), guion tratado como
+    separador (mismo criterio que `_norm_surname`)."""
+    return frozenset(t for t in name.replace("-", " ").strip().lower().split(" ") if t)
+
+
+def _load_ranking_index() -> dict[frozenset[str], list[tuple[str, int]]]:
+    """{name_token_key: [(ranked_at, singles_ranking), ...]} ordenado
     cronológicamente -- cargado una sola vez en memoria para resolver
-    miles de lookups sin una query por partido."""
+    miles de lookups sin una query por partido. Clave por `_name_token_key`
+    (no el string crudo) para no depender del orden Nombre/Apellido."""
     init_db_historical()
-    index: dict[str, list[tuple[str, int]]] = {}
+    index: dict[frozenset[str], list[tuple[str, int]]] = {}
     for r in WtaPlayerRankingHistory.select().order_by(WtaPlayerRankingHistory.ranked_at):
-        index.setdefault(r.player_name, []).append((r.ranked_at, r.singles_ranking))
+        index.setdefault(_name_token_key(r.player_name), []).append((r.ranked_at, r.singles_ranking))
     return index
 
 
-def _rank_at(name: str, date_iso: str, index: dict[str, list[tuple[str, int]]]) -> int | None:
+def _rank_at(name: str, date_iso: str, index: dict[frozenset[str], list[tuple[str, int]]]) -> int | None:
     """Ranking real vigente en `date_iso` -- la entrada semanal más
     reciente CON FECHA <= date_iso. Fail-closed: None si la jugadora no
     está en el roster, o si su primera entrada real es POSTERIOR a
     `date_iso` (todavía no estaba rankeada en esa fecha -- no se
     extrapola hacia atrás)."""
-    entries = index.get(name)
+    entries = index.get(_name_token_key(name))
     if not entries:
         return None
     dates = [e[0] for e in entries]
@@ -348,7 +366,7 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
             continue
         seen.add(dedup_key)
 
-        if player_name not in ranking_index or opponent_full_name not in ranking_index:
+        if _name_token_key(player_name) not in ranking_index or _name_token_key(opponent_full_name) not in ranking_index:
             skipped_not_wta_roster += 1
             continue
 
