@@ -177,6 +177,21 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
         pass
 
 
+def _swap_match_detail_sides(fields: dict[str, Any]) -> dict[str, Any]:
+    """Invierte player_a_*/player_b_*/winner_side de un dict de campos
+    de `save_match_detail` -- usado cuando la fila EXISTENTE en
+    `MatchHistory` (encontrada por par de jugadores + fecha, no por
+    match_id) tiene los lados en el orden opuesto al que trae el
+    `detail` recién resuelto."""
+    swapped = dict(fields)
+    for suffix in ("name", "slug", "ranking", "birthdate", "height_cm", "weight_kg", "plays"):
+        a_key, b_key = f"player_a_{suffix}", f"player_b_{suffix}"
+        swapped[a_key], swapped[b_key] = fields[b_key], fields[a_key]
+    if fields.get("winner_side") in ("a", "b"):
+        swapped["winner_side"] = "b" if fields["winner_side"] == "a" else "a"
+    return swapped
+
+
 def save_match_detail(detail: dict[str, Any]) -> str:
     """Idempotente por `match_id` -- 2026-08-08, pedido explícito del
     usuario: "si el match ya existe en las tablas, no hay que agregarlo
@@ -239,11 +254,42 @@ def save_match_detail(detail: dict[str, Any]) -> str:
         }
 
         existing = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
+        upgraded_identity = False
+        if existing is None:
+            # 2026-08-09, pedido explícito del usuario tras auditar un
+            # riesgo real: antes de crear una fila NUEVA, chequear si el
+            # MISMO partido real ya existe bajo un match_id sintético
+            # (ej. "recentform:...", creado por el prefetch en vivo de
+            # `save_match_history`/`save_surface_match_history` ANTES de
+            # que este partido se resolviera vía match-detail real) --
+            # evita duplicar el mismo partido con 2 match_id distintos.
+            # Auditado en producción (2026-08-09): 0 duplicados reales
+            # encontrados en 448K+ filas hasta ahora, pero el riesgo
+            # existía en el código -- mismo criterio de prevención que
+            # ya usa `save_match_history` (`_find_existing_match_history_row`).
+            match_date = fields.get("match_date")
+            if match_date:
+                candidate = _find_existing_match_history_row(
+                    fields["player_a_name"], fields["player_b_name"], match_date,
+                )
+                if candidate is not None:
+                    existing = candidate
+                    upgraded_identity = existing.match_id != match_id
+                    if upgraded_identity:
+                        existing.match_id = match_id  # identidad real gana sobre la sintética
+                    if existing.player_a_name != fields["player_a_name"]:
+                        # la fila existente tiene player_a/player_b en el
+                        # orden INVERSO (la creó el prefetch del OTRO
+                        # jugador primero) -- espejar los campos nuevos
+                        # para no mezclar bio de un lado con winner_side/
+                        # ranking del otro.
+                        fields = _swap_match_detail_sides(fields)
+
         if existing is None:
             MatchHistory.create(match_id=match_id, fetched_at=now, **fields)
             return "created"
 
-        changed = False
+        changed = upgraded_identity
         for f in _MATCH_DETAIL_COMPARABLE_FIELDS:
             if getattr(existing, f) != fields[f]:
                 setattr(existing, f, fields[f])

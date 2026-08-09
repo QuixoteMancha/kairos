@@ -101,6 +101,62 @@ def test_invalid_without_player_names():
     assert MatchHistory.select().count() == 0
 
 
+def test_upgrades_synthetic_recentform_row_instead_of_duplicating():
+    # 2026-08-09, pedido explícito del usuario tras auditar un riesgo
+    # real: si ya existe una fila "recentform:..." (creada por el
+    # prefetch en vivo) para el MISMO partido real (mismo par de
+    # jugadores + fecha), save_match_detail debe COMPLETARLA con la
+    # identidad real (match_id real + bio), no crear una fila duplicada.
+    from datetime import datetime, timezone
+    MatchHistory.create(
+        match_id="recentform:anisimova amanda|sabalenka aryna|2024-08-10",
+        player_a_name="Anisimova Amanda", player_b_name="Sabalenka Aryna",
+        match_date="2024-08-10", winner_side="a", source="tennisexplorer",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    status = save_match_detail(_detail())
+    assert status == "updated"
+    assert MatchHistory.select().count() == 1  # no se duplicó
+    row = MatchHistory.get()
+    assert row.match_id == "2692781"  # identidad real gana sobre la sintética
+    assert row.player_a_ranking == 10  # se completó la bio real
+
+
+def test_upgrades_synthetic_row_with_sides_swapped():
+    # la fila existente tiene a Sabalenka como player_a (la creó SU
+    # propio prefetch primero) -- el detail nuevo trae a Anisimova como
+    # player_a. Deben espejarse los campos, no mezclar bio de un lado
+    # con winner_side del otro.
+    from datetime import datetime, timezone
+    MatchHistory.create(
+        match_id="recentform:x",
+        player_a_name="Sabalenka Aryna", player_b_name="Anisimova Amanda",
+        match_date="2024-08-10", winner_side="b", source="tennisexplorer",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    status = save_match_detail(_detail())  # detail: player_a=Anisimova, winner_side="a"
+    assert status == "updated"
+    assert MatchHistory.select().count() == 1
+    row = MatchHistory.get()
+    assert row.match_id == "2692781"
+    # espejado: ahora player_a=Sabalenka (para no romper la fila existente),
+    # winner_side invertido a "b" (Anisimova sigue siendo la ganadora real)
+    assert row.player_a_name == "Sabalenka Aryna"
+    assert row.player_b_name == "Anisimova Amanda"
+    assert row.winner_side == "b"
+    assert row.player_b_ranking == 10  # ranking de Anisimova (10) ahora del lado b
+
+
+def test_does_not_search_by_pair_when_match_date_missing():
+    # sin match_date no hay forma segura de buscar por par+fecha --
+    # debe crear directo, nunca arriesgarse a un match falso.
+    status = save_match_detail({
+        "match_id": "999", "player_a_name": "Player A", "player_b_name": "Player B",
+    })
+    assert status == "created"
+    assert MatchHistory.select().count() == 1
+
+
 def test_tolerates_missing_optional_bio_fields():
     minimal = {
         "match_id": "42",
