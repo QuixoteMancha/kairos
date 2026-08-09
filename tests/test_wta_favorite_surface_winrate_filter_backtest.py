@@ -1,32 +1,45 @@
 """Tests del backtest WTA de la estrategia final (2026-08-05, pedido
 explícito del usuario -- "calcular por separado los resultados de esta
-estrategia tanto en ATP como WTA")."""
+estrategia tanto en ATP como WTA").
+
+2026-08-09: migrado de `TennisMatchHistory` (1 fila por jugadora, con
+`opponent_name` abreviado -- requería resolución de abreviación) a
+`MatchHistory` (1 fila por partido real, con nombre completo en AMBOS
+lados) -- ver nota de migración en `writer.py`. Los tests de
+`_build_abbrev_to_full_name_index`/`_resolve_abbreviated_name` se
+eliminaron junto con esas funciones (ya no existen, la resolución de
+abreviación era exclusivamente para el esquema viejo)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from database.db import init_db_historical
-from database.historical.tennis import TennisMatchHistory, WtaTournamentLevel
+from database.historical.tennis import MatchHistory, WtaTournamentLevel
 from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
     _rank_at, _build_surface_winrate_tracker, collect_wta_cases, run_backtest, _MIN_RANK_GAP, _BEST_OF,
-    _build_abbrev_to_full_name_index, _resolve_abbreviated_name, _self_won_set1, _simulate_bet_after_set1_win,
+    _self_won_set1, _simulate_bet_after_set1_win,
     _normalize_tournament_name, _is_main_tour_level, _WTA_MAIN_TOUR_LEVELS,
     _self_won_set_n, _self_set1_game_diff, run_all_variants_backtest,
 )
 
+_next_match_id = iter(range(1, 10_000))
+
 
 def setup_function(_fn):
     init_db_historical()
-    TennisMatchHistory.delete().execute()
+    MatchHistory.delete().execute()
     WtaTournamentLevel.delete().execute()
 
 
-def _real_row(player, opponent, date, result, surface="Hard", score="6-4, 6-3"):
-    from datetime import datetime, timezone
-    TennisMatchHistory.create(
-        player_name=player, opponent_name=opponent, match_date=date, result=result,
-        score=score, source="tennisexplorer", surface=surface, fetched_at=datetime.now(timezone.utc),
+def _real_row(player, opponent, date, result, surface="Hard", score="6-4, 6-3", tournament=None):
+    MatchHistory.create(
+        match_id=f"test:{next(_next_match_id)}",
+        player_a_name=player, player_b_name=opponent, match_date=date,
+        winner_side=("a" if result == "W" else "b"),
+        score=score, source="tennisexplorer", surface=surface, tournament=tournament,
+        fetched_at=datetime.now(timezone.utc),
     )
 
 
@@ -56,38 +69,9 @@ def test_rank_at_fail_closed_unknown_player():
     assert _rank_at("Nobody", "2021-01-01", {}) is None
 
 
-def test_build_abbrev_to_full_name_index_resolves_compound_surname():
-    _real_row("Jessica Bouzas Maneiro", "Ivanovic A.", "2016-01-01", "W")
-    index = _build_abbrev_to_full_name_index()
-    assert index.get("bouzas maneiro j") == "Jessica Bouzas Maneiro"
-
-
-def test_build_abbrev_to_full_name_index_normalizes_hyphenated_surname():
-    # 2026-08-06, bug real -- TML-Database (ATP) trae "Pablo Carreno
-    # Busta" (espacio), TennisExplorer abrevia "Carreno-Busta P." (guion)
-    # -- ambas formas deben resolver a la misma clave normalizada.
-    _real_row("Pablo Carreno Busta", "Ivanovic A.", "2016-01-01", "W")
-    index = _build_abbrev_to_full_name_index()
-    assert index.get("carreno busta p") == "Pablo Carreno Busta"
-    assert _resolve_abbreviated_name("Carreno-Busta P.", index) == "Pablo Carreno Busta"
-
-
-def test_build_abbrev_to_full_name_index_fail_closed_on_ambiguity():
-    # 2 jugadoras reales distintas con EXACTAMENTE el mismo apellido + inicial de nombre
-    _real_row("Ana Ivanovic", "X Y.", "2016-01-01", "W")
-    _real_row("Anton Ivanovic", "X Y.", "2016-01-01", "W")
-    index = _build_abbrev_to_full_name_index()
-    assert index.get("ivanovic a") is None  # ambigüedad real, nunca se adivina cuál
-
-
-def test_resolve_abbreviated_name_fail_closed_bad_format():
-    assert _resolve_abbreviated_name("NoDot", {"x y": "X Y"}) is None
-
-
 def test_collect_wta_cases_excludes_players_outside_roster():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)]}  # "Beatriz Zonta" NO está en el roster de ranking
-    _real_row("Ana Ivanovic", "Zonta B.", "2016-01-01", "W")
-    _real_row("Beatriz Zonta", "Ivanovic A.", "2016-01-01", "L")  # da universo para resolver "Zonta B."
+    _real_row("Ana Ivanovic", "Beatriz Zonta", "2016-01-01", "W")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
@@ -97,13 +81,15 @@ def test_collect_wta_cases_excludes_players_outside_roster():
         cases, meta = collect_wta_cases()
     assert cases == []
     assert meta["skipped_not_wta_roster"] == 1
-    assert meta["skipped_duplicate"] == 1  # la 2da fila es el mismo partido, otra perspectiva
 
 
-def test_collect_wta_cases_dedupes_same_match_both_perspectives():
+def test_collect_wta_cases_single_row_per_match_no_duplicate():
+    # 2026-08-09: `MatchHistory` ya es 1 fila por partido real -- a
+    # diferencia del esquema viejo (`TennisMatchHistory`, 1 fila por
+    # perspectiva de jugadora), no hace falta deduplicar 2 filas del
+    # mismo partido acá.
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 100)]}
-    _real_row("Ana Ivanovic", "Kvitova P.", "2016-01-01", "W")  # perspectiva de Ivanovic
-    _real_row("Petra Kvitova", "Ivanovic A.", "2016-01-01", "L")  # misma fecha/par, perspectiva de Kvitova
+    _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
@@ -112,7 +98,7 @@ def test_collect_wta_cases_dedupes_same_match_both_perspectives():
     ):
         cases, meta = collect_wta_cases()
     assert len(cases) == 1
-    assert meta["skipped_duplicate"] == 1
+    assert meta["skipped_duplicate"] == 0
 
 
 def test_surface_winrate_tracker_is_point_in_time_correct():
@@ -153,10 +139,11 @@ def test_self_won_set1_fail_closed():
 
 def test_self_won_set1_handles_flashscore_space_separated_format():
     # 2026-08-06, bug real encontrado en vivo (usuario preguntó por el
-    # winrate de Svitolina tras ganar el set1) -- `TennisMatchHistory`
-    # mezcla filas `source="tennisexplorer"` (comas: "7-6, 6-4") y
-    # `source="flashscore"` (espacios: "7-6 6-4", pipeline distinto y
-    # más viejo, sigue activo) -- ambas deben parsear igual.
+    # winrate de Svitolina tras ganar el set1) -- `MatchHistory` (antes
+    # `TennisMatchHistory`) mezcla filas `source="tennisexplorer"`
+    # (comas: "7-6, 6-4") y `source="flashscore"` (espacios: "7-6 6-4",
+    # pipeline distinto y más viejo, sigue activo) -- ambas deben
+    # parsear igual.
     assert _self_won_set1("7-6 6-4") is True
     assert _self_won_set1("5-7 2-6") is False
     assert _self_won_set_n("7-6 4-6 6-2", 2) is False
@@ -165,9 +152,9 @@ def test_self_won_set1_handles_flashscore_space_separated_format():
 
 def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
-    # Ivanovic es favorita (rank 5 < 300) y es "self" en esta fila -- ganó el set1 (6-4 self-first)
-    _real_row("Ana Ivanovic", "Kvitova P.", "2016-01-01", "W", score="6-4, 6-3")
-    _real_row("Petra Kvitova", "Someone X.", "2015-01-01", "L")  # da universo real para resolver "Kvitova P."
+    # Ivanovic es favorita (rank 5 < 300) y es player_a ("self", score
+    # orientado a ella) en esta fila -- ganó el set1 (6-4 self-first)
+    _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W", score="6-4, 6-3")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
@@ -180,10 +167,12 @@ def test_collect_wta_cases_translates_self_won_set1_to_favorite_won_set1():
 
 def test_collect_wta_cases_favorite_is_opponent_flips_set1_result():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
-    # acá Kvitova (opponent, peor rank) es "self" -- pero la FAVORITA es Ivanovic (underdog en la fila, mejor rank)
-    # self (Kvitova) ganó el set1 6-4 -- pero la favorita (Ivanovic) NO es self, así que favorite_won_set1 = False
-    _real_row("Petra Kvitova", "Ivanovic A.", "2016-01-01", "W", score="6-4, 6-3")
-    _real_row("Ana Ivanovic", "Someone X.", "2015-01-01", "L")  # da universo real para resolver "Ivanovic A."
+    # acá Kvitova (player_b, peor rank) es "self" (score orientado a
+    # player_a=Kvitova en esta fila) -- pero la FAVORITA es Ivanovic
+    # (player_b en la fila, mejor rank). self (Kvitova) ganó el set1
+    # 6-4 -- pero la favorita (Ivanovic) NO es self, así que
+    # favorite_won_set1 = False.
+    _real_row("Petra Kvitova", "Ana Ivanovic", "2016-01-01", "W", score="6-4, 6-3")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,
@@ -219,7 +208,6 @@ def test_load_tournament_level_index_never_downgrades_on_post_normalization_coll
     # son filas reales distintas en la tabla (no colisionan ahí). El
     # índice point-in-time no debe dejar que la ITF pise al main-tour.
     from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import _load_tournament_level_index
-    from datetime import datetime, timezone
     WtaTournamentLevel.create(year=2016, tournament_name="MADRID", level="Premier Mandatory", fetched_at=datetime.now(timezone.utc))
     WtaTournamentLevel.create(year=2016, tournament_name="MADRID 2 ITF", level="ITF", fetched_at=datetime.now(timezone.utc))
     index = _load_tournament_level_index()
@@ -249,17 +237,7 @@ def test_is_main_tour_level_fail_closed_when_not_in_catalog():
 
 def test_collect_wta_cases_excludes_below_250_level_tournament():
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
-    from datetime import datetime, timezone
-    TennisMatchHistory.create(
-        player_name="Ana Ivanovic", opponent_name="Kvitova P.", match_date="2016-01-01", result="W",
-        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Makarska",
-        fetched_at=datetime.now(timezone.utc),
-    )
-    TennisMatchHistory.create(
-        player_name="Petra Kvitova", opponent_name="Someone X.", match_date="2015-01-01", result="L",
-        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Someplace",
-        fetched_at=datetime.now(timezone.utc),
-    )
+    _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W", tournament="Makarska")
     level_index = {(2016, "MAKARSKA"): "WTA 125"}
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
@@ -323,17 +301,7 @@ def test_collect_wta_cases_includes_fields_needed_for_all_variants():
     # `_simulate_realistic_all_strategies` necesita set2_favorite_win/
     # set1_diff/best_of/favorite_age además de lo ya usado.
     ranking_index = {"Ana Ivanovic": [("2015-01-01", 5)], "Petra Kvitova": [("2015-01-01", 300)]}
-    from datetime import datetime, timezone
-    TennisMatchHistory.create(
-        player_name="Ana Ivanovic", opponent_name="Kvitova P.", match_date="2016-01-01", result="W",
-        score="6-4, 4-6, 6-3", source="tennisexplorer", surface="Hard", tournament="Miami",
-        fetched_at=datetime.now(timezone.utc),
-    )
-    TennisMatchHistory.create(
-        player_name="Petra Kvitova", opponent_name="Someone X.", match_date="2015-01-01", result="L",
-        score="6-4, 6-3", source="tennisexplorer", surface="Hard", tournament="Miami",
-        fetched_at=datetime.now(timezone.utc),
-    )
+    _real_row("Ana Ivanovic", "Petra Kvitova", "2016-01-01", "W", score="6-4, 4-6, 6-3", tournament="Miami")
     with patch(
         "scripts.tennis.wta_favorite_surface_winrate_filter_backtest._load_ranking_index",
         return_value=ranking_index,

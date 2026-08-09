@@ -342,25 +342,20 @@ class TennisMatchHistoryUnvalidated(HistoricalBaseModel):
 # borrado -- cero consumidores vivos al momento de eliminar las clases.
 
 
-class TennisMatchHistory(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_match_history"
-        indexes = ((("player_name",), False),)
-
-    player_name = CharField()
-    opponent_name = CharField()
-    match_date = CharField()
-    result = CharField()
-    score = CharField(null=True)
-    source = CharField()
-    fetched_at = DateTimeField()
-    tournament = CharField(null=True)
-    round = CharField(null=True)
-    surface = CharField(null=True)
-    temperature_c = FloatField(null=True)
-    humidity_pct = FloatField(null=True)
-    wind_kmh = FloatField(null=True)
-    weather_fetched_at = DateTimeField(null=True)
+# `TennisMatchHistory` -- ELIMINADA 2026-08-09, pedido explícito del
+# usuario ("el modelo TennisMatchHistory... es redundante, eliminarlo y
+# los datos en la tabla moverlos a MatchHistory"). 1 fila por JUGADOR
+# por partido (`player_name`/`opponent_name`), redundante con
+# `MatchHistory` (1 fila por partido real). Su data (tabla en vivo +
+# backup `tennis_match_history_backup_20260809`, 447,513 filas reales
+# combinadas) se migró a `MatchHistory` vía merge idempotente por
+# (par de jugadores + fecha) antes de borrar esta clase -- ver memoria
+# de sesión para el detalle exacto del merge. Su único consumidor real
+# de código (`wta_favorite_surface_winrate_filter_backtest.py`) fue
+# migrado a `MatchHistory` en el mismo cambio, eliminando además la
+# maquinaria de resolución de nombre abreviado (`_build_abbrev_to_full_
+# name_index`/`_resolve_abbreviated_name`) que solo existía por la
+# limitación de este modelo viejo (opponent_name siempre abreviado).
 
 
 class TennisHistoricalOdds(HistoricalBaseModel):

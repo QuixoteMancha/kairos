@@ -46,7 +46,7 @@ from bisect import bisect_right
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis import TennisMatchHistory, WtaPlayerRankingHistory, WtaTournamentLevel
+from database.historical.tennis import MatchHistory, WtaPlayerRankingHistory, WtaTournamentLevel
 from outer_apis.kalshi.fees import leg_fee_fraction
 from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob, p_serve_for_rank, _p_win_game, _p_win_set
 from scripts.tennis.favorite_by_historical_rank_backtest import _p_win_match_given_set_score
@@ -167,71 +167,6 @@ def _is_main_tour_level(
         return False
     level = level_index.get((year, norm))
     return level in allowed_levels
-
-
-def _build_abbrev_to_full_name_index() -> dict[str, str | None]:
-    """Resuelve nombres ABREVIADOS ("Cocciaretto E.", tal cual
-    TennisExplorer guarda `opponent_name` -- ver docstring del módulo)
-    a nombre completo real ("Elisabetta Cocciaretto") -- 2026-08-05,
-    bug real encontrado en vivo: `player_name` es nombre completo pero
-    `opponent_name` viene abreviado, así que NUNCA matcheaban contra el
-    roster WTA (100% de las filas se descartaban).
-
-    Universo de nombres completos: TODOS los `player_name` distintos de
-    `TennisMatchHistory` (438 reales, ATP+WTA mezclados -- sirve como
-    proxy amplio, no hace falta que sea solo WTA acá, el filtro de
-    roster WTA real se aplica DESPUÉS de resolver el nombre).
-
-    Clave de abreviación: "{apellido completo} {inicial del nombre}"
-    en minúsculas -- el apellido se toma como TODO menos el primer
-    token (soporta apellidos compuestos reales, ej. "Jessica Bouzas
-    Maneiro" -> "bouzas maneiro j", que matchea la abreviación real
-    "Bouzas Maneiro J."). Fail-closed ante ambigüedad real (2+ nombres
-    completos distintos mapean a la misma clave, ej. dos jugadoras con
-    mismo apellido Y mismo inicial de nombre) -- esa clave queda
-    `None`, nunca se adivina cuál de las dos es."""
-    init_db_historical()
-    full_names = [r.player_name for r in TennisMatchHistory.select(TennisMatchHistory.player_name).distinct()]
-
-    index: dict[str, str | None] = {}
-    seen_keys: dict[str, set[str]] = {}
-    for full_name in full_names:
-        tokens = full_name.strip().split(" ")
-        if len(tokens) < 2:
-            continue
-        first, last = tokens[0], " ".join(tokens[1:])
-        key = f"{_norm_surname(last)} {first[0].lower()}"
-        seen_keys.setdefault(key, set()).add(full_name)
-
-    for key, names in seen_keys.items():
-        index[key] = next(iter(names)) if len(names) == 1 else None
-
-    return index
-
-
-def _norm_surname(surname: str) -> str:
-    """Normaliza un apellido para comparar entre fuentes -- 2026-08-06,
-    bug real encontrado en vivo al cruzar TML-Database (ATP) contra las
-    cuotas de TennisExplorer: apellidos compuestos vienen con GUION en
-    una fuente y ESPACIO en la otra (ej. TML-Database "Pablo Carreno
-    Busta" vs abreviación real de TennisExplorer "Carreno-Busta P.") --
-    sin normalizar esto, la clave de abreviación nunca coincidía para
-    ningún apellido compuesto con esta discrepancia (patrón frecuente,
-    sobre todo apellidos españoles/franceses). `-` se trata como
-    separador de token, igual que un espacio."""
-    return surname.replace("-", " ").strip().lower()
-
-
-def _resolve_abbreviated_name(abbreviated: str, index: dict[str, str | None]) -> str | None:
-    """"Cocciaretto E." -> "Elisabetta Cocciaretto" | None (sin match
-    único real). Fail-closed: formato inesperado (sin "Apellido I.")
-    también devuelve None."""
-    parts = abbreviated.strip().rstrip(".").rsplit(" ", 1)
-    if len(parts) != 2:
-        return None
-    last, initial = parts
-    key = f"{_norm_surname(last)} {initial.lower()}"
-    return index.get(key)
 
 
 def _self_won_set1(score: str | None) -> bool | None:
@@ -362,13 +297,19 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
     pedido explícito del usuario."""
     init_db_historical()
     ranking_index = _load_ranking_index()
-    abbrev_index = _build_abbrev_to_full_name_index()
     level_index = _load_tournament_level_index()
     eval_cutoff = f"{_EVAL_START_YEAR}-01-01"
 
     seen: set[tuple[frozenset, str]] = set()
     cases: list[dict[str, Any]] = []
     skipped_no_surface = skipped_not_wta_roster = skipped_no_rank_data = skipped_duplicate = 0
+    # 2026-08-09: `skipped_opponent_name_unresolved` queda siempre en 0 --
+    # `MatchHistory` (migrado de `TennisMatchHistory`, ver writer.py) trae
+    # nombre completo real en AMBOS lados (`player_a_name`/`player_b_name`),
+    # ya no hace falta ninguna resolución de abreviación (la clave del bug
+    # real de 2026-08-05 que motivó `_build_abbrev_to_full_name_index` --
+    # eliminada junto con esta migración). Se mantiene la clave en el
+    # dict de retorno para no romper firmas/tests existentes.
     skipped_opponent_name_unresolved = skipped_below_250_level = 0
 
     # 2026-08-05, mismo bug real encontrado y corregido en
@@ -380,20 +321,16 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
     # aceptar/descartar partidos distintos según ese orden no
     # determinístico. `match_date, id` como desempate estable.
     rows = (
-        TennisMatchHistory.select()
-        .where((TennisMatchHistory.surface.is_null(False)) & (TennisMatchHistory.match_date >= eval_cutoff))
-        .order_by(TennisMatchHistory.match_date, TennisMatchHistory.id)
+        MatchHistory.select()
+        .where(
+            (MatchHistory.surface.is_null(False))
+            & (MatchHistory.match_date >= eval_cutoff)
+            & (MatchHistory.winner_side.is_null(False))
+        )
+        .order_by(MatchHistory.match_date, MatchHistory.id)
     )
     for r in rows:
-        # 2026-08-05, bug real encontrado en vivo: `opponent_name` viene
-        # ABREVIADO ("Cocciaretto E."), `player_name` viene completo --
-        # sin resolver esto, el 100% de las filas fallaba el chequeo de
-        # roster (nunca matcheaban un nombre completo). Ver
-        # `_build_abbrev_to_full_name_index` para el mecanismo real.
-        opponent_full_name = _resolve_abbreviated_name(r.opponent_name, abbrev_index)
-        if opponent_full_name is None:
-            skipped_opponent_name_unresolved += 1
-            continue
+        player_name, opponent_full_name = r.player_a_name, r.player_b_name
 
         # 2026-08-05, pedido explícito del usuario: "me faltó agregar
         # que solo tomen matches de torneos 250 para arriba en nivel
@@ -405,17 +342,17 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
             skipped_below_250_level += 1
             continue
 
-        dedup_key = (frozenset({r.player_name, opponent_full_name}), r.match_date)
+        dedup_key = (frozenset({player_name, opponent_full_name}), r.match_date)
         if dedup_key in seen:
             skipped_duplicate += 1
             continue
         seen.add(dedup_key)
 
-        if r.player_name not in ranking_index or opponent_full_name not in ranking_index:
+        if player_name not in ranking_index or opponent_full_name not in ranking_index:
             skipped_not_wta_roster += 1
             continue
 
-        rank_self = _rank_at(r.player_name, r.match_date, ranking_index)
+        rank_self = _rank_at(player_name, r.match_date, ranking_index)
         rank_opp = _rank_at(opponent_full_name, r.match_date, ranking_index)
         if rank_self is None or rank_opp is None:
             skipped_no_rank_data += 1
@@ -427,18 +364,19 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
             skipped_no_rank_data += 1
             continue
 
-        winner_name = r.player_name if r.result == "W" else opponent_full_name
+        winner_name = player_name if r.winner_side == "a" else opponent_full_name
         favorite_is_self = rank_self < rank_opp
-        favorite_name = r.player_name if favorite_is_self else opponent_full_name
-        underdog_name = opponent_full_name if favorite_is_self else r.player_name
+        favorite_name = player_name if favorite_is_self else opponent_full_name
+        underdog_name = opponent_full_name if favorite_is_self else player_name
         favorite_rank = min(rank_self, rank_opp)
         underdog_rank = max(rank_self, rank_opp)
 
         # 2026-08-05, pedido explícito del usuario: "añade a la
         # estrategia de wta apostar sólo cuando la favorita gana el
-        # primer set" -- `_self_won_set1` ya devuelve en términos de
-        # `r.player_name` (self); se traduce a "¿ganó la FAVORITA?"
-        # según de qué lado esté la favorita.
+        # primer set" -- `_self_won_set1` devuelve en términos de
+        # `player_a_name` (score orientado a player_a en MatchHistory,
+        # ver writer.py); se traduce a "¿ganó la FAVORITA?" según de qué
+        # lado esté la favorita.
         self_won_set1 = _self_won_set1(r.score)
         favorite_won_set1 = (
             None if self_won_set1 is None

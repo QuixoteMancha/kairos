@@ -13,7 +13,7 @@ using player NAME as the identifier (no surrogate Player table/FK chain):
 
   - TennisPlayerRanking    <- outer_apis/tennis_rankings.py
   - TennisServeCalibration <- outer_apis/tennis_serve_stats.py
-  - TennisMatchHistory     <- outer_apis/tennis_match_history.py (recent matches)
+  - MatchHistory           <- outer_apis/tennis_match_history.py (recent matches, 1 fila/partido)
   - TennisHeadToHead       <- outer_apis/tennis_match_history.py (h2h)
 
 `writer.py` in this package is what `outer_apis/tennis_*.py` calls to persist
@@ -30,7 +30,6 @@ from database.historical.tennis.models import (
     TennisPlayerRanking,
     TennisPlayerSyncStatus,
     TennisServeCalibration,
-    TennisMatchHistory,
     MatchHistory,
     TennisMatchHistoryUnvalidated,
     TennisHistoricalOdds,
@@ -80,7 +79,7 @@ from database.historical.tennis.writer import (
 )
 
 __all__ = [
-    "TennisPlayerRanking", "TennisServeCalibration", "TennisMatchHistory", "MatchHistory", "save_match_detail",
+    "TennisPlayerRanking", "TennisServeCalibration", "MatchHistory", "save_match_detail",
     "TennisMatchHistoryUnvalidated",
     "TennisHistoricalOdds", "TennisHeadToHead",
     "TmlDatabaseMatch", "TournamentLocationCache", "WtaPlayerRankingHistory", "WtaTournamentLevel",

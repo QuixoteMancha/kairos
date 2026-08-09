@@ -248,7 +248,7 @@ def init_db_historical() -> None:
         TeamRating, TeamMatchHistory, TeamHeadToHead, MlbScannedMatch, MlbMatchProbabilityTick,
     )
     from database.historical.tennis import (
-        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHistoricalOdds, TennisHeadToHead,
+        TennisPlayerRanking, TennisServeCalibration, TennisHistoricalOdds, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
@@ -264,7 +264,7 @@ def init_db_historical() -> None:
     db_historical.connect(reuse_if_open=True)
     db_historical.create_tables([
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
-        TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory, TennisHistoricalOdds, TennisHeadToHead,
+        TennisPlayerRanking, TennisServeCalibration, TennisHistoricalOdds, TennisHeadToHead,
         TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
@@ -365,17 +365,11 @@ def init_db_historical() -> None:
     # `charted_match` -- migraciones de columna REMOVIDAS 2026-08-09
     # junto con el modelo (ver models.py): la tabla/clase ya no existe,
     # `create_tables()` ya no la crea, este ALTER TABLE fallaría siempre.
-    # 2026-08-03, pedido explícito del usuario: persistir el torneo real
-    # (tal cual, sin normalizar) de los partidos cargados a mano desde
-    # TennisExplorer -- agregado DESPUÉS de que tennis_match_history ya
-    # existiera con filas de Flashscore (sin este campo).
-    _add_column_if_missing(db_historical, "tennis_match_history", "tournament", "VARCHAR(255)")
-    _add_column_if_missing(db_historical, "tennis_match_history", "round", "VARCHAR(255)")
-    _add_column_if_missing(db_historical, "tennis_match_history", "surface", "VARCHAR(255)")
-    _add_column_if_missing(db_historical, "tennis_match_history", "temperature_c", "REAL")
-    _add_column_if_missing(db_historical, "tennis_match_history", "humidity_pct", "REAL")
-    _add_column_if_missing(db_historical, "tennis_match_history", "wind_kmh", "REAL")
-    _add_column_if_missing(db_historical, "tennis_match_history", "weather_fetched_at", "DATETIME")
+    # `tennis_match_history` -- migraciones de columna REMOVIDAS
+    # 2026-08-09 junto con el modelo `TennisMatchHistory` (ver
+    # models.py): su data se migró a `MatchHistory`, la tabla/clase ya
+    # no existe, `create_tables()` ya no la crea, este ALTER TABLE
+    # fallaría siempre.
     # 2026-08-05, pedido explícito del usuario: clima real para MLB
     # (game_datetime_utc real de la fuente, no aproximado como tenis) --
     # agregado DESPUÉS de que mlb_game_history ya existiera con 26,882
