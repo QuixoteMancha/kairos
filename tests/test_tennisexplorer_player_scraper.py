@@ -15,7 +15,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
     resolve_player_slug, _extract_href_slug,
     get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix, get_tour_by_sex,
-    _tour_from_tournament_href,
+    _tour_from_tournament_href, get_next_match,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -280,11 +280,16 @@ def test_get_player_recent_matches_matches_flashscore_shape():
 
     assert len(result) == 1
     r = result[0]
-    assert set(r.keys()) == {"fecha", "oponente", "resultado", "score", "source"}
+    # 2026-08-09, pedido explícito del usuario: agregado "match_id" (para
+    # resolver identidad real vía match-detail en save_match_history en
+    # vez de persistir el rival abreviado tal cual) -- key extra, no
+    # rompe a los consumidores existentes que leen por nombre de campo.
+    assert set(r.keys()) == {"fecha", "oponente", "resultado", "score", "source", "match_id"}
     assert r["oponente"] == "Pegula J."
     assert r["resultado"] == "W"
     assert r["score"] == "6-4, 6-3"
     assert r["source"] == "tennisexplorer"
+    assert r["match_id"] == "1"
 
 
 def test_get_player_recent_matches_sorted_most_recent_first_and_capped_at_n():
@@ -496,6 +501,55 @@ def test_get_match_detail_winner_side_b_when_second_player_won_more_sets():
     assert result["winner_side"] == "b"
 
 
+_FUTURE_MATCH_DETAIL_HTML = '''
+<h1 class="bg">Alexandrova - Svitolina</h1>
+<div class="box boxBasic lGray"><span class="upper">11.08.2026</span>, 02:30, <a href="/toronto-wta/2026/wta-women/">Toronto WTA</a>, quarterfinal, hard</div>
+<table class="result gDetail noMgB" cellspacing="0">
+    <thead>
+        <tr>
+            <th class="plName" colspan="2"><a href="/player/alexandrova-3181a">Alexandrova Ekaterina</a></th>
+            <td class="gScore">&nbsp;</td>
+            <th class="plName" colspan="2"><a href="/player/svitolina">Svitolina Elina</a></th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr class="one">
+            <td class="tr">19.</td>
+            <th>Singles ranking</th>
+            <td class="tl">9.</td>
+        </tr>
+        <tr class="two">
+            <td class="tr">15. 11. 1994</td>
+            <th>Birthdate</th>
+            <td class="tl">12. 9. 1994</td>
+        </tr>
+    </tbody>
+</table>
+'''
+
+
+def test_get_match_detail_resolves_future_unplayed_match():
+    # 2026-08-09, bug real encontrado en producción, pedido explícito
+    # del usuario (soporte del "Next match" de la página del jugador,
+    # que ya trae un match-detail id real ANTES de jugarse el partido):
+    # `get_match_detail` devolvía `None` para cualquier partido futuro
+    # porque el bloque de score no existe todavía (`<td class="gScore">
+    # &nbsp;</td>`, sin `<br/><span>`) -- verificado en vivo con el
+    # match real Alexandrova-Svitolina (Toronto WTA 2026, id=3290769).
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail",
+        return_value=_FUTURE_MATCH_DETAIL_HTML,
+    ):
+        result = get_match_detail("3290769")
+    assert result is not None
+    assert result["player_a_name"] == "Alexandrova Ekaterina"
+    assert result["player_b_name"] == "Svitolina Elina"
+    assert result["score"] is None
+    assert result["winner_side"] is None
+    assert result["tournament"] == "Toronto WTA"
+    assert result["tour"] == "WTA"
+
+
 def test_get_match_detail_bio_fields_optional_fail_closed():
     # Partido sin tabla de bio (nivel bajo, algunos partidos reales no
     # la traen) -- nunca debe fabricar ranking/edad/altura/peso/mano.
@@ -603,3 +657,69 @@ def test_get_tour_by_sex_fail_closed_when_verification_fails():
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
     ):
         assert get_tour_by_sex("Alexandra Eala") is None
+
+
+_NEXT_MATCH_HTML = (
+    _TITLE_OK.replace("Alexandra Eala", "Elina Svitolina")
+    + '<div class="date">Sex: woman</div>'
+    + '<ul class="tabs"><li class="set"><span class="tab">Next match</span></li></ul>'
+    '<table class="result gamedetail" cellspacing="0"><tbody>'
+    '<tr class="one">'
+    '<td class="first noWrp tl"><span class="type-women2">&nbsp;</span>'
+    '<a href="/toronto-wta/2026/wta-women/">Toronto WTA</a></td>'
+    '<td title="quarterfinal" onmouseout="toolTip.hide(this);" onmouseover="toolTip.show(this, event);">QF</td>'
+    '<td class="time noWrp">11.08. 02:30</td>'
+    '<th class="t-name"><a href="/match-detail/?id=3290769" title="Click for match detail">'
+    'Alexandrova E. - Svitolina E.</a></th>'
+    '<td class="course">3.07</td><td class="course">1.37</td>'
+    '</tr></tbody></table>'
+)
+
+
+def test_get_next_match_parses_real_page_structure():
+    # 2026-08-09, pedido explícito del usuario: soportar el partido
+    # PROGRAMADO (aún no jugado) de la sección "Next match" del perfil
+    # -- estructura real verificada en vivo (perfil de Svitolina, ver
+    # memoria kairos-tennis-tour-bug-name-order-root-cause-fixed).
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="svitolina",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=_NEXT_MATCH_HTML,
+    ):
+        result = get_next_match("Elina Svitolina")
+    assert result == {
+        "match_id": "3290769",
+        "tournament": "Toronto WTA",
+        "tournament_href": "/toronto-wta/2026/wta-women/",
+        "round": "quarterfinal",
+        "start_raw": "11.08. 02:30",
+        "match_text": "Alexandrova E. - Svitolina E.",
+        "tour": "WTA",
+    }
+
+
+def test_get_next_match_none_when_no_next_match_section():
+    html = _TITLE_OK.replace("Alexandra Eala", "Elina Svitolina") + '<div class="date">Sex: woman</div>'
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="svitolina",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
+    ):
+        assert get_next_match("Elina Svitolina") is None
+
+
+def test_get_next_match_fail_closed_when_slug_not_found():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value=None,
+    ):
+        assert get_next_match("Nobody Real") is None
+
+
+def test_get_next_match_fail_closed_when_verification_fails():
+    html = "<title>Someone Else - Tennis Explorer</title>" + _NEXT_MATCH_HTML
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.guess_player_slug", return_value="svitolina",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
+    ):
+        assert get_next_match("Elina Svitolina") is None

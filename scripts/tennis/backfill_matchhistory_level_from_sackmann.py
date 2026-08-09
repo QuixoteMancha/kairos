@@ -100,6 +100,60 @@ def build_level_index_from_wta_catalog() -> dict[tuple[int, str], str]:
     return index
 
 
+def resolve_level_for_tournament(tournament: str | None, year: int | None, tour: str | None) -> tuple[str | None, str | None]:
+    """Lookup PUNTUAL (1 torneo, sin construir los índices completos en
+    memoria -- 2026-08-09, pedido explícito del usuario: "esta función
+    también podría verificar el tour y el tournament y por supuesto el
+    level" para `save_match_history`/`_resolve_and_save_via_match_detail`,
+    en el momento de guardar, no solo en el backfill batch offline).
+    MISMO criterio fail-closed que `run_backfill` (ver docstring del
+    módulo): `tour` conocido -> solo ese catálogo; `tour=None` -> prueba
+    ambos, ambiguo (resuelve en los 2 con torneos reales distintos) ->
+    `(None, None)`, nunca se adivina.
+
+    Returns: `(level, tour_bonus)` -- `tour_bonus` no-`None` solo cuando
+    `tour` venía `None` y se resolvió de forma inequívoca."""
+    if not tournament or not year:
+        return None, None
+    init_db_historical()
+    norm = _normalize_tournament_name(tournament)
+    if norm is None:
+        return None, None
+
+    if tour == "ATP":
+        row = AtpTournamentLevel.get_or_none(AtpTournamentLevel.year == year, AtpTournamentLevel.tournament_name == norm)
+        return (row.level, None) if row and row.level else (None, None)
+    if tour == "WTA":
+        best_level = None
+        best_priority = -1
+        for r in WtaTournamentLevel.select().where(WtaTournamentLevel.year == year):
+            if _normalize_tournament_name(r.tournament_name) != norm:
+                continue
+            p = _WTA_LEVEL_PRIORITY.get(r.level, 0)
+            if p > best_priority:
+                best_priority, best_level = p, r.level
+        return (best_level, None) if best_level else (None, None)
+
+    atp_row = AtpTournamentLevel.get_or_none(AtpTournamentLevel.year == year, AtpTournamentLevel.tournament_name == norm)
+    atp_level = atp_row.level if atp_row and atp_row.level else None
+    wta_level = None
+    best_priority = -1
+    for r in WtaTournamentLevel.select().where(WtaTournamentLevel.year == year):
+        if _normalize_tournament_name(r.tournament_name) != norm:
+            continue
+        p = _WTA_LEVEL_PRIORITY.get(r.level, 0)
+        if p > best_priority:
+            best_priority, wta_level = p, r.level
+
+    if atp_level is not None and wta_level is not None:
+        return None, None  # colisión real de nombre entre evento ATP y WTA -- fail-closed
+    if atp_level is not None:
+        return atp_level, "ATP"
+    if wta_level is not None:
+        return wta_level, "WTA"
+    return None, None
+
+
 def run_backfill() -> dict[str, Any]:
     """Completa `level` (y `tour` como bonus, ver docstring del módulo)
     en filas `source="tennisexplorer"` que tengan torneo pero no nivel,

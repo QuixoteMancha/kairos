@@ -81,6 +81,7 @@ from typing import Any
 from outer_apis.scrapers.tennis import tennisexplorer_player_scraper
 from database.historical.tennis.writer import (
     save_match_history, save_head_to_head_snapshot, get_recent_match_history, get_any_match_history,
+    save_next_match,
 )
 
 # Allowlist de fetch en vivo (2026-08-01, pedido explícito del usuario):
@@ -153,6 +154,23 @@ def _fetch_and_cache(player_name: str) -> list[dict]:
     # tiene sentido duplicarlo cada refresh).
     if matches:
         save_match_history(player_name, matches)
+
+    # 2026-08-09, pedido explícito del usuario: "puede que no aparezca
+    # [el nombre completo] porque el match aún no habría corrido cuando
+    # aparezca en Kalshi y el worker lo detecte" -- si el mercado que
+    # disparó este fetch es de un partido TODAVÍA no jugado, la tabla de
+    # resultados de arriba no lo va a traer (solo partidos ya jugados,
+    # ver `get_player_recent_matches`). Se intenta resolver+persistir
+    # ese partido futuro vía la sección "Next match" del propio perfil
+    # (`get_next_match`, 1 request adicional -- misma página `year=None`
+    # que ya fetchea `get_player_recent_matches` arriba, pero cada
+    # función hace su propio fetch, no comparten el HTML). Best-effort,
+    # nunca bloquea ni rompe el flujo si falla; solo se llama en el
+    # mismo branch ya autorizado a fetch en vivo (allowlist de arriba).
+    try:
+        save_next_match(player_name)
+    except Exception:
+        pass
 
     return matches
 

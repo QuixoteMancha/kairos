@@ -105,7 +105,9 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
                       "score": "3-6 4-6", "source": "flashscore"}]
 
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
-               return_value=fake_matches) as mock_fetch:
+               return_value=fake_matches) as mock_fetch, patch(
+        "outer_apis.sports.tennis.match_history.save_next_match",
+    ):
         result = match_history._fetch_and_cache("Medvedev D.")
 
     mock_fetch.assert_called_once()
@@ -117,6 +119,35 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
     mock_fetch2.assert_not_called()
     assert len(result2) == 1
     assert result2[0]["oponente"] == "Zverev A."
+
+
+def test_fetch_and_cache_also_resolves_next_scheduled_match():
+    # 2026-08-09, pedido explícito del usuario: "puede que no aparezca
+    # [el nombre completo] porque el match aún no habría corrido cuando
+    # aparezca en Kalshi y el worker lo detecte" -- en el mismo branch de
+    # fetch en vivo, `_fetch_and_cache` también intenta resolver+persistir
+    # el próximo partido programado del jugador (best-effort).
+    fake_matches = [{"fecha": "2026-07-27", "oponente": "Zverev A.", "resultado": "L",
+                      "score": "3-6 4-6", "source": "tennisexplorer", "match_id": "1"}]
+    with patch(
+        "outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
+        return_value=fake_matches,
+    ), patch("outer_apis.sports.tennis.match_history.save_next_match") as mock_next:
+        match_history._fetch_and_cache("Medvedev D.")
+    mock_next.assert_called_once_with("Medvedev D.")
+
+
+def test_fetch_and_cache_next_match_failure_never_breaks_the_flow():
+    fake_matches = [{"fecha": "2026-07-27", "oponente": "Zverev A.", "resultado": "L",
+                      "score": "3-6 4-6", "source": "tennisexplorer", "match_id": "1"}]
+    with patch(
+        "outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
+        return_value=fake_matches,
+    ), patch(
+        "outer_apis.sports.tennis.match_history.save_next_match", side_effect=Exception("red caída"),
+    ):
+        result = match_history._fetch_and_cache("Medvedev D.")
+    assert result == fake_matches  # nunca rompe el flujo principal
 
 
 def test_get_recent_match_history_fresh_when_todays_match_already_stored_even_if_checked_yesterday():
@@ -152,7 +183,9 @@ def test_fetch_and_cache_refetches_when_db_stale():
                       "score": "6-2 6-1", "source": "flashscore"}]
 
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
-               return_value=fake_matches) as mock_fetch:
+               return_value=fake_matches) as mock_fetch, patch(
+        "outer_apis.sports.tennis.match_history.save_next_match",
+    ):
         result = match_history._fetch_and_cache("Swiatek I.")
 
     mock_fetch.assert_called_once()

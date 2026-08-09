@@ -138,12 +138,44 @@ def save_serve_calibration_snapshot(tour: str, calibration: dict[tuple[int, int]
         pass
 
 
+def _identity_matches_detail_side(known_name: str, detail_name: str) -> bool:
+    """`known_name` (nombre que ya conocemos, ej. el que trackea el tick
+    worker de Kalshi) confirma contra `detail_name` (nombre nativo de
+    TennisExplorer, "Apellido Nombre") -- comparación por SUBCONJUNTO de
+    tokens, no igualdad exacta ni orden fijo: tolera que `detail_name`
+    traiga un token extra (ej. año de nacimiento entre paréntesis para
+    desambiguar homónimos, visto en vivo con "Lee Eunhye (2000)") sin
+    dejar de confirmar identidad real."""
+    known_tokens = frozenset(known_name.lower().split())
+    detail_tokens = frozenset(detail_name.lower().split())
+    return bool(known_tokens) and known_tokens.issubset(detail_tokens)
+
+
 def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
     """1 fila por PARTIDO real en `MatchHistory` (no 1 por jugador --
     ver nota de migración arriba). Deduped vía `_find_existing_match_history_row`
     contra (match_date, {player_name, opponent} en cualquier orden) --
     un partido real no cambia una vez jugado, y si el otro jugador (o
-    `save_match_detail`) ya lo registró, no se duplica."""
+    `save_match_detail`) ya lo registró, no se duplica.
+
+    2026-08-09, pedido explícito del usuario: "save_match_history debe
+    ser modificada usando la lógica del script que estamos corriendo
+    que está normalizando y filleando masivamente... sacar los nombres
+    completos" -- antes esta función SIEMPRE persistía el rival tal
+    cual aparece en la tabla de resultados propia del jugador (casi
+    siempre ABREVIADO, ej. "Sabalenka A.", confirmado en producción:
+    95% de las filas `source="tennisexplorer"` tienen al menos un lado
+    abreviado). Ahora, si la fila trae un `match_id` real (gratis del
+    mismo HTML, ver `get_player_recent_matches`), se resuelve identidad
+    completa de AMBOS lados vía `get_match_detail` + `save_match_detail`
+    -- MISMO mecanismo que ya usa el worker de backfill
+    (`validate_unresolved_via_live_fetch.py::process_player`), aplicado
+    en vivo al momento de escribir en vez de esperar a que el backfill
+    lo alcance después. Fail-closed y con fallback real: si no hay
+    `match_id`, la resolución falla (red/parseo), o la identidad no
+    confirma contra el jugador que ya conocemos, se cae al comportamiento
+    anterior (fila con el rival abreviado) -- nunca se pierde el
+    partido por un fallo de la resolución más rica."""
     if not matches:
         return
     try:
@@ -158,11 +190,16 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
                 continue
             if _find_existing_match_history_row(player_name, opponent, match_date) is not None:
                 continue
+
+            match_id = m.get("match_id")
+            if match_id and _resolve_and_save_via_match_detail(player_name, match_id):
+                continue  # identidad completa ya resuelta y persistida
+
             winner_side = "a" if result == "W" else "b"
-            match_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
+            synthetic_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
             try:
                 MatchHistory.create(
-                    match_id=match_id,
+                    match_id=synthetic_id,
                     source=m.get("source", "tennisexplorer"),
                     match_date=match_date,
                     score=score,
@@ -175,6 +212,105 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
                 pass  # carrera real: el otro jugador/save_match_detail lo creó justo antes -- no duplicar
     except Exception:
         pass
+
+
+def _resolve_and_save_via_match_detail(known_player_name: str, match_id: str) -> bool:
+    """Intenta resolver identidad completa (`get_match_detail`) y
+    persistir (`save_match_detail`) -- `True` solo si de verdad se
+    guardó algo Y la identidad confirma contra `known_player_name`
+    (nunca confiar ciegamente en el `match_id` sin re-chequear, mismo
+    criterio que `process_player`). Import perezoso del scraper (única
+    excepción documentada a la separación fetch/persist de este
+    archivo, ver docstring de `save_match_history`) -- fail-closed:
+    `False` ante cualquier fallo de red/parseo/identidad, nunca
+    excepciona hacia el caller.
+
+    2026-08-09, pedido explícito del usuario: "esta función también
+    podría verificar el tour y el tournament y por supuesto el level"
+    -- `tour`/`tournament` ya vienen de `get_match_detail` (parseados
+    del link real del torneo, sin request extra); `level` NO viene de
+    TennisExplorer (nunca expone la categoría del torneo en su HTML) --
+    se resuelve acá mismo, en el momento, vía
+    `resolve_level_for_tournament` (lookup puntual contra los catálogos
+    `AtpTournamentLevel`/`WtaTournamentLevel` ya poblados, sin red
+    extra), en vez de esperar a que lo alcance el backfill offline
+    (`backfill_matchhistory_level_from_sackmann.py::run_backfill`, que
+    sigue corriendo igual como red de seguridad para lo que esta
+    resolución en vivo no llegue a cubrir)."""
+    try:
+        from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
+        from scripts.tennis.backfill_matchhistory_level_from_sackmann import resolve_level_for_tournament
+
+        detail = get_match_detail(match_id)
+        if detail is None:
+            return False
+        if not (
+            _identity_matches_detail_side(known_player_name, detail["player_a_name"])
+            or _identity_matches_detail_side(known_player_name, detail["player_b_name"])
+        ):
+            return False
+        status = save_match_detail(detail)
+        if status not in ("created", "updated", "unchanged"):
+            return False
+
+        match_date = detail.get("match_date")
+        year = int(match_date[:4]) if match_date and match_date[:4].isdigit() else None
+        level, tour_bonus = resolve_level_for_tournament(detail.get("tournament"), year, detail.get("tour"))
+        if level is not None or tour_bonus is not None:
+            row = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
+            if row is not None:
+                fields = {}
+                if level is not None and row.level is None:
+                    fields["level"] = level
+                if tour_bonus is not None and row.tour is None:
+                    fields["tour"] = tour_bonus
+                if fields:
+                    MatchHistory.update(**fields).where(MatchHistory.id == row.id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def save_next_match(player_name: str, expected_opponent_hint: str | None = None) -> bool:
+    """Resuelve+persiste el partido PROGRAMADO (aún no jugado) de la
+    sección "Next match" del perfil de `player_name` -- 2026-08-09,
+    pedido explícito del usuario: "puede que no aparezca [el nombre
+    completo] porque el match aún no habría corrido cuando aparezca en
+    Kalshi y el worker lo detecte... TennisExplorer en la página de
+    player tiene un campo que dice next match, ese match tiene que ser
+    validado". Reusa el MISMO mecanismo que ya resuelve partidos
+    jugados (`_resolve_and_save_via_match_detail` -- `get_match_detail`
+    ya tolera partidos sin score, ver el fix de
+    `_MATCH_DETAIL_HEADER_RE`), así que `tour`/`tournament`/`level` se
+    completan igual que para un partido ya jugado.
+
+    VALIDACIÓN (pedido explícito, "ese match tiene que ser validado"):
+    `expected_opponent_hint` -- si el caller ya conoce el nombre (o
+    apellido) del rival por otra vía (ej. el mercado de Kalshi que
+    disparó esta consulta), se exige que aparezca en el texto crudo del
+    partido (`match_text`, ej. "Alexandrova E. - Svitolina E.") ANTES
+    de resolver nada -- evita persistir el próximo partido de
+    `player_name` cuando en realidad es uno DISTINTO al que el caller
+    esperaba (ej. el jugador ya jugó y tiene un partido siguiente
+    distinto para cuando el worker vuelve a consultar). Sin hint
+    (`None`), se confía en que `player_name` + la identidad real de
+    `get_match_detail` ya son suficiente verificación (mismo criterio
+    fail-closed de `_resolve_and_save_via_match_detail`).
+
+    Fail-closed: `False` si no hay próximo partido, la validación del
+    hint falla, o la resolución/persistencia falla por cualquier
+    motivo."""
+    try:
+        from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_next_match
+
+        next_match = get_next_match(player_name)
+        if next_match is None or not next_match.get("match_id"):
+            return False
+        if expected_opponent_hint and expected_opponent_hint.lower() not in (next_match.get("match_text") or "").lower():
+            return False
+        return _resolve_and_save_via_match_detail(player_name, next_match["match_id"])
+    except Exception:
+        return False
 
 
 def _swap_match_detail_sides(fields: dict[str, Any]) -> dict[str, Any]:

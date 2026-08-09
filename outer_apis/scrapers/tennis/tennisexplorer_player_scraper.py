@@ -437,6 +437,65 @@ def _derive_result_from_score(score: str) -> str:
     return "W" if sets_won > sets_lost else "L"
 
 
+_NEXT_MATCH_RE = re.compile(
+    # 2026-08-09, pedido explícito del usuario: la página de perfil de
+    # TennisExplorer tiene una sección "Next match" (partido programado,
+    # aún NO jugado) que ya trae un `match-detail/?id=...` REAL -- útil
+    # para resolver el nombre completo de AMBOS jugadores de un partido
+    # que el tick worker de Kalshi detecta ANTES de que se juegue (antes
+    # de esto, `save_match_history` solo veía partidos YA jugados vía la
+    # tabla de resultados, con el rival abreviado). Estructura real
+    # verificada en vivo (perfil de Svitolina, ver memoria):
+    # <span class="tab">Next match</span> ... <a href="TOURNAMENT_HREF">
+    # TOURNAMENT</a> ... <td title="ROUND_FULL">ROUND</td> ...
+    # <td class="time noWrp">START</td> ... <a href="/match-detail/
+    # ?id=ID"...>MATCH_TEXT</a>. Fail-closed: `None` si la sección no
+    # existe (jugador sin partido programado) o el HTML no matchea el
+    # patrón esperado -- nunca se adivina un match_id.
+    r'<span class="tab">Next match</span>.*?'
+    r'<a href="([^"]*)"[^>]*>([^<]*)</a></td>\s*'
+    r'<td title="([^"]*)"[^>]*>([^<]*)</td>\s*'
+    r'<td class="time noWrp">([^<]*)</td>\s*'
+    r'<th class="t-name"><a href="/match-detail/\?id=(\d+)[^"]*"[^>]*>([^<]*)</a></th>',
+    re.DOTALL,
+)
+
+
+def get_next_match(player_name: str) -> dict[str, Any] | None:
+    """Partido PROGRAMADO (aún no jugado) de la sección "Next match" del
+    perfil del jugador -- devuelve el `match_id` real, listo para
+    `get_match_detail` (ya tolera partidos sin score, ver
+    `_MATCH_DETAIL_HEADER_RE`). NO resuelve identidad -- el `match_text`
+    crudo (rivales abreviados, ej. "Alexandrova E. - Svitolina E.") es
+    solo para que el caller pueda VALIDAR que este es el mismo partido
+    que ya conoce por otra vía (ej. el mercado de Kalshi que disparó la
+    consulta) antes de confiar en el `match_id`, per pedido explícito
+    del usuario ("ese match tiene que ser validado").
+
+    Fail-closed: `None` si no se resuelve el slug, el fetch falla, la
+    página no verifica identidad, o no hay sección "Next match" (sin
+    partido programado)."""
+    slug = guess_player_slug(player_name)
+    if slug is None:
+        return None
+    html = _fetch(slug)
+    if html is None or not _verify_player_page(html, player_name):
+        return None
+    m = _NEXT_MATCH_RE.search(html)
+    if m is None:
+        return None
+    tournament_href, tournament, round_full, round_abbrev, start_raw, match_id, match_text = m.groups()
+    return {
+        "match_id": match_id,
+        "tournament": tournament.strip() or None,
+        "tournament_href": tournament_href,
+        "round": (round_full or round_abbrev).strip() or None,
+        "start_raw": start_raw.strip() or None,
+        "match_text": match_text.strip() or None,
+        "tour": _tour_from_tournament_href(tournament_href),
+    }
+
+
 def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, Any]]:
     """Historial reciente de partidos de UN jugador vía TennisExplorer --
     2026-08-04, pedido explícito del usuario ("elimina cualquier
@@ -447,13 +506,19 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, A
     retorno para no tener que tocar los callers (`match_history.py`).
 
     Returns: list de dicts (más reciente primero): {"fecha", "oponente",
-    "resultado": "W"|"L", "score", "source": "tennisexplorer"}.
-    Fail-closed: [] si no se encuentra el slug, el fetch falla, o no hay
-    partidos parseables con fecha real. Trae año actual + año anterior
-    (cubre jugadores a inicio de temporada sin necesitar más de 1 año
-    extra -- `_MAX_DEPTH` de `match_history.py` es 40, un torneo activo
-    ya cubre eso dentro del año en curso salvo casos raros de muy poca
-    actividad)."""
+    "resultado": "W"|"L", "score", "source": "tennisexplorer", "match_id"}.
+    `match_id` (2026-08-09, pedido explícito del usuario: "save_match_history
+    debe... sacar los nombres completos" en vez de guardar el rival
+    abreviado) -- viene GRATIS del mismo HTML ya parseado (ver
+    `_parse_year_html`), permite resolver identidad real de AMBOS lados
+    vía `get_match_detail` en vez de persistir el nombre abreviado tal
+    cual aparece en esta tabla; puede ser `None` en filas raras sin link
+    a match-detail. Fail-closed: [] si no se encuentra el slug, el
+    fetch falla, o no hay partidos parseables con fecha real. Trae año
+    actual + año anterior (cubre jugadores a inicio de temporada sin
+    necesitar más de 1 año extra -- `_MAX_DEPTH` de `match_history.py`
+    es 40, un torneo activo ya cubre eso dentro del año en curso salvo
+    casos raros de muy poca actividad)."""
     slug = guess_player_slug(player_name)
     if slug is None:
         return []
@@ -475,6 +540,7 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, A
                 "resultado": _derive_result_from_score(m["score"]),
                 "score": m["score"],
                 "source": "tennisexplorer",
+                "match_id": m.get("match_id"),
             })
 
     out.sort(key=lambda r: r["fecha"], reverse=True)
@@ -496,8 +562,21 @@ def _fetch_match_detail(match_id: str) -> str | None:
 
 
 _MATCH_DETAIL_HEADER_RE = re.compile(
+    # 2026-08-09, bug real encontrado en producción (pedido explícito
+    # del usuario: soportar el "Next match" de la página del jugador,
+    # que ya trae un `match-detail/?id=...` REAL antes de que el
+    # partido se juegue): el bloque de score (`<td class="gScore">...
+    # <br/><span>(...)` ) solo existe cuando el partido YA se jugó --
+    # para un partido futuro esa celda es `<td class="gScore">&nbsp;</td>`
+    # sin `<br/>` ni `<span>`, así que el regex original NUNCA matcheaba
+    # y `get_match_detail` devolvía `None` para cualquier partido
+    # todavía no jugado, pese a que la identidad de AMBOS jugadores
+    # (nombre completo real, ranking, bio) YA está disponible en esa
+    # misma página. El bloque de score ahora es OPCIONAL (grupo
+    # alternativo `(?:...)?`) -- si no matchea, `score_a_sets`/
+    # `sets_score` quedan `None`, tratado explícito más abajo.
     r'<th class="plName"[^>]*><a href="/player/([a-z0-9\-]+)/?"[^>]*>([^<]*)</a></th>\s*'
-    r'<td class="gScore">([^<]*)<br\s*/?>\s*<span>\(([^)]*)\)</span></td>\s*'
+    r'<td class="gScore">(?:([^<]*)<br\s*/?>\s*<span>\(([^)]*)\)</span>)?[^<]*</td>\s*'
     r'<th class="plName"[^>]*><a href="/player/([a-z0-9\-]+)/?"[^>]*>([^<]*)</a></th>',
     re.DOTALL,
 )
@@ -600,7 +679,7 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
     a_slug, a_name, score_a_sets, sets_score, b_slug, b_name = header.groups()
 
     winner_side = None
-    sets_m = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*", score_a_sets)
+    sets_m = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*", score_a_sets) if score_a_sets else None
     if sets_m:
         a_sets, b_sets = int(sets_m.group(1)), int(sets_m.group(2))
         if a_sets > b_sets:
@@ -633,7 +712,7 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
         "tour": tour,
         "round": round_,
         "surface": surface,
-        "score": sets_score.strip() or None,
+        "score": sets_score.strip() if sets_score else None,
         "winner_side": winner_side,
         "player_a_name": a_name.strip(),
         "player_a_slug": a_slug,
