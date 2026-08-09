@@ -47,11 +47,25 @@ def test_build_level_index_from_sackmann_reads_only_sackmann_rows_with_level():
     assert index == {(2024, "ROME"): "M"}
 
 
-def test_build_level_index_from_sackmann_keeps_higher_priority_on_collision():
+def test_build_level_index_from_sackmann_uses_priority_as_tiebreaker_on_real_tie():
+    # 2 torneos REALES distintos que normalizan igual, 1 fila cada uno
+    # (empate real de conteo) -- ahí sí desempata por prioridad.
     _row("sackmann", "Rome", level="M", match_date="2024-05-01")
     _row("sackmann", "Rome 2 challenger", level="250", match_date="2024-05-01")
     index = build_level_index_from_sackmann()
     assert index[(2024, "ROME")] == "M"
+
+
+def test_build_level_index_from_sackmann_uses_majority_vote_not_priority():
+    # 2026-08-09, bug real encontrado en vivo -- "Washington" 2025 en
+    # producción: 43 filas reales "500" + 1 fila mal etiquetada "M"
+    # (error de la fuente TML-Database). Prioridad-máxima elegía la
+    # única fila mal etiquetada (M > 500) -- debe ganar la MAYORÍA real.
+    for _ in range(43):
+        _row("sackmann", "Washington", level="500", match_date="2025-01-01")
+    _row("sackmann", "Washington", level="M", match_date="2025-01-01")
+    index = build_level_index_from_sackmann()
+    assert index[(2025, "WASHINGTON")] == "500"
 
 
 def test_build_level_index_from_wta_catalog_reads_official_roster():

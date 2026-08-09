@@ -78,7 +78,20 @@ def build_level_index_from_sackmann() -> dict[tuple[int, str], str]:
     tienen `level` real embebido, no hace falta ninguna fuente externa
     nueva)."""
     init_db_historical()
-    index: dict[tuple[int, str], str] = {}
+    # 2026-08-09, bug real encontrado en vivo: "Washington" 2025 tiene
+    # 43 filas reales con level='500' (correcto) pero 1 sola fila con
+    # level='M' (Masters -- error de etiquetado en la fuente TML-Database
+    # misma, no nuestro) -- la resolución por PRIORIDAD MÁXIMA elegía la
+    # única fila mal etiquetada por sobre las 43 correctas (prioridad
+    # ATP: M=4 > 500=3). Prioridad-máxima tiene sentido para colisiones
+    # entre 2 torneos REALES DISTINTOS que normalizan igual (ej. "Rome"
+    # Masters vs "Rome 2 challenger" -- ahí sí preferís el evento
+    # principal); pero para ruido DENTRO del mismo torneo real, hace
+    # falta VOTO POR MAYORÍA (el level más frecuente gana, priority solo
+    # como desempate si hay empate real de conteo)."""
+    from collections import Counter
+
+    counts: dict[tuple[int, str], Counter[str]] = {}
     rows = (
         MatchHistory
         .select(MatchHistory.tournament, MatchHistory.level, MatchHistory.match_date)
@@ -97,8 +110,13 @@ def build_level_index_from_sackmann() -> dict[tuple[int, str], str]:
         except (ValueError, TypeError):
             continue
         key = (year, norm)
-        if key not in index or _ATP_LEVEL_PRIORITY.get(r.level, -1) > _ATP_LEVEL_PRIORITY.get(index[key], -1):
-            index[key] = r.level
+        counts.setdefault(key, Counter())[r.level] += 1
+
+    index: dict[tuple[int, str], str] = {}
+    for key, level_counts in counts.items():
+        max_count = max(level_counts.values())
+        tied = [lvl for lvl, n in level_counts.items() if n == max_count]
+        index[key] = max(tied, key=lambda lvl: _ATP_LEVEL_PRIORITY.get(lvl, -1)) if len(tied) > 1 else tied[0]
     return index
 
 
