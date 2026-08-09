@@ -54,6 +54,14 @@ def _extra_delay() -> None:
     time.sleep(random.uniform(_EXTRA_DELAY_MIN_S, _EXTRA_DELAY_MAX_S))
 
 
+def _same_player_name(name_a: str, name_b: str) -> bool:
+    """Compara 2 nombres de la MISMA persona sin asumir orden de tokens
+    -- `player_a_name` de un candidato viene "Nombre Apellido", pero
+    `get_match_detail` devuelve el nombre nativo de TennisExplorer,
+    "Apellido Nombre" -- mismo conjunto de tokens, orden distinto."""
+    return frozenset(name_a.lower().split()) == frozenset(name_b.lower().split())
+
+
 def _surname_key_from_te_name(name: str) -> str:
     """2026-08-09, bug real encontrado en producción -- `resolve_player_slug`
     solo intenta la heurística naive de slug antes de rendirse (nunca
@@ -169,7 +177,24 @@ def process_player(player_a_name: str, candidates: list) -> dict:
             # Validación final: el detail debe seguir apuntando a este
             # mismo jugador de un lado -- nunca se confía ciegamente en
             # el match_id sin re-chequear identidad real.
-            if player_a_name.lower() not in (detail["player_a_name"].lower(), detail["player_b_name"].lower()):
+            #
+            # 2026-08-09, BUG REAL (causa raíz dominante del "resolved=0
+            # universal" en producción, verificado en vivo con "Alex
+            # Molcan" -- 467 candidatos reales, 46 matches encontrados
+            # por `find_matching_candidate` en el primer año probado,
+            # los 46 rechazados acá): `player_a_name` de un candidato
+            # viene en formato "Nombre Apellido" (convención del
+            # dedupe/roster), pero `get_match_detail` devuelve el
+            # nombre NATIVO de TennisExplorer, "Apellido Nombre" (ej.
+            # "Molcan Alex"). La comparación de substring/igualdad de
+            # string exacta NUNCA matchea por el orden invertido --
+            # mismo patrón de bug ya documentado en memoria
+            # (kairos-wta-name-order-mismatch-breaks-backtest). Fix:
+            # comparar por CONJUNTO de tokens, no por string ni orden.
+            if not (
+                _same_player_name(player_a_name, detail["player_a_name"])
+                or _same_player_name(player_a_name, detail["player_b_name"])
+            ):
                 continue
             with db_historical.connection_context():
                 status = save_match_detail(detail)

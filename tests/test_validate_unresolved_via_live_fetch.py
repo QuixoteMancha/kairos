@@ -126,6 +126,49 @@ def test_process_player_leaves_unresolved_when_slug_not_found():
     assert TennisMatchHistoryUnvalidated.select().where(TennisMatchHistoryUnvalidated.id == c.id).count() == 1
 
 
+def test_process_player_resolves_when_detail_name_order_is_reversed():
+    # 2026-08-09, bug real DOMINANTE encontrado en producción (verificado
+    # en vivo con "Alex Molcan", 467 candidatos reales -- todos
+    # rechazados por este bug pese a `find_matching_candidate` funcionar
+    # perfecto): el candidato guarda "Nombre Apellido" pero
+    # `get_match_detail` devuelve el nombre NATIVO de TennisExplorer,
+    # "Apellido Nombre" -- la comparación de string exacta nunca
+    # matcheaba.
+    c = _unvalidated("Alex Molcan", "Struff J.", is_full_name=False, match_date="2024-08-10")
+    fake_page_row = {
+        "date": "10.08.", "opponent": "Struff J.", "match_id": "999", "tournament": "Bratislava challenger",
+        "surface": "hard", "round": "1R", "round_full": "1. round", "score": "6-4, 6-2",
+        "odds_self": None, "odds_opponent": None,
+    }
+    detail_native_order = {
+        **_DETAIL, "player_a_name": "Molcan Alex", "player_a_slug": "molcan",
+        "player_b_name": "Struff Jan-Lennard", "player_b_slug": "struff",
+    }
+    with patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.resolve_player_slug", return_value="molcan",
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._fetch", return_value="<html>x</html>",
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._parse_year_html", return_value=[fake_page_row],
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.get_match_detail", return_value=detail_native_order,
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._extra_delay",
+    ):
+        result = process_player("Alex Molcan", [c])
+
+    assert result["resolved"] == 1
+    assert result["unresolved"] == 0
+    assert MatchHistory.select().where(MatchHistory.match_id == "999").count() == 1
+
+
+def test_same_player_name_ignores_token_order():
+    from scripts.tennis.validate_unresolved_via_live_fetch import _same_player_name
+
+    assert _same_player_name("Alex Molcan", "Molcan Alex") is True
+    assert _same_player_name("Alex Molcan", "Struff Jan-Lennard") is False
+
+
 def test_surname_key_from_te_name_drops_last_token():
     # 2026-08-09, bug real: convención TE es "Apellido(s) Nombre" (ej.
     # "Budkov Kjaer Nicolai" -- apellido real "Budkov Kjaer", nombre
