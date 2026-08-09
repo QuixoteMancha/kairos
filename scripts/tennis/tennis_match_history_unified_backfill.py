@@ -33,7 +33,15 @@ primero, más cara; fallback más barato al final):
 
 Cada fase es fail-closed e independiente -- si una fase no encuentra
 nada que resolver, o falla, el loop sigue con la siguiente fase/ciclo
-sin bloquear."""
+sin bloquear.
+
+PROGRESO VISUAL (2026-08-09, pedido explícito del usuario: "que vaya
+mostrando como barra los campos que va llenando y su % de progreso"):
+al final de cada ciclo se imprime una barra ASCII de cobertura real
+(filas CON dato / total) para los campos que este worker puede llenar
+-- separado por fuente (`sackmann`/`tennisexplorer`, estructuras de
+dato distintas, ver `models.py`), para poder ver en vivo cómo avanza
+sin tener que consultar la DB a mano."""
 
 from __future__ import annotations
 
@@ -48,6 +56,61 @@ _SLEEP_BETWEEN_CYCLES_S = 30.0
 _MATCH_DETAIL_BATCH_PLAYERS = 200
 _TOUR_BY_SEX_BATCH_PLAYERS = 200
 _DERIVE_EVERY_N_CYCLES = 20  # full-table scan -- no repetir en cada ciclo de 30s
+
+_BAR_WIDTH = 24
+
+# Campos que este worker puede llenar, por fuente -- cada fuente tiene
+# una estructura de dato distinta (ver models.py), no tiene sentido
+# mostrar "minutes"/"level" para tennisexplorer (siempre van a estar
+# vacíos, son campos exclusivos de sackmann) ni bio/slug para sackmann
+# (Sackmann/TML-Database nunca trae eso, solo match-detail).
+_PROGRESS_FIELDS_BY_SOURCE = {
+    "tennisexplorer": [
+        "tour", "level", "tournament",
+        "player_a_ranking", "player_b_ranking",
+        "player_a_slug", "player_b_slug",
+        "player_a_birthdate", "player_b_birthdate",
+        "player_a_height_cm", "player_b_height_cm",
+        "player_a_weight_kg", "player_b_weight_kg",
+        "player_a_plays", "player_b_plays",
+    ],
+    "sackmann": [
+        "level", "best_of", "winner_age", "loser_age", "minutes",
+        "player_a_ranking", "player_b_ranking",
+    ],
+}
+
+
+def _bar(pct: float, width: int = _BAR_WIDTH) -> str:
+    filled = round(width * max(0.0, min(100.0, pct)) / 100)
+    return "[" + "#" * filled + "-" * (width - filled) + "]"
+
+
+def print_field_coverage() -> dict[str, dict[str, float]]:
+    """Imprime una barra de progreso por campo, por fuente -- % de
+    filas CON el dato (no vacío/NULL), no % de filas SIN el dato (más
+    intuitivo leído como "cuánto se llenó" a medida que corre el
+    worker). Devuelve el mismo dict para poder testear sin parsear
+    stdout."""
+    from database.db import init_db_historical
+    from database.historical.tennis.models import MatchHistory
+
+    init_db_historical()
+    result: dict[str, dict[str, float]] = {}
+    for source, fields in _PROGRESS_FIELDS_BY_SOURCE.items():
+        total = MatchHistory.select().where(MatchHistory.source == source).count()
+        print(f"\n=== cobertura de campos -- source={source} (total={total}) ===")
+        result[source] = {}
+        if not total:
+            continue
+        for fname in fields:
+            field = getattr(MatchHistory, fname)
+            filled = MatchHistory.select().where((MatchHistory.source == source) & field.is_null(False)).count()
+            pct = round(100 * filled / total, 1)
+            result[source][fname] = pct
+            print(f"  {fname:22s} {_bar(pct)} {pct:5.1f}%")
+    print(flush=True)
+    return result
 
 
 def run_cycle(cycle_number: int) -> dict[str, Any]:
@@ -84,6 +147,10 @@ def run_forever(sleep_between_cycles_s: float = _SLEEP_BETWEEN_CYCLES_S) -> None
         cycle += 1
         result = run_cycle(cycle)
         print(result, flush=True)
+        try:
+            print_field_coverage()
+        except Exception as e:
+            print(f"print_field_coverage failed: {e}", flush=True)
         time.sleep(sleep_between_cycles_s)
 
 

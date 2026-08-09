@@ -5,9 +5,28 @@ tenemos"."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
-from scripts.tennis.tennis_match_history_unified_backfill import run_cycle
+from database.db import init_db_historical
+from database.historical.tennis.models import MatchHistory
+from scripts.tennis.tennis_match_history_unified_backfill import run_cycle, _bar, print_field_coverage
+
+_next_id = iter(range(1, 100_000))
+
+
+def setup_function(_fn):
+    init_db_historical()
+    MatchHistory.delete().execute()
+
+
+def _row(source, tour=None, level=None, player_a_ranking=None):
+    return MatchHistory.create(
+        match_id=f"test:{next(_next_id)}",
+        player_a_name="A", player_b_name="B", match_date="2024-01-01",
+        winner_side="a", source=source, tour=tour, level=level,
+        player_a_ranking=player_a_ranking, fetched_at=datetime.now(timezone.utc),
+    )
 
 
 def test_run_cycle_calls_match_detail_and_tour_by_sex_phases():
@@ -53,3 +72,33 @@ def test_run_cycle_one_phase_failing_does_not_block_the_others():
     assert "error" in result["match_detail_phase"]
     mock_sex.assert_called_once()
     assert result["tour_by_sex_phase"] == {"players_resolved": 3}
+
+
+def test_bar_reflects_percentage_filled():
+    assert _bar(0.0, width=10) == "[----------]"
+    assert _bar(100.0, width=10) == "[##########]"
+    assert _bar(50.0, width=10) == "[#####-----]"
+
+
+def test_bar_clamps_out_of_range_values():
+    assert _bar(-10.0, width=10) == "[----------]"
+    assert _bar(150.0, width=10) == "[##########]"
+
+
+def test_print_field_coverage_computes_real_percentage_per_source():
+    _row("tennisexplorer", tour="ATP")
+    _row("tennisexplorer", tour=None)
+    _row("sackmann", level="M", player_a_ranking=5)
+    _row("sackmann", level=None, player_a_ranking=None)
+
+    result = print_field_coverage()
+
+    assert result["tennisexplorer"]["tour"] == 50.0
+    assert result["sackmann"]["level"] == 50.0
+    assert result["sackmann"]["player_a_ranking"] == 50.0
+
+
+def test_print_field_coverage_handles_empty_source_without_error():
+    result = print_field_coverage()
+    assert result["tennisexplorer"] == {}
+    assert result["sackmann"] == {}
