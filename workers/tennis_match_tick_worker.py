@@ -29,6 +29,8 @@ PROPIO try/except (ver más abajo) para que un fallo de TennisExplorer
 precio real de Kalshi, que es más crítico."""
 
 import os
+import random
+import threading
 import time
 
 from outer_apis.kalshi.client import KalshiAPI
@@ -38,6 +40,7 @@ from database.historical.tennis.matchtracking import (
 from models.fairprice.sports.tennis.tennisfmodel import TennisFModel
 from outer_apis.sports.tennis.match_history import set_fetch_allowlist
 from workers.set1_favorite_reaction_worker import check_and_save_set1_signal
+from database.historical.tennis import save_next_match, has_real_match_detail_between
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
@@ -168,10 +171,69 @@ def run_once() -> dict:
     return result
 
 
+# 2026-08-09, pedido explícito del usuario: "como los matches se
+# fetchean antes que empiecen desde Kalshi puedes poner delays para los
+# requests de tennis explorer de manera asíncrona, por un lado el
+# guardado de los ticks, por otro el fill del match con la data de
+# tennis explorer, pero todo en el mismo worker" -- separa el fill de
+# identidad/tour/level vía TennisExplorer (con delay real, red no
+# oficial, sin SLA) del tick de precio real de Kalshi (`run_once`,
+# rápido, síncrono, cada 60s, NUNCA debe esperar a TennisExplorer).
+# Corre en un hilo daemon aparte, con su propio ciclo e intervalo --
+# NO es el script de backfill masivo (`tennis_match_history_unified_
+# backfill.py`, que ataca el backlog histórico completo de 300K+
+# candidatos); acá el alcance es acotado y real: solo los jugadores de
+# partidos que Kalshi YA tiene abiertos (`get_open_scanned_matches`,
+# probablemente unas pocas decenas), la mayoría de los cuales YA se
+# resuelven en 1-2 ciclos y dejan de pedirse de nuevo (`has_real_match_
+# detail_between`, chequeo sin red).
+_ENRICHMENT_CYCLE_INTERVAL_S = 90.0
+_ENRICHMENT_DELAY_MIN_S = 1.0
+_ENRICHMENT_DELAY_MAX_S = 3.5
+
+
+def run_enrichment_once() -> dict:
+    """1 pasada: para cada partido abierto cuyo par de jugadores AÚN no
+    tiene una fila `MatchHistory` con identidad real resuelta, intenta
+    `save_next_match` (cubre el caso real señalado por el usuario: el
+    partido detectado por Kalshi todavía no aparece en la tabla de
+    resultados de TennisExplorer porque no se jugó, pero SÍ puede estar
+    en su sección "Next match"). Delay real entre cada request -- nunca
+    bloquea ni compite con el tick de precio de Kalshi (hilo separado)."""
+    open_matches = get_open_scanned_matches()
+    pending = [
+        m for m in open_matches
+        if not has_real_match_detail_between(m["player_a_name"], m["player_b_name"])
+    ]
+    resolved = failed = 0
+    for i, m in enumerate(pending):
+        try:
+            ok = save_next_match(m["player_a_name"], expected_opponent_hint=m["player_b_name"])
+        except Exception:
+            ok = False
+        resolved += 1 if ok else 0
+        failed += 0 if ok else 1
+        if i < len(pending) - 1:
+            time.sleep(random.uniform(_ENRICHMENT_DELAY_MIN_S, _ENRICHMENT_DELAY_MAX_S))
+    result = {"open": len(open_matches), "pending": len(pending), "resolved": resolved, "failed": failed}
+    print(f"[tennis_match_tick_worker] enrichment {result}")
+    return result
+
+
+def _run_enrichment_loop(interval_s: float = _ENRICHMENT_CYCLE_INTERVAL_S) -> None:
+    while True:
+        try:
+            run_enrichment_once()
+        except Exception as e:
+            print(f"[tennis_match_tick_worker] enrichment ciclo con error: {e}")
+        time.sleep(interval_s)
+
+
 if __name__ == "__main__":
     if _REFRESH_INTERVAL_S:
         interval = int(_REFRESH_INTERVAL_S) if _REFRESH_INTERVAL_S.strip() else _DEFAULT_INTERVAL_S
         print(f"[tennis_match_tick_worker] loop mode, refresh_interval={interval}s")
+        threading.Thread(target=_run_enrichment_loop, daemon=True).start()
         while True:
             try:
                 run_once()

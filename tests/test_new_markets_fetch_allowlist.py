@@ -88,9 +88,7 @@ def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
     fake_matches = [{"fecha": "2026-08-01", "oponente": "Y", "resultado": "L", "score": "3-6 4-6", "source": "flashscore"}]
 
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
-               return_value=fake_matches) as mock_fetch, patch(
-        "outer_apis.sports.tennis.match_history.save_next_match",
-    ):
+               return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("New Match Player")
 
     mock_fetch.assert_called_once()
@@ -100,8 +98,6 @@ def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
 def test_fetch_and_cache_unrestricted_when_allowlist_is_none():
     match_history.set_fetch_allowlist(None)  # comportamiento de siempre
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
-               return_value=[]) as mock_fetch, patch(
-        "outer_apis.sports.tennis.match_history.save_next_match",
-    ):
+               return_value=[]) as mock_fetch:
         match_history._fetch_and_cache("Anybody")
     mock_fetch.assert_called_once()

@@ -313,6 +313,27 @@ def save_next_match(player_name: str, expected_opponent_hint: str | None = None)
         return False
 
 
+def has_real_match_detail_between(player_a_name: str, player_b_name: str) -> bool:
+    """`True` si YA existe una fila `MatchHistory` con identidad real
+    (`match_id` NO sintético, ej. no `recentform:...`) para ESTE par de
+    jugadores (cualquier fecha, cualquier orden de lados) -- 2026-08-09,
+    pedido explícito del usuario: separar el guardado de ticks de Kalshi
+    (rápido, síncrono) del "fill" del partido con datos de TennisExplorer
+    (async, con delay real) EN EL MISMO WORKER -- este chequeo es la
+    parte barata/sin red que decide si vale la pena pagar el costo de
+    red de `save_next_match`, evita re-fetchear en cada ciclo un partido
+    que ya se resolvió.
+
+    Sin red, solo lectura de DB (índice por nombres) -- seguro de llamar
+    en cada ciclo del loop de enriquecimiento sin generar tráfico extra."""
+    init_db_historical()
+    row = MatchHistory.get_or_none(
+        ((MatchHistory.player_a_name == player_a_name) & (MatchHistory.player_b_name == player_b_name))
+        | ((MatchHistory.player_a_name == player_b_name) & (MatchHistory.player_b_name == player_a_name))
+    )
+    return row is not None and not row.match_id.startswith("recentform:") and not row.match_id.startswith("tmldb:")
+
+
 def _swap_match_detail_sides(fields: dict[str, Any]) -> dict[str, Any]:
     """Invierte player_a_*/player_b_*/winner_side de un dict de campos
     de `save_match_detail` -- usado cuando la fila EXISTENTE en
