@@ -37,7 +37,7 @@ import statistics
 from typing import Any
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory
+from database.historical.tennis import MatchHistory
 from database.historical.tennis import TennisHistoricalOdds
 from outer_apis.kalshi.fees import leg_fee_fraction
 
@@ -62,10 +62,17 @@ def _devig_prob(odds_self: float, odds_opponent: float) -> float | None:
 def _load_priced_matches(
     tour_players: list[str] | None = None, start_year: int | None = None, end_year: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Une `TennisMatchHistory` con `TennisHistoricalOdds` por
+    """Une `MatchHistory` (2026-08-09, migrado de `TennisMatchHistory` --
+    ver nota de migración en `writer.py`) con `TennisHistoricalOdds` por
     (player_name, opponent_name, match_date) -- solo filas con cuota
     real disponible en AMBOS lados (fail-closed, nunca fabrica una
     cuota faltante).
+
+    `MatchHistory` es 1 fila por PARTIDO (no por jugador) -- se expande
+    cada fila a sus 2 perspectivas de jugador (igual que producía la
+    vieja `TennisMatchHistory`) antes de aplicar el filtro de
+    `tour_players`/rango de años, para no cambiar el universo de datos
+    resultante.
 
     `tour_players`: lista opcional de nombres para acotar la consulta
     (ej. el top-200 de un tour específico, ya que esta tabla mezcla
@@ -73,39 +80,45 @@ def _load_priced_matches(
     init_db_historical()
     result: list[dict[str, Any]] = []
     with db_historical.connection_context():
-        query = TennisMatchHistory.select().where(TennisMatchHistory.result.in_(["W", "L"]))
-        if tour_players:
-            query = query.where(TennisMatchHistory.player_name.in_(tour_players))
+        query = MatchHistory.select().where(MatchHistory.winner_side.in_(["a", "b"]))
         if start_year:
-            query = query.where(TennisMatchHistory.match_date >= f"{start_year}-01-01")
+            query = query.where(MatchHistory.match_date >= f"{start_year}-01-01")
         if end_year:
-            query = query.where(TennisMatchHistory.match_date <= f"{end_year}-12-31")
+            query = query.where(MatchHistory.match_date <= f"{end_year}-12-31")
 
         for row in query:
-            odds_row = TennisHistoricalOdds.get_or_none(
-                (TennisHistoricalOdds.player_name == row.player_name)
-                & (TennisHistoricalOdds.opponent_name == row.opponent_name)
-                & (TennisHistoricalOdds.match_date == row.match_date)
-            )
-            if odds_row is None or odds_row.odds_self is None or odds_row.odds_opponent is None:
-                continue
+            perspectives = [
+                (row.player_a_name, row.player_b_name, "W" if row.winner_side == "a" else "L"),
+                (row.player_b_name, row.player_a_name, "W" if row.winner_side == "b" else "L"),
+            ]
+            for player_name, opponent_name, match_result in perspectives:
+                if tour_players and player_name not in tour_players:
+                    continue
 
-            fair_self = _devig_prob(odds_row.odds_self, odds_row.odds_opponent)
-            if fair_self is None:
-                continue
+                odds_row = TennisHistoricalOdds.get_or_none(
+                    (TennisHistoricalOdds.player_name == player_name)
+                    & (TennisHistoricalOdds.opponent_name == opponent_name)
+                    & (TennisHistoricalOdds.match_date == row.match_date)
+                )
+                if odds_row is None or odds_row.odds_self is None or odds_row.odds_opponent is None:
+                    continue
 
-            # favorito = quien tiene la cuota MÁS BAJA (más probable
-            # según el mercado real) -- no por ranking.
-            self_is_favorite = odds_row.odds_self < odds_row.odds_opponent
-            favorite_fair_price = fair_self if self_is_favorite else (1.0 - fair_self)
-            favorite_won = (row.result == "W") == self_is_favorite
+                fair_self = _devig_prob(odds_row.odds_self, odds_row.odds_opponent)
+                if fair_self is None:
+                    continue
 
-            result.append({
-                "player_name": row.player_name, "opponent_name": row.opponent_name,
-                "match_date": row.match_date, "tournament": row.tournament,
-                "favorite_fair_price": favorite_fair_price, "favorite_won": favorite_won,
-                "odds_self": odds_row.odds_self, "odds_opponent": odds_row.odds_opponent,
-            })
+                # favorito = quien tiene la cuota MÁS BAJA (más probable
+                # según el mercado real) -- no por ranking.
+                self_is_favorite = odds_row.odds_self < odds_row.odds_opponent
+                favorite_fair_price = fair_self if self_is_favorite else (1.0 - fair_self)
+                favorite_won = (match_result == "W") == self_is_favorite
+
+                result.append({
+                    "player_name": player_name, "opponent_name": opponent_name,
+                    "match_date": row.match_date, "tournament": row.tournament,
+                    "favorite_fair_price": favorite_fair_price, "favorite_won": favorite_won,
+                    "odds_self": odds_row.odds_self, "odds_opponent": odds_row.odds_opponent,
+                })
     return result
 
 

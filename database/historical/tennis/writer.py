@@ -22,11 +22,50 @@ LOOKBACK_DAYS_DEFAULT = 365.0
 
 from database.db import init_db_historical
 from database.historical.tennis.models import (
-    TennisPlayerRanking, TennisServeCalibration, TennisMatchHistory,
-    TennisHeadToHead, TennisSurfaceMatchHistory, TennisAbstractElo,
+    TennisPlayerRanking, TennisServeCalibration,
+    TennisHeadToHead, TennisAbstractElo,
     TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
     TennisRecentResult, MatchHistory,
 )
+
+# 2026-08-09, pedido explícito del usuario -- "cualquier tabla de matches
+# independiente del deporte debe tener la estructura 1 fila por match" --
+# `TennisMatchHistory`/`TennisSurfaceMatchHistory` violaban esto (1 fila
+# POR JUGADOR por partido, ver docstrings viejos de `save_match_history`/
+# `save_surface_match_history` más abajo). Se reemplaza su lectura/
+# escritura por `MatchHistory` (ya diseñada 1-fila-por-partido, ver
+# `models.py`), sin cambiar la forma externa que consumen los callers
+# (`outer_apis/sports/tennis/match_history.py`, `surface_form.py`,
+# `style_peer_group.py`) -- misma firma, mismos dicts de salida.
+#
+# Idempotencia entre los DOS jugadores de un mismo partido real (cada uno
+# puede fetchear su propio historial y "ver" el mismo partido): se busca
+# una fila existente por (match_date, {A,B} sin importar el orden) antes
+# de crear una nueva -- si ya existe (la creó el otro jugador, o ya vino
+# de `save_match_detail` con match_id real de TennisExplorer), NUNCA se
+# duplica. `match_id` sintético (`recentform:{par ordenado}|{fecha}`)
+# usado solo cuando no hay fila previa -- si más tarde llega el detalle
+# real del partido (match_id real), `save_match_detail` lo trata como un
+# match_id DISTINTO y crearía una segunda fila; se acepta ese caso residual
+# (no se resuelve acá, ver memoria de la sesión) porque intentar
+# fusionarlos requeriría re-arquitecturar `save_match_detail` también, y
+# el problema real que se pedía resolver ahora es la duplicación
+# POR-JUGADOR-en-cada-fetch, no cross-fuente."""
+
+
+def _find_existing_match_history_row(name_a: str, name_b: str, match_date: str):
+    return MatchHistory.get_or_none(
+        (MatchHistory.match_date == match_date)
+        & (
+            ((MatchHistory.player_a_name == name_a) & (MatchHistory.player_b_name == name_b))
+            | ((MatchHistory.player_a_name == name_b) & (MatchHistory.player_b_name == name_a))
+        )
+    )
+
+
+def _synthetic_recentform_match_id(name_a: str, name_b: str, match_date: str) -> str:
+    pair = "|".join(sorted([name_a.strip().lower(), name_b.strip().lower()]))
+    return f"recentform:{pair}|{match_date}"
 
 # Campos comparables de `MatchHistory` para detectar cambios reales
 # de la fuente en `save_match_detail` -- excluye `match_id` (la clave) y
@@ -100,15 +139,11 @@ def save_serve_calibration_snapshot(tour: str, calibration: dict[tuple[int, int]
 
 
 def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
-    """One row per real charted match -- DEDUPED against
-    (player_name, opponent_name, match_date, score): unlike rankings/
-    calibration, a real match doesn't change once played, so re-inserting
-    it on every cache refresh would just inflate the table with
-    duplicates of the same fact and bias any future aggregate stats
-    (e.g. a "recent form" query built on top of this table would double-
-    count matches). Checks existence before each insert -- O(n) queries
-    per call, acceptable given `matches` is capped at _MAX_DEPTH=40 in
-    outer_apis/tennis_match_history.py."""
+    """1 fila por PARTIDO real en `MatchHistory` (no 1 por jugador --
+    ver nota de migración arriba). Deduped vía `_find_existing_match_history_row`
+    contra (match_date, {player_name, opponent} en cualquier orden) --
+    un partido real no cambia una vez jugado, y si el otro jugador (o
+    `save_match_detail`) ya lo registró, no se duplica."""
     if not matches:
         return
     try:
@@ -121,27 +156,23 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
             result = m.get("resultado")
             if not (opponent and match_date and result):
                 continue
-            exists = (
-                TennisMatchHistory
-                .select()
-                .where(
-                    (TennisMatchHistory.player_name == player_name)
-                    & (TennisMatchHistory.opponent_name == opponent)
-                    & (TennisMatchHistory.match_date == match_date)
-                )
-                .exists()
-            )
-            if exists:
+            if _find_existing_match_history_row(player_name, opponent, match_date) is not None:
                 continue
-            TennisMatchHistory.create(
-                player_name=player_name,
-                opponent_name=opponent,
-                match_date=match_date,
-                result=result,
-                score=score,
-                source=m.get("source", "flashscore"),
-                fetched_at=fetched_at,
-            )
+            winner_side = "a" if result == "W" else "b"
+            match_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
+            try:
+                MatchHistory.create(
+                    match_id=match_id,
+                    source=m.get("source", "tennisexplorer"),
+                    match_date=match_date,
+                    score=score,
+                    winner_side=winner_side,
+                    player_a_name=player_name,
+                    player_b_name=opponent,
+                    fetched_at=fetched_at,
+                )
+            except Exception:
+                pass  # carrera real: el otro jugador/save_match_detail lo creó justo antes -- no duplicar
     except Exception:
         pass
 
@@ -290,12 +321,13 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
     try:
         init_db_historical()
         today_str = _last_midnight_utc().date().isoformat()
+        player_filter = (MatchHistory.player_a_name == player_name) | (MatchHistory.player_b_name == player_name)
 
         latest_match = (
-            TennisMatchHistory
-            .select(TennisMatchHistory.match_date)
-            .where(TennisMatchHistory.player_name == player_name)
-            .order_by(TennisMatchHistory.match_date.desc())
+            MatchHistory
+            .select(MatchHistory.match_date)
+            .where(player_filter)
+            .order_by(MatchHistory.match_date.desc())
             .limit(1)
             .first()
         )
@@ -304,10 +336,10 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
         already_have_todays_match = latest_match.match_date >= today_str
 
         latest = (
-            TennisMatchHistory
-            .select(TennisMatchHistory.fetched_at)
-            .where(TennisMatchHistory.player_name == player_name)
-            .order_by(TennisMatchHistory.fetched_at.desc())
+            MatchHistory
+            .select(MatchHistory.fetched_at)
+            .where(player_filter)
+            .order_by(MatchHistory.fetched_at.desc())
             .limit(1)
             .first()
         )
@@ -325,30 +357,39 @@ def get_recent_match_history(player_name: str, max_age_hours: float | None = Non
             return None  # ventana rodante adicional explícita, más estricta que el borde diario
 
         rows = (
-            TennisMatchHistory
+            MatchHistory
             .select()
-            .where(TennisMatchHistory.player_name == player_name)
-            .order_by(TennisMatchHistory.match_date.desc(), TennisMatchHistory.id.desc())
+            .where(player_filter)
+            .order_by(MatchHistory.match_date.desc(), MatchHistory.id.desc())
             .limit(limit)
         )
-        return [
-            {
-                "fecha": r.match_date,
-                "oponente": r.opponent_name,
-                "resultado": r.result,
-                "score": r.score,
-                "source": r.source,
-            }
-            for r in rows
-        ]
+        return [_match_history_row_to_player_dict(r, player_name) for r in rows]
     except Exception:
         return None
 
 
+def _match_history_row_to_player_dict(r, player_name: str) -> dict[str, Any]:
+    """Reconstruye la forma legacy per-jugador ({"fecha","oponente",
+    "resultado","score","source"}) desde una fila de `MatchHistory`
+    (1 por partido real) -- mantiene la firma externa que consumen
+    `outer_apis/sports/tennis/match_history.py` y compañía sin que
+    tengan que saber que la fuente ahora es 1-fila-por-partido."""
+    def _resultado(my_side: str) -> str | None:
+        if r.winner_side is None:
+            return None  # no fabricar W/L cuando no se sabe con certeza quién ganó
+        return "W" if r.winner_side == my_side else "L"
+
+    if r.player_a_name == player_name:
+        opponent, resultado = r.player_b_name, _resultado("a")
+    else:
+        opponent, resultado = r.player_a_name, _resultado("b")
+    return {"fecha": r.match_date, "oponente": opponent, "resultado": resultado, "score": r.score, "source": r.source}
+
+
 def get_any_match_history(player_name: str, limit: int = 40) -> list[dict[str, Any]] | None:
-    """Lee lo que haya en `TennisMatchHistory` para `player_name` SIN
-    ningún chequeo de frescura -- a diferencia de
-    `get_recent_match_history`, esto sirve datos VIEJOS a propósito.
+    """Lee lo que haya en `MatchHistory` para `player_name` (como
+    player_a O player_b) SIN ningún chequeo de frescura -- a diferencia
+    de `get_recent_match_history`, esto sirve datos VIEJOS a propósito.
 
     Usado exclusivamente cuando un jugador no está autorizado a un fetch
     en vivo hoy (ver `outer_apis/sports/tennis/match_history.py::
@@ -363,22 +404,16 @@ def get_any_match_history(player_name: str, limit: int = 40) -> list[dict[str, A
     try:
         init_db_historical()
         rows = (
-            TennisMatchHistory
+            MatchHistory
             .select()
-            .where(TennisMatchHistory.player_name == player_name)
-            .order_by(TennisMatchHistory.match_date.desc(), TennisMatchHistory.id.desc())
+            .where((MatchHistory.player_a_name == player_name) | (MatchHistory.player_b_name == player_name))
+            .order_by(MatchHistory.match_date.desc(), MatchHistory.id.desc())
             .limit(limit)
         )
         rows = list(rows)
         if not rows:
             return None
-        return [
-            {
-                "fecha": r.match_date, "oponente": r.opponent_name,
-                "resultado": r.result, "score": r.score, "source": r.source,
-            }
-            for r in rows
-        ]
+        return [_match_history_row_to_player_dict(r, player_name) for r in rows]
     except Exception:
         return None
 
@@ -407,9 +442,13 @@ def save_head_to_head_snapshot(player_a: str, player_b: str, h2h: dict[str, Any]
 def save_surface_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
     """Persiste historial de TennisExplorer (con superficie real por
     partido, ver outer_apis/scrapers/tennis/tennisexplorer_scraper.py).
-    Dedup por (player_name, opponent_name, match_date, surface) -- mismo
-    criterio que save_match_history, evita duplicar el mismo partido en
-    fetches sucesivos que se solapan en rango de fechas."""
+    1 fila por PARTIDO real en `MatchHistory` (2026-08-09, mismo
+    tratamiento que `save_match_history` -- ver nota de migración
+    arriba). Dedup vía `_find_existing_match_history_row` (match_date +
+    par de jugadores en cualquier orden) -- si el partido ya existe
+    (creado por el otro jugador, por `save_match_history`, o por
+    `save_match_detail`), solo completa `surface`/`tournament` si esos
+    campos venían vacíos (nunca pisa un dato real ya confirmado)."""
     if not matches:
         return
     try:
@@ -421,25 +460,35 @@ def save_surface_match_history(player_name: str, matches: list[dict[str, Any]]) 
             surface = m.get("surface")
             if not opponent or not match_date or not surface:
                 continue
-            exists = TennisSurfaceMatchHistory.select().where(
-                (TennisSurfaceMatchHistory.player_name == player_name)
-                & (TennisSurfaceMatchHistory.opponent_name == opponent)
-                & (TennisSurfaceMatchHistory.match_date == match_date)
-                & (TennisSurfaceMatchHistory.surface == surface)
-            ).exists()
-            if exists:
+            existing = _find_existing_match_history_row(player_name, opponent, match_date)
+            if existing is not None:
+                changed = False
+                if not existing.surface:
+                    existing.surface, changed = surface, True
+                if not existing.tournament and m.get("tournament"):
+                    existing.tournament, changed = m.get("tournament"), True
+                if changed:
+                    existing.updated_at = fetched_at
+                    existing.save()
                 continue
-            TennisSurfaceMatchHistory.create(
-                player_name=player_name,
-                opponent_name=opponent,
-                match_date=match_date,
-                surface=surface,
-                result=m.get("result"),
-                score=m.get("score"),
-                tournament=m.get("tournament"),
-                source="tennisexplorer",
-                fetched_at=fetched_at,
-            )
+            result = m.get("result")
+            winner_side = ("a" if result == "W" else "b") if result in ("W", "L") else None
+            match_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
+            try:
+                MatchHistory.create(
+                    match_id=match_id,
+                    source="tennisexplorer",
+                    match_date=match_date,
+                    surface=surface,
+                    tournament=m.get("tournament"),
+                    score=m.get("score"),
+                    winner_side=winner_side,
+                    player_a_name=player_name,
+                    player_b_name=opponent,
+                    fetched_at=fetched_at,
+                )
+            except Exception:
+                pass  # carrera real -- el otro jugador/save_match_detail lo creó justo antes
     except Exception:
         pass
 
@@ -462,10 +511,14 @@ def get_recent_surface_match_history(
 
     try:
         init_db_historical()
+        player_filter = (
+            (MatchHistory.player_a_name == player_name) | (MatchHistory.player_b_name == player_name)
+        ) & MatchHistory.surface.is_null(False)
+
         latest = (
-            TennisSurfaceMatchHistory.select()
-            .where(TennisSurfaceMatchHistory.player_name == player_name)
-            .order_by(TennisSurfaceMatchHistory.fetched_at.desc())
+            MatchHistory.select()
+            .where(player_filter)
+            .order_by(MatchHistory.fetched_at.desc())
             .first()
         )
         if latest is None:
@@ -479,23 +532,18 @@ def get_recent_surface_match_history(
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).date().isoformat()
         rows = (
-            TennisSurfaceMatchHistory.select()
-            .where(
-                (TennisSurfaceMatchHistory.player_name == player_name)
-                & (TennisSurfaceMatchHistory.match_date >= cutoff)
-            )
-            .order_by(TennisSurfaceMatchHistory.match_date.desc())
+            MatchHistory.select()
+            .where(player_filter & (MatchHistory.match_date >= cutoff))
+            .order_by(MatchHistory.match_date.desc())
         )
-        return [
-            {
-                "opponent": r.opponent_name,
-                "match_date": r.match_date,
-                "surface": r.surface,
-                "result": r.result,
-                "score": r.score,
-            }
-            for r in rows
-        ]
+        result = []
+        for r in rows:
+            d = _match_history_row_to_player_dict(r, player_name)
+            result.append({
+                "opponent": d["oponente"], "match_date": d["fecha"],
+                "surface": r.surface, "result": d["resultado"], "score": d["score"],
+            })
+        return result
     except Exception:
         return None
 
@@ -820,9 +868,10 @@ def get_latest_rankings(tour: str, max_age_days: float = 14.0) -> dict[str, int]
 
 
 def get_all_surface_matches(player_name: str, surface: str, lookback_days: float = LOOKBACK_DAYS_DEFAULT) -> list[dict[str, Any]]:
-    """Lectura RAW de `TennisSurfaceMatchHistory` para `player_name` en
-    `surface`, dentro de `lookback_days` -- a diferencia de
-    `get_recent_surface_match_history`, NO tiene gate de frescura de
+    """Lectura RAW de `MatchHistory` (2026-08-09, migrado de
+    `TennisSurfaceMatchHistory` -- ver nota de migración arriba) para
+    `player_name` en `surface`, dentro de `lookback_days` -- a diferencia
+    de `get_recent_surface_match_history`, NO tiene gate de frescura de
     `fetched_at` (esto es un stat derivado secundario, usar lo que ya
     esté en DB sin forzar/bloquear por un chequeo de "se refrescó hoy").
 
@@ -831,18 +880,19 @@ def get_all_surface_matches(player_name: str, surface: str, lookback_days: float
         init_db_historical()
         cutoff = (_now() - timedelta(days=lookback_days)).date().isoformat()
         rows = (
-            TennisSurfaceMatchHistory
+            MatchHistory
             .select()
             .where(
-                (TennisSurfaceMatchHistory.player_name == player_name)
-                & (TennisSurfaceMatchHistory.surface == surface)
-                & (TennisSurfaceMatchHistory.match_date >= cutoff)
+                ((MatchHistory.player_a_name == player_name) | (MatchHistory.player_b_name == player_name))
+                & (MatchHistory.surface == surface)
+                & (MatchHistory.match_date >= cutoff)
             )
         )
-        return [
-            {"opponent": r.opponent_name, "match_date": r.match_date, "result": r.result}
-            for r in rows
-        ]
+        result = []
+        for r in rows:
+            d = _match_history_row_to_player_dict(r, player_name)
+            result.append({"opponent": d["oponente"], "match_date": d["fecha"], "result": d["resultado"]})
+        return result
     except Exception:
         return []
 

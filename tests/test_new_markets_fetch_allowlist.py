@@ -11,9 +11,9 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
-from database.historical.tennis import TennisMatchHistory
+from database.historical.tennis import MatchHistory
 from database.historical.tennis.matchtracking import filter_new_markets
-from database.historical.tennis.writer import get_any_match_history
+from database.historical.tennis.writer import get_any_match_history, _synthetic_recentform_match_id
 from outer_apis.sports.tennis import match_history
 
 
@@ -22,11 +22,11 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         TennisScannedMatch.delete().execute()
-        TennisMatchHistory.delete().execute()
+        MatchHistory.delete().execute()
     yield
     with db_historical.connection_context():
         TennisScannedMatch.delete().execute()
-        TennisMatchHistory.delete().execute()
+        MatchHistory.delete().execute()
     match_history.set_fetch_allowlist(None)  # nunca dejar la allowlist puesta entre tests
 
 
@@ -57,9 +57,10 @@ def test_filter_new_markets_fail_closed_returns_all_on_db_error():
 def test_fetch_and_cache_skips_live_fetch_when_player_not_in_allowlist():
     """El caso real que motivó esto: jugador de un partido YA conocido,
     con datos viejos en DB -- no debe tocar la red."""
-    TennisMatchHistory.create(
-        player_name="Old Match Player", opponent_name="X", match_date="2026-07-20",
-        result="W", score="6-4 6-3", source="flashscore",
+    MatchHistory.create(
+        match_id=_synthetic_recentform_match_id("Old Match Player", "X", "2026-07-20"),
+        player_a_name="Old Match Player", player_b_name="X", match_date="2026-07-20",
+        winner_side="a", score="6-4 6-3", source="tennisexplorer",
         fetched_at=datetime.now(timezone.utc),
     )
     match_history.set_fetch_allowlist({"Someone Else"})  # este jugador NO está autorizado hoy

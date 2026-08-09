@@ -9,21 +9,23 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory, TennisHistoricalOdds
+from database.historical.tennis import MatchHistory, TennisHistoricalOdds
 from scripts.tennis.real_market_odds_backtest import (
     _devig_prob, _load_priced_matches, calibration_by_real_odds, run_strategy1_with_real_odds,
 )
+
+_next_match_id = iter(range(1, 10_000))
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisMatchHistory.delete().where(TennisMatchHistory.source == "test_real_odds").execute()
+        MatchHistory.delete().where(MatchHistory.source == "test_real_odds").execute()
         TennisHistoricalOdds.delete().where(TennisHistoricalOdds.source == "test_real_odds").execute()
     yield
     with db_historical.connection_context():
-        TennisMatchHistory.delete().where(TennisMatchHistory.source == "test_real_odds").execute()
+        MatchHistory.delete().where(MatchHistory.source == "test_real_odds").execute()
         TennisHistoricalOdds.delete().where(TennisHistoricalOdds.source == "test_real_odds").execute()
 
 
@@ -48,8 +50,13 @@ def test_devig_prob_fail_closed_on_invalid_odds():
 
 
 def _seed_match(player, opponent, date, result, odds_self, odds_opp, tournament="X"):
-    TennisMatchHistory.create(
-        player_name=player, opponent_name=opponent, match_date=date, result=result,
+    # 2026-08-09: `TennisMatchHistory` (1 fila por jugador) reemplazada
+    # por `MatchHistory` (1 fila por partido) -- `result` ("W"/"L") es
+    # desde la perspectiva de `player`, se traduce a winner_side "a"/"b".
+    MatchHistory.create(
+        match_id=f"test:{next(_next_match_id)}",
+        player_a_name=player, player_b_name=opponent, match_date=date,
+        winner_side=("a" if result == "W" else "b"),
         score="6-4 6-3", source="test_real_odds", fetched_at=datetime.now(timezone.utc),
         tournament=tournament,
     )
@@ -78,8 +85,9 @@ def test_load_priced_matches_favorite_lost():
 
 def test_load_priced_matches_skips_rows_without_odds():
     with db_historical.connection_context():
-        TennisMatchHistory.create(
-            player_name="NoOdds", opponent_name="X", match_date="2026-01-01", result="W",
+        MatchHistory.create(
+            match_id=f"test:{next(_next_match_id)}",
+            player_a_name="NoOdds", player_b_name="X", match_date="2026-01-01", winner_side="a",
             score="6-4 6-3", source="test_real_odds", fetched_at=datetime.now(timezone.utc),
         )
     matches = _load_priced_matches(tour_players=["NoOdds"])

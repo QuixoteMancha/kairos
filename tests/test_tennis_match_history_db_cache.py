@@ -25,8 +25,8 @@ from database.historical.tennis.writer import _last_midnight_utc
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory
-from database.historical.tennis.writer import get_recent_match_history
+from database.historical.tennis import MatchHistory
+from database.historical.tennis.writer import get_recent_match_history, _synthetic_recentform_match_id
 from outer_apis.sports.tennis import match_history
 
 
@@ -34,17 +34,22 @@ from outer_apis.sports.tennis import match_history
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisMatchHistory.delete().execute()
+        MatchHistory.delete().execute()
     yield
     with db_historical.connection_context():
-        TennisMatchHistory.delete().execute()
+        MatchHistory.delete().execute()
 
 
 def _insert_match(player: str, fetched_at, opponent="Opponent A", match_date="2026-07-20"):
+    # 2026-08-09: `TennisMatchHistory` (1 fila por jugador) fue reemplazada
+    # por `MatchHistory` (1 fila por partido real, ver writer.py) como
+    # única fuente del historial de forma reciente -- resultado="W" para
+    # `player` implica winner_side="a" con `player` como player_a.
     with db_historical.connection_context():
-        TennisMatchHistory.create(
-            player_name=player, opponent_name=opponent, match_date=match_date,
-            result="W", score="6-4 6-3", source="flashscore", fetched_at=fetched_at,
+        MatchHistory.create(
+            match_id=_synthetic_recentform_match_id(player, opponent, match_date),
+            player_a_name=player, player_b_name=opponent, match_date=match_date,
+            winner_side="a", score="6-4 6-3", source="tennisexplorer", fetched_at=fetched_at,
         )
 
 

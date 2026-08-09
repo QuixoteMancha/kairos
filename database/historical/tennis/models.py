@@ -333,35 +333,13 @@ class TennisMatchHistoryUnvalidated(HistoricalBaseModel):
     reason = CharField()
     fetched_at = DateTimeField()
 
-class ChartedMatch(HistoricalBaseModel):
-    class Meta:
-        table_name = "charted_match"
-        indexes = ((("match_id",), True),)
-
-    match_id = CharField(unique=True)
-    tour = CharField()
-    player_a_name = CharField()
-    player_b_name = CharField()
-    match_date = DateField()
-    tournament = CharField(null=True)
-    round = CharField(null=True)
-    surface = CharField(null=True)
-    best_of = IntegerField(null=True)
-    winner = CharField(null=True)
-    temperature_c = FloatField(null=True)
-    humidity_pct = FloatField(null=True)
-    wind_kmh = FloatField(null=True)
-    weather_fetched_at = DateTimeField(null=True)
-
-
-class ChartedMatchStats(HistoricalBaseModel):
-    class Meta:
-        table_name = "charted_match_stats"
-        indexes = ((("match",), True),)
-
-    match = ForeignKeyField(ChartedMatch, backref="stats", on_delete="CASCADE", unique=True)
-    source = CharField(default="sackmann_match_charting_project")
-    raw_stats_json = TextField()
+# `ChartedMatch`/`ChartedMatchStats` (Match Charting Project import) --
+# REMOVIDOS 2026-08-09, pedido explícito del usuario ("el único modelo
+# válido para matches es MatchHistory, borrar los otros"): su data (7,744
+# partidos + 3,783 stats) ya se había fusionado en `MatchHistory`/
+# `MatchStats` en una migración previa de esta misma sesión, y el script
+# que los poblaba (`import_match_charting_project.py`) ya se había
+# borrado -- cero consumidores vivos al momento de eliminar las clases.
 
 
 class TennisMatchHistory(HistoricalBaseModel):

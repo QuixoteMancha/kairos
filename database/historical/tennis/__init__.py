@@ -46,8 +46,6 @@ from database.historical.tennis.models import (
     TennisAbstractCareerSplit,
     TennisAbstractH2H,
     TennisRecentResult,
-    ChartedMatch,
-    ChartedMatchStats,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from database.historical.tennis.player_sync_status import (
@@ -107,5 +105,4 @@ __all__ = [
     "TennisPlayerBio",
     "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
     "get_pending_priority_requests", "mark_player_synced",
-    "ChartedMatch", "ChartedMatchStats",
 ]
