@@ -238,6 +238,7 @@ def run_validation() -> dict:
             match_id = f"sackmann:{row['id']}"
             fields = {
                 "source": "sackmann",
+                "tour": "ATP",  # TmlDatabaseMatch es ATP-only por diseño
                 "match_date": c["match_date"], "tournament": c.get("tournament"),
                 "round": c.get("round"), "surface": c.get("surface"),
                 "score": row.get("score"),

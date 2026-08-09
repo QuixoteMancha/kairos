@@ -80,9 +80,20 @@ class ProbabilityTick(HistoricalBaseModel):
 class MatchWeather(HistoricalBaseModel):
     class Meta:
         table_name = "tennis_match_weather"
-        indexes = ((("match", "phase"), True),)
+        indexes = ((("match", "phase"), True), (("match_history", "phase"), True))
 
-    match = ForeignKeyField(Match, backref="weather", on_delete="CASCADE")
+    match = ForeignKeyField(Match, backref="weather", on_delete="CASCADE", null=True)
+    # 2026-08-09, pedido explícito del usuario -- "que esté la
+    # referencia a clima del match, ya que tenemos una tabla clima":
+    # mismo patrón que `MatchStats.match_history` (ver ese modelo) --
+    # `match` (arriba) sigue apuntando a `Match` (tracker vivo de
+    # Kalshi, Categoría B) por retrocompatibilidad de las 233 filas
+    # reales ya vinculadas así; `match_history` es el vínculo NUEVO
+    # para partidos con identidad ya cierta en `MatchHistory`. Ambos
+    # nullable -- una fila real usa uno u otro, nunca los 2 a la vez
+    # hoy (podría cambiar si a futuro se resuelve el vínculo Match<->
+    # MatchHistory para los partidos vivos de Kalshi).
+    match_history = DeferredForeignKey("MatchHistory", backref="weather", on_delete="CASCADE", null=True)
     phase = CharField()  # before|during|end
     observed_at = DateTimeField()
     temperature_c = FloatField(null=True)
@@ -251,6 +262,15 @@ class MatchHistory(HistoricalBaseModel):
     # sintético determinístico (`sackmann:{year}:{winner}:{loser}`).
     # `source` distingue el origen real del dato para quien lo consuma.
     source = CharField(default="tennisexplorer")  # "tennisexplorer" | "sackmann"
+    # 2026-08-09, pedido explícito del usuario -- "en MatchHistory está
+    # ATP y WTA, mezclados, verdad?": confirmado, y sin ninguna columna
+    # para distinguirlos (99% de la tabla es `source="sackmann"`, 100%
+    # ATP por diseño de TmlDatabaseMatch -- pero la porción
+    # `source="tennisexplorer"`, la que crece con el worker en vivo, SÍ
+    # mezcla ambos circuitos de verdad, verificado con nombres reales).
+    # Nullable + fail-closed: None si no se pudo determinar con certeza
+    # (nunca se adivina "ATP por default").
+    tour = CharField(null=True)  # "ATP" | "WTA" | None
     match_date = CharField(null=True)
     tournament = CharField(null=True)
     round = CharField(null=True)

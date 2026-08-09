@@ -71,6 +71,7 @@ def migrate_all_tml_rows() -> dict:
             match_id = f"sackmann:{row.id}"
             fields = {
                 "source": "sackmann",
+                "tour": "ATP",  # TmlDatabaseMatch es ATP-only por diseño, ver docstring del módulo
                 "match_date": row.date, "tournament": row.tourney_name,
                 "round": row.round, "surface": row.surface, "score": row.score,
                 "winner_side": "a",

@@ -346,6 +346,20 @@ def init_db_historical() -> None:
     # 66 filas reales, o "sackmann_match_charting_project").
     _add_column_if_missing(db_historical, "tennis_match_stats", "match_history_id", "INTEGER")
     _add_column_if_missing(db_historical, "tennis_match_stats", "source", "VARCHAR(255) DEFAULT 'flashscore'")
+    # 2026-08-09, pedido explícito del usuario -- "en MatchHistory está
+    # ATP y WTA, mezclados... añadir tour" + "que esté la referencia a
+    # clima". `tour` nullable, fail-closed (nunca se adivina). `match_history`
+    # en `tennis_match_weather` mismo patrón que arriba -- OJO: `match_id`
+    # en esa tabla es NOT NULL real en producción (233 filas, verificado
+    # con PRAGMA table_info) y SQLite no permite relajarlo vía ALTER
+    # TABLE -- escribir clima para un partido que SOLO existe en
+    # `MatchHistory` (sin tracking vivo en `Match`) va a fallar hasta
+    # que se haga un rebuild real de esa tabla. Se deja documentado,
+    # NO se fuerza un `Match` falso para evitarlo (sería peor: un
+    # vínculo mentiroso a un partido de Kalshi que no tiene nada que
+    # ver).
+    _add_column_if_missing(db_historical, "match_history", "tour", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "tennis_match_weather", "match_history_id", "INTEGER")
     # 2026-08-02, pedido explícito del usuario: clima para ChartedMatch
     # (Match Charting Project) -- agregado DESPUÉS del import inicial de
     # 7744 filas, requiere ALTER TABLE igual que los casos de arriba.
