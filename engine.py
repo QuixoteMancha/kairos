@@ -3,7 +3,7 @@ from strategies.market_arb import MarketArb
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import build_tennis_markets
 from database.historical.tennis.matchtracking import register_scanned_matches, filter_new_markets
-from outer_apis.sports.tennis.match_history import prefetch_player_histories, set_fetch_allowlist
+from database.historical.tennis.player_sync_status import request_priority_sync, is_player_data_fresh
 from outer_apis.kalshi.markets.football import build_football_markets
 from outer_apis.kalshi.markets.team_sport import build_team_sport_markets
 
@@ -90,29 +90,37 @@ class Kairos:
         # (nunca tumba el scan), idempotente por market_id.
         register_scanned_matches(tennis_markets)
 
-        # Parallel prefetch (thread pool, see outer_apis/tennis_match_history.py):
-        # TennisFModel needs Flashscore recent-form/head-to-head data per
-        # player, y Flashscore has no bulk endpoint (one proxied request
-        # per player). SOLO para jugadores de partidos NUEVOS (ver arriba)
-        # -- no para todos los jugadores de todos los partidos abiertos,
-        # pedido explícito del usuario para acotar el consumo de
-        # BrightData. El resto de los partidos (ya conocidos) usan lo que
-        # ya esté cacheado en DB, sin importar su antigüedad.
+        # 2026-08-09, pedido explícito del usuario: "el engine de scan
+        # sólo debe usar la data de la base... debe comunicarse con el
+        # worker o verificar que la data... fue actualizada" -- YA NO se
+        # hace fetch en vivo de Flashscore acá (reemplaza el prefetch
+        # síncrono anterior). Para jugadores de partidos NUEVOS, se pide
+        # sync prioritario a `workers/tennis_match_history_sync_worker.py`
+        # (vía `TennisPlayerSyncStatus`, la única forma de comunicación
+        # entre estos 2 contenedores -- comparten DB, no hay broker).
         tennis_player_names = [
             name
             for market in new_tennis_markets
             for name in (market.get('player_a_name'), market.get('player_b_name'))
             if name
         ]
-        # Fija la allowlist ANTES de correr LimitArb/TennisFModel más
-        # abajo -- sin esto, los blends de forma reciente/H2H de
-        # TennisFModel igual dispararían un fetch en vivo (secuencial, más
-        # lento pero mismo costo de red) para jugadores de partidos viejos
-        # cuyo caché esté stale, anulando el ahorro de restringir el
-        # prefetch. set_fetch_allowlist(None) al final de este método NO
-        # es necesario -- se reasigna fresca en cada ciclo de scan.
-        set_fetch_allowlist(set(tennis_player_names))
-        prefetch_player_histories(tennis_player_names)
+        for _name in tennis_player_names:
+            request_priority_sync(_name)
+
+        # Filtro de frescura -- SOLO para LimitArb (pedido explícito del
+        # usuario: "el check de la data solo debería usarse para larb y
+        # bet_on_favourite, para el market arb es irrelevante"). LimitArb/
+        # bet_on_favourite son estrategias PRE-MATCH: no hace falta
+        # decidir en este mismo ciclo, el próximo (60s después) ya puede
+        # tener la data sincronizada -- fail-closed, nunca se decide con
+        # data potencialmente vieja/ausente. `tennis_markets` (SIN
+        # filtrar) sigue yendo completo a MarketArb más abajo, que no
+        # depende de historial/ranking de jugador para nada.
+        tennis_markets_fresh_for_prematch = [
+            market for market in tennis_markets
+            if is_player_data_fresh(market.get('player_a_name') or '')
+            and is_player_data_fresh(market.get('player_b_name') or '')
+        ]
 
         football_legs = []
         for series in _FOOTBALL_SERIES:
@@ -131,7 +139,10 @@ class Kairos:
         # LimitArb needs the paired player-A-vs-player-B tennis markets,
         # the Elo-enriched favorite-only football markets, and the paired
         # team-vs-team markets for the fair-price/volatility comparison.
-        larb = LimitArb(api=kalshi_api, markets=markets + tennis_markets + football_markets + team_sport_markets)
+        # 2026-08-09: usa `tennis_markets_fresh_for_prematch` (filtrada),
+        # NO `tennis_markets` -- ver bloque de arriba, pedido explícito
+        # del usuario.
+        larb = LimitArb(api=kalshi_api, markets=markets + tennis_markets_fresh_for_prematch + football_markets + team_sport_markets)
         larb.evaluate_risk_and_return_opportunities()
         larb.execute_order_placement()
 
@@ -144,6 +155,9 @@ class Kairos:
         # crypto15m_markets added 2026-08-02 (pedido explícito del
         # usuario) -- same-ticket only, no cross-ticket pairing exists
         # for these (un solo mercado binario por símbolo).
+        # 2026-08-09: acá SÍ va `tennis_markets` completo, sin filtrar --
+        # MarketArb no depende de historial/ranking de jugador, pedido
+        # explícito del usuario ("para el market arb es irrelevante").
         market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets + crypto15m_markets)
         market_arb.evaluate_risk_and_return_opportunities()
         market_arb.execute_order_placement()
