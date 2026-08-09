@@ -29,6 +29,18 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_tour_by
 _PAUSE_BETWEEN_PLAYERS_S = 1.0
 
 
+def _candidate_slugs(player_name: str) -> list[str]:
+    """2026-08-09, mismo bug real que `process_player` (ver
+    `validate_unresolved_via_live_fetch.py`): `get_tour_by_sex` resuelve
+    el slug con `resolve_player_slug` internamente sin recibir
+    `candidate_slugs`, así que fallaba fail-closed para cualquier
+    jugador sin slug naive-adivinable pese a tener slug real ya
+    cosechado en `TennisExplorerPlayerSlug`."""
+    from scripts.tennis.validate_unresolved_via_live_fetch import _get_candidate_slugs
+
+    return _get_candidate_slugs(player_name)
+
+
 def _players_missing_tour() -> set[str]:
     """Nombres únicos (de cualquier lado, player_a o player_b) que
     aparecen en al menos una fila de `MatchHistory` sin `tour`."""
@@ -54,7 +66,7 @@ def run_backfill(limit_players: int | None = None) -> dict[str, Any]:
 
     resolved = failed = rows_updated = 0
     for i, name in enumerate(players):
-        tour = get_tour_by_sex(name)
+        tour = get_tour_by_sex(name, candidate_slugs=_candidate_slugs(name))
         if tour is None:
             failed += 1
         else:

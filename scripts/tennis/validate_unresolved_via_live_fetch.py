@@ -36,7 +36,7 @@ import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timezone
 
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     resolve_player_slug, _fetch, _parse_year_html, _to_iso_date, get_match_detail,
@@ -52,6 +52,61 @@ def _extra_delay() -> None:
     """Espera aleatoria ADICIONAL al throttle global compartido -- rompe
     el patrón regular de tráfico, pedido explícito del usuario."""
     time.sleep(random.uniform(_EXTRA_DELAY_MIN_S, _EXTRA_DELAY_MAX_S))
+
+
+def _surname_key_from_te_name(name: str) -> str:
+    """2026-08-09, bug real encontrado en producción -- `resolve_player_slug`
+    solo intenta la heurística naive de slug antes de rendirse (nunca
+    recibía `candidate_slugs`, a diferencia de `wta_top200_historical_
+    backfill.py::backfill_player`, que sí usa el catálogo real
+    `TennisExplorerPlayerSlug`). Esto hacía fallar `process_player`
+    entero (con `status: "no_slug"`, 0 resueltos) para cualquier jugador
+    sin slug naive-adivinable (ej. "Budkov Kjaer Nicolai" -> slug real
+    "budkov-kjaer", pero la heurística naive no lo encuentra), pese a
+    que `get_match_detail` SÍ conoce el slug real (lo cosecha del
+    `href` del partido, no de una búsqueda por nombre).
+
+    Convención de nombre COMPLETO de TennisExplorer (a diferencia de
+    `_surname_key_from_full_name` en `wta_top200_historical_backfill.py`,
+    pensada para nombres "Firstname Lastname" del roster oficial WTA):
+    acá el nombre viene "Apellido(s) Nombre" (mismo orden que usa
+    `_surname_key_from_abbrev` para "Apellido I.") -- el apellido es
+    TODO menos el ÚLTIMO token."""
+    tokens = name.strip().split(" ")
+    if len(tokens) < 2:
+        return ""
+    surname = " ".join(tokens[:-1])
+    return surname.replace("-", " ").strip().lower()
+
+
+def _get_candidate_slugs(player_name: str) -> list[str]:
+    """Slugs REALES ya cosechados (de `hrefs` de partidos previamente
+    fetcheados, propios o de `get_match_detail`) para el apellido de
+    `player_name` -- ver `TennisExplorerPlayerSlug`/`resolve_player_slug`."""
+    from database.db import init_db_historical, db_historical
+    from database.historical.tennis import TennisExplorerPlayerSlug
+
+    key = _surname_key_from_te_name(player_name)
+    if not key:
+        return []
+    init_db_historical()
+    with db_historical.connection_context():
+        return [r.slug for r in TennisExplorerPlayerSlug.select().where(TennisExplorerPlayerSlug.surname_key == key)]
+
+
+def _harvest_slug(full_name: str, slug: str | None, now) -> None:
+    """Persiste (apellido normalizado, slug real visto) para que futuras
+    resoluciones de ESTE jugador (u otro candidato con el mismo
+    apellido) no dependan de la heurística naive. Idempotente (índice
+    único (surname_key, slug))."""
+    if not slug:
+        return
+    from database.historical.tennis import TennisExplorerPlayerSlug
+
+    key = _surname_key_from_te_name(full_name)
+    if not key:
+        return
+    TennisExplorerPlayerSlug.get_or_create(surname_key=key, slug=slug, defaults={"discovered_at": now})
 
 
 def find_matching_candidate(parsed_row: dict, parsed_date_iso: str, candidates: list) -> object | None:
@@ -84,7 +139,7 @@ def process_player(player_a_name: str, candidates: list) -> dict:
     if not years_needed:
         return {"player": player_a_name, "resolved": 0, "unresolved": len(candidates)}
 
-    slug = resolve_player_slug(player_a_name)
+    slug = resolve_player_slug(player_a_name, candidate_slugs=_get_candidate_slugs(player_a_name))
     _extra_delay()
     if slug is None:
         return {"player": player_a_name, "resolved": 0, "unresolved": len(candidates), "status": "no_slug"}
@@ -122,6 +177,15 @@ def process_player(player_a_name: str, candidates: list) -> dict:
                     TennisMatchHistoryUnvalidated.delete().where(TennisMatchHistoryUnvalidated.id == match.id).execute()
                     remaining.remove(match)
                     resolved += 1
+                    # 2026-08-09, cosecha del slug real de AMBOS jugadores
+                    # -- `get_match_detail` ya lo conoce con certeza (del
+                    # `href`, no de una búsqueda por nombre), así que la
+                    # próxima vez que cualquiera de los 2 necesite
+                    # resolverse por nombre, `_get_candidate_slugs` ya lo
+                    # va a encontrar sin depender de la heurística naive.
+                    now = datetime.now(timezone.utc)
+                    _harvest_slug(detail["player_a_name"], detail.get("player_a_slug"), now)
+                    _harvest_slug(detail["player_b_name"], detail.get("player_b_slug"), now)
 
     return {"player": player_a_name, "resolved": resolved, "unresolved": len(remaining)}
 

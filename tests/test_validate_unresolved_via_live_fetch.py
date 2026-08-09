@@ -11,8 +11,10 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import MatchHistory, TennisMatchHistoryUnvalidated
-from scripts.tennis.validate_unresolved_via_live_fetch import find_matching_candidate, process_player
+from database.historical.tennis import MatchHistory, TennisExplorerPlayerSlug, TennisMatchHistoryUnvalidated
+from scripts.tennis.validate_unresolved_via_live_fetch import (
+    find_matching_candidate, process_player, _get_candidate_slugs, _surname_key_from_te_name,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -21,10 +23,12 @@ def clean_db():
     with db_historical.connection_context():
         MatchHistory.delete().execute()
         TennisMatchHistoryUnvalidated.delete().execute()
+        TennisExplorerPlayerSlug.delete().execute()
     yield
     with db_historical.connection_context():
         MatchHistory.delete().execute()
         TennisMatchHistoryUnvalidated.delete().execute()
+        TennisExplorerPlayerSlug.delete().execute()
 
 
 def _now():
@@ -120,6 +124,91 @@ def test_process_player_leaves_unresolved_when_slug_not_found():
     assert result["resolved"] == 0
     assert result["unresolved"] == 1
     assert TennisMatchHistoryUnvalidated.select().where(TennisMatchHistoryUnvalidated.id == c.id).count() == 1
+
+
+def test_surname_key_from_te_name_drops_last_token():
+    # 2026-08-09, bug real: convención TE es "Apellido(s) Nombre" (ej.
+    # "Budkov Kjaer Nicolai" -- apellido real "Budkov Kjaer", nombre
+    # "Nicolai"), al REVÉS de la convención del roster WTA oficial.
+    assert _surname_key_from_te_name("Budkov Kjaer Nicolai") == "budkov kjaer"
+    assert _surname_key_from_te_name("Djokovic Novak") == "djokovic"
+    assert _surname_key_from_te_name("SinApellido") == ""
+
+
+def test_get_candidate_slugs_finds_previously_harvested_slug():
+    now = _now()
+    TennisExplorerPlayerSlug.create(surname_key="budkov kjaer", slug="budkov-kjaer", discovered_at=now)
+    assert _get_candidate_slugs("Budkov Kjaer Nicolai") == ["budkov-kjaer"]
+    assert _get_candidate_slugs("Nadie Conocido") == []
+
+
+def test_process_player_uses_harvested_candidate_slugs_when_naive_guess_fails():
+    # 2026-08-09, reproduce el bug real de producción: `resolve_player_
+    # slug` fallaba (naive guess no encuentra "Budkov Kjaer Nicolai")
+    # porque `process_player` nunca le pasaba `candidate_slugs` --
+    # `process_player` abortaba con 0 resueltos pese a existir un slug
+    # REAL ya cosechado en `TennisExplorerPlayerSlug`.
+    TennisExplorerPlayerSlug.create(surname_key="budkov kjaer", slug="budkov-kjaer", discovered_at=_now())
+    c = _unvalidated("Budkov Kjaer Nicolai", "Herbert P.", is_full_name=False, match_date="2024-08-10")
+    fake_page_row = {
+        "date": "10.08.", "opponent": "Herbert P.", "match_id": "999", "tournament": "Toronto WTA",
+        "surface": "hard", "round": "QF", "round_full": "quarterfinal", "score": "6-4, 6-2",
+        "odds_self": None, "odds_opponent": None,
+    }
+    detail = {
+        **_DETAIL, "player_a_name": "Budkov Kjaer Nicolai", "player_a_slug": "budkov-kjaer",
+        "player_b_name": "Herbert Pierre-Hugues", "player_b_slug": "herbert-fa5ad",
+    }
+
+    def _fake_resolve(name, candidate_slugs=()):
+        # simula la heurística naive fallando SIEMPRE -- solo resuelve
+        # si recibe el slug real vía `candidate_slugs` (el fix real).
+        return candidate_slugs[0] if candidate_slugs else None
+
+    with patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.resolve_player_slug", side_effect=_fake_resolve,
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._fetch", return_value="<html>x</html>",
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._parse_year_html", return_value=[fake_page_row],
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.get_match_detail", return_value=detail,
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._extra_delay",
+    ):
+        result = process_player("Budkov Kjaer Nicolai", [c])
+
+    assert result["resolved"] == 1
+    assert result["unresolved"] == 0
+    assert MatchHistory.select().where(MatchHistory.match_id == "999").count() == 1
+
+
+def test_process_player_harvests_real_slugs_of_both_players_on_resolve():
+    c = _unvalidated("Amanda Anisimova", "Sabalenka A.", is_full_name=False, match_date="2024-08-10")
+    fake_page_row = {
+        "date": "10.08.", "opponent": "Sabalenka A.", "match_id": "999", "tournament": "Toronto WTA",
+        "surface": "hard", "round": "QF", "round_full": "quarterfinal", "score": "6-4, 6-2",
+        "odds_self": None, "odds_opponent": None,
+    }
+    with patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.resolve_player_slug", return_value="anisimova",
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._fetch", return_value="<html>x</html>",
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._parse_year_html", return_value=[fake_page_row],
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch.get_match_detail", return_value=_DETAIL,
+    ), patch(
+        "scripts.tennis.validate_unresolved_via_live_fetch._extra_delay",
+    ):
+        process_player("Amanda Anisimova", [c])
+
+    slugs = {r.surname_key: r.slug for r in TennisExplorerPlayerSlug.select()}
+    # `_surname_key_from_te_name` toma todo menos el ÚLTIMO token -- para
+    # "Amanda Anisimova"/"Aryna Sabalenka" (fixture existente en este
+    # archivo, orden "Nombre Apellido") eso da "amanda"/"aryna".
+    assert slugs["amanda"] == "anisimova"
+    assert slugs["aryna"] == "sabalenka"
 
 
 def test_process_player_rejects_match_detail_pointing_elsewhere():

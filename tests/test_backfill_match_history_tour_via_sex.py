@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from database.db import init_db_historical
+from database.historical.tennis import TennisExplorerPlayerSlug
 from database.historical.tennis.models import MatchHistory
-from scripts.tennis.backfill_match_history_tour_via_sex import run_backfill, _players_missing_tour
+from scripts.tennis.backfill_match_history_tour_via_sex import run_backfill, _players_missing_tour, _candidate_slugs
 
 _next_id = iter(range(1, 10_000))
 
@@ -17,6 +18,7 @@ _next_id = iter(range(1, 10_000))
 def setup_function(_fn):
     init_db_historical()
     MatchHistory.delete().execute()
+    TennisExplorerPlayerSlug.delete().execute()
 
 
 def _row(player_a, player_b, tour=None, match_date="2026-01-01"):
@@ -45,7 +47,7 @@ def test_run_backfill_resolves_and_updates_rows():
     _row("Someone X.", "Other Y.")  # mismo jugador "Someone X." en ambos lados de filas distintas
     with patch(
         "scripts.tennis.backfill_match_history_tour_via_sex.get_tour_by_sex",
-        side_effect=lambda name: "WTA" if name == "Sabalenka Aryna" else None,
+        side_effect=lambda name, candidate_slugs=(): "WTA" if name == "Sabalenka Aryna" else None,
     ), patch("scripts.tennis.backfill_match_history_tour_via_sex.time.sleep"):
         result = run_backfill()
     assert result["players_resolved"] >= 1
@@ -82,3 +84,26 @@ def test_run_backfill_skips_already_resolved_rows():
     ) as mock_fn, patch("scripts.tennis.backfill_match_history_tour_via_sex.time.sleep"):
         run_backfill()
     mock_fn.assert_not_called()
+
+
+def test_candidate_slugs_reuses_harvested_catalog():
+    # 2026-08-09, mismo bug real que `process_player`: sin esto,
+    # `get_tour_by_sex` fallaba fail-closed para cualquier jugador sin
+    # slug naive-adivinable pese a tener un slug real ya cosechado.
+    TennisExplorerPlayerSlug.create(
+        surname_key="budkov kjaer", slug="budkov-kjaer", discovered_at=datetime.now(timezone.utc),
+    )
+    assert _candidate_slugs("Budkov Kjaer Nicolai") == ["budkov-kjaer"]
+
+
+def test_run_backfill_passes_harvested_candidate_slugs_to_get_tour_by_sex():
+    TennisExplorerPlayerSlug.create(
+        surname_key="budkov kjaer", slug="budkov-kjaer", discovered_at=datetime.now(timezone.utc),
+    )
+    _row("Budkov Kjaer Nicolai", "Herbert Pierre-Hugues")
+    with patch(
+        "scripts.tennis.backfill_match_history_tour_via_sex.get_tour_by_sex", return_value="ATP",
+    ) as mock_fn, patch("scripts.tennis.backfill_match_history_tour_via_sex.time.sleep"):
+        run_backfill()
+    calls = [c.kwargs.get("candidate_slugs") for c in mock_fn.call_args_list]
+    assert ["budkov-kjaer"] in calls
