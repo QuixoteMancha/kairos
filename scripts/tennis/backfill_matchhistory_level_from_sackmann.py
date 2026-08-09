@@ -1,13 +1,16 @@
 """Backfill UNIFICADO de `MatchHistory.level` (y `tour` como bonus) para
 filas `source="tennisexplorer"` -- 2026-08-09, pedido explícito del
 usuario: "unificarlos y añadir el scraping de todos los datos
-faltantes... el level de wta" (primera versión de este script solo
-cubría ATP vía Sackmann).
+faltantes... el level de wta" + "hay que tener un mapa de torneos, que
+indique el level" (primera versión de este script recalculaba el
+catálogo ATP en memoria en cada corrida; ahora lee de `AtpTournamentLevel`,
+tabla persistente/inspeccionable, mismo patrón que `WtaTournamentLevel`).
 
-Dos catálogos, cero requests de red nuevos (ambos ya existen en la DB):
+Dos catálogos, cero requests de red nuevos (ambos ya existen en la DB
+como tablas propias):
 
-  - ATP: filas `source="sackmann"` de `MatchHistory` (Sackmann/TML-Database
-    trae `level` real por partido: '250'/'500'/'M'/'G'/'F'/'D'/'A').
+  - ATP: `AtpTournamentLevel` (derivada de Sackmann por voto de mayoría,
+    poblada por `atp_tournament_level_backfill.py`).
   - WTA: `WtaTournamentLevel` (API oficial WTA, 17,902 torneos reales,
     poblada por `wta_tournament_level_backfill.py`).
 
@@ -33,7 +36,7 @@ from __future__ import annotations
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis.models import MatchHistory, WtaTournamentLevel
+from database.historical.tennis.models import MatchHistory, WtaTournamentLevel, AtpTournamentLevel
 
 # Mismo criterio de normalización que
 # `wta_favorite_surface_winrate_filter_backtest.py::_normalize_tournament_name`
@@ -54,13 +57,7 @@ def _normalize_tournament_name(raw: str | None) -> str | None:
     return " ".join(kept)
 
 
-# Prioridad real de categoría ATP -- usada para resolver colisiones
-# cuando 2+ torneos reales distintos normalizan a la MISMA clave (ej.
-# "Rome" Masters1000 vs "Rome 4 challenger" -> ambos "ROME"). Orden
-# real aproximado por prestigio/premio.
-_ATP_LEVEL_PRIORITY = {"G": 6, "F": 5, "M": 4, "500": 3, "250": 2, "D": 1, "A": 0}
-
-# Prioridad real de categoría WTA -- mismo criterio, valores tomados de
+# Prioridad real de categoría WTA -- valores tomados de
 # `wta_tournament_level_backfill.py::_LEVEL_PRIORITY` (no se importa
 # para no acoplar el orden de carga de módulos, son constantes fijas).
 _WTA_LEVEL_PRIORITY = {
@@ -74,49 +71,16 @@ _WTA_LEVEL_PRIORITY = {
 
 def build_level_index_from_sackmann() -> dict[tuple[int, str], str]:
     """{(year, normalized_tournament_name): level} -- catálogo ATP,
-    derivado de las filas `source="sackmann"` de `MatchHistory` (ya
-    tienen `level` real embebido, no hace falta ninguna fuente externa
-    nueva)."""
+    leído directo de `AtpTournamentLevel` (tabla persistente, poblada
+    aparte vía `atp_tournament_level_backfill.py` con voto de mayoría
+    real -- ya NO se recalcula acá cada vez). El nombre de la función
+    se mantiene por compatibilidad con el resto del módulo/tests."""
     init_db_historical()
-    # 2026-08-09, bug real encontrado en vivo: "Washington" 2025 tiene
-    # 43 filas reales con level='500' (correcto) pero 1 sola fila con
-    # level='M' (Masters -- error de etiquetado en la fuente TML-Database
-    # misma, no nuestro) -- la resolución por PRIORIDAD MÁXIMA elegía la
-    # única fila mal etiquetada por sobre las 43 correctas (prioridad
-    # ATP: M=4 > 500=3). Prioridad-máxima tiene sentido para colisiones
-    # entre 2 torneos REALES DISTINTOS que normalizan igual (ej. "Rome"
-    # Masters vs "Rome 2 challenger" -- ahí sí preferís el evento
-    # principal); pero para ruido DENTRO del mismo torneo real, hace
-    # falta VOTO POR MAYORÍA (el level más frecuente gana, priority solo
-    # como desempate si hay empate real de conteo)."""
-    from collections import Counter
-
-    counts: dict[tuple[int, str], Counter[str]] = {}
-    rows = (
-        MatchHistory
-        .select(MatchHistory.tournament, MatchHistory.level, MatchHistory.match_date)
-        .where(
-            (MatchHistory.source == "sackmann")
-            & (MatchHistory.tournament.is_null(False))
-            & (MatchHistory.level.is_null(False))
-        )
-    )
-    for r in rows:
-        norm = _normalize_tournament_name(r.tournament)
-        if norm is None or not r.match_date:
-            continue
-        try:
-            year = int(r.match_date[:4])
-        except (ValueError, TypeError):
-            continue
-        key = (year, norm)
-        counts.setdefault(key, Counter())[r.level] += 1
-
     index: dict[tuple[int, str], str] = {}
-    for key, level_counts in counts.items():
-        max_count = max(level_counts.values())
-        tied = [lvl for lvl, n in level_counts.items() if n == max_count]
-        index[key] = max(tied, key=lambda lvl: _ATP_LEVEL_PRIORITY.get(lvl, -1)) if len(tied) > 1 else tied[0]
+    for r in AtpTournamentLevel.select():
+        if r.level is None:
+            continue
+        index[(r.year, r.tournament_name)] = r.level
     return index
 
 

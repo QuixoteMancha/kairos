@@ -25,11 +25,17 @@ primero, más cara; fallback más barato al final):
 
   FASE 3 -- DERIVAR de datos que YA tenemos en la propia DB (sin red,
   la más barata de las 3): `level` (y `tour` como bonus) vía los
-  catálogos ATP (Sackmann) / WTA (`WtaTournamentLevel`) ya presentes.
-  Reusa `backfill_matchhistory_level_from_sackmann.run_backfill`. Es
-  un full-table-scan liviano pero no gratis -- corre cada
-  `_DERIVE_EVERY_N_CYCLES` ciclos, no en cada uno, para no repetir
-  trabajo redundante entre corridas sucesivas donde casi nada cambió.
+  catálogos ATP (`AtpTournamentLevel`, tabla persistente -- 2026-08-09,
+  pedido explícito del usuario: "hay que tener un mapa de torneos, que
+  indique el level") / WTA (`WtaTournamentLevel`) ya presentes. Primero
+  refresca `AtpTournamentLevel` (`atp_tournament_level_backfill.run_backfill`,
+  voto de mayoría real sobre las filas Sackmann más recientes) y RECIÉN
+  DESPUÉS aplica `backfill_matchhistory_level_from_sackmann.run_backfill`
+  (que ahora lee ese catálogo persistente en vez de recalcular en
+  memoria cada vez). Es un full-table-scan liviano pero no gratis --
+  corre cada `_DERIVE_EVERY_N_CYCLES` ciclos, no en cada uno, para no
+  repetir trabajo redundante entre corridas sucesivas donde casi nada
+  cambió.
 
 Cada fase es fail-closed e independiente -- si una fase no encuentra
 nada que resolver, o falla, el loop sigue con la siguiente fase/ciclo
@@ -50,6 +56,7 @@ from typing import Any
 
 from scripts.tennis.validate_unresolved_via_live_fetch import run_once as run_match_detail_phase
 from scripts.tennis.backfill_match_history_tour_via_sex import run_backfill as run_tour_by_sex_phase
+from scripts.tennis.atp_tournament_level_backfill import run_backfill as run_atp_catalog_refresh_phase
 from scripts.tennis.backfill_matchhistory_level_from_sackmann import run_backfill as run_derive_phase
 
 _SLEEP_BETWEEN_CYCLES_S = 30.0
@@ -142,10 +149,15 @@ def run_cycle(cycle_number: int) -> dict[str, Any]:
 
     if cycle_number % _DERIVE_EVERY_N_CYCLES == 0:
         try:
+            result["atp_catalog_refresh_phase"] = run_atp_catalog_refresh_phase()
+        except Exception as e:
+            result["atp_catalog_refresh_phase"] = {"error": str(e)}
+        try:
             result["derive_phase"] = run_derive_phase()
         except Exception as e:
             result["derive_phase"] = {"error": str(e)}
     else:
+        result["atp_catalog_refresh_phase"] = "skipped_this_cycle"
         result["derive_phase"] = "skipped_this_cycle"
 
     return result

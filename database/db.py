@@ -254,7 +254,7 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
         TournamentLocationCache,
-        WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
+        WtaPlayerRankingHistory, WtaTournamentLevel, AtpTournamentLevel, TennisExplorerPlayerSlug,
         MatchHistory, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
     )
     # `TennisMatchStatsSet` (2026-08-09, pedido explícito del usuario --
@@ -301,7 +301,7 @@ def init_db_historical() -> None:
         WtaPlayerRankingHistory,
         # 2026-08-05, pedido explícito del usuario -- categoría real de
         # torneo WTA (250/500/1000/Slam vs ITF/125), tabla nueva.
-        WtaTournamentLevel,
+        WtaTournamentLevel, AtpTournamentLevel,
         # 2026-08-06, pedido explícito del usuario -- cache de slugs
         # reales de TennisExplorer cosechados de hrefs, tabla nueva.
         TennisExplorerPlayerSlug,

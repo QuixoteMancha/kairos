@@ -50,6 +50,8 @@ def test_run_cycle_runs_derive_phase_only_on_scheduled_cycle():
     ), patch(
         "scripts.tennis.tennis_match_history_unified_backfill.run_tour_by_sex_phase", return_value={},
     ), patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_atp_catalog_refresh_phase", return_value={},
+    ), patch(
         "scripts.tennis.tennis_match_history_unified_backfill.run_derive_phase",
         return_value={"rows_resolved": 5},
     ) as mock_derive:
@@ -58,6 +60,27 @@ def test_run_cycle_runs_derive_phase_only_on_scheduled_cycle():
     mock_derive.assert_called_once()  # solo se llamó en el ciclo 20
     assert result_not_scheduled["derive_phase"] == "skipped_this_cycle"
     assert result_scheduled["derive_phase"] == {"rows_resolved": 5}
+
+
+def test_run_cycle_refreshes_atp_catalog_before_deriving_on_scheduled_cycle():
+    # 2026-08-09, pedido explícito del usuario: "hay que tener un mapa
+    # de torneos, que indique el level" -- el catálogo ATP se refresca
+    # (voto de mayoría sobre Sackmann) ANTES de usarlo para derivar.
+    with patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_match_detail_phase", return_value={},
+    ), patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_tour_by_sex_phase", return_value={},
+    ), patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_atp_catalog_refresh_phase",
+        return_value={"inserted": 3},
+    ) as mock_refresh, patch(
+        "scripts.tennis.tennis_match_history_unified_backfill.run_derive_phase", return_value={},
+    ):
+        result_not_scheduled = run_cycle(cycle_number=1)
+        result_scheduled = run_cycle(cycle_number=20)
+    mock_refresh.assert_called_once()
+    assert result_not_scheduled["atp_catalog_refresh_phase"] == "skipped_this_cycle"
+    assert result_scheduled["atp_catalog_refresh_phase"] == {"inserted": 3}
 
 
 def test_run_cycle_one_phase_failing_does_not_block_the_others():

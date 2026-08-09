@@ -615,3 +615,29 @@ class WtaTournamentLevel(HistoricalBaseModel):
     tournament_name = CharField()
     level = CharField(null=True)
     fetched_at = DateTimeField()
+
+
+class AtpTournamentLevel(HistoricalBaseModel):
+    """Catálogo persistente torneo ATP real -> nivel ('250'/'500'/'M'/
+    'G'/'F'/'D'/'A') -- 2026-08-09, pedido explícito del usuario: "hay
+    que tener un mapa de torneos, que indique el level" (mismo patrón
+    que `WtaTournamentLevel`, pero para ATP -- antes se recalculaba en
+    memoria en cada corrida del backfill leyendo `MatchHistory` crudo,
+    sin quedar nunca persistido/inspeccionable como tabla propia).
+
+    Poblado por `scripts/tennis/atp_tournament_level_backfill.py` desde
+    las filas `source="sackmann"` de `MatchHistory` (que ya traen
+    `level` real por partido) -- voto por MAYORÍA real por (año, torneo
+    normalizado), no prioridad máxima (bug real encontrado en vivo:
+    "Washington" 2025 tenía 43 filas reales '500' + 1 fila mal
+    etiquetada 'M' en la fuente TML-Database misma -- prioridad-máxima
+    elegía la fila mala; mayoría real elige correcto)."""
+
+    class Meta:
+        table_name = "atp_tournament_level"
+        indexes = ((("year", "tournament_name"), True),)
+
+    year = IntegerField()
+    tournament_name = CharField()  # normalizado (mayúsculas, sin sufijo tour/nivel, sin dígitos sueltos)
+    level = CharField(null=True)
+    fetched_at = DateTimeField()
