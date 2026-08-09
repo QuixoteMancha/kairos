@@ -36,7 +36,6 @@ import time
 from datetime import date as dt_date, datetime, timezone
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory
 from database.historical.tennis import TennisHistoricalOdds
 from database.historical.tennis import TennisExplorerPlayerSlug
 from database.historical.tennis import MatchHistory, save_match_detail
@@ -118,29 +117,6 @@ def _harvest_opponent_slug(opponent_abbrev: str, opponent_slug: str | None, now:
     )
 
 
-def _derive_result_from_comma_score(score: str) -> str:
-    """"W"/"L" contando sets ganados vs perdidos en un score YA en
-    convención coma (self primero por set) -- extraído 2026-08-06 para
-    reusar entre el alta de una fila nueva y la reparación de una fila
-    existente con `score` vacío (ver `backfill_player`, pedido
-    explícito del usuario: "junta todos los matches sin score y sin
-    cuotas y arma un script que haga fill de ambos campos")."""
-    sets_won = sets_lost = 0
-    for set_str in score.split(","):
-        set_str = set_str.strip()
-        if "-" not in set_str:
-            continue
-        a, b = set_str.split("-")[:2]
-        try:
-            a, b = int(a), int(b)
-        except ValueError:
-            continue
-        if a > b:
-            sets_won += 1
-        elif b > a:
-            sets_lost += 1
-    return "W" if sets_won > sets_lost else "L"
-
 
 def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
     """`years`: default `_YEARS` (2016-2026, backfill histórico
@@ -150,7 +126,7 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
     cada vez que aparece un partido nuevo en Kalshi."""
     slug = resolve_player_slug(player_name, candidate_slugs=_get_candidate_slugs(player_name))
     if slug is None:
-        return {"player": player_name, "status": "skipped_no_slug", "matches_inserted": 0, "odds_inserted": 0}
+        return {"player": player_name, "status": "skipped_no_slug", "odds_inserted": 0}
 
     year_list = years if years is not None else _YEARS
     matches_by_year: list[tuple[int, dict]] = []
@@ -163,7 +139,7 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
             matches_by_year.append((year, m))
 
     now = datetime.now(timezone.utc)
-    inserted_matches = inserted_odds = repaired_matches = 0
+    inserted_odds = 0
     with db_historical.connection_context():
         for _year, m in matches_by_year:
             _harvest_opponent_slug(m["opponent"], m.get("opponent_slug"), now)
@@ -171,48 +147,6 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
             iso_date = _to_iso_date(m["date"], year)
             if iso_date is None:
                 continue
-
-            existing_row = TennisMatchHistory.get_or_none(
-                (TennisMatchHistory.player_name == player_name)
-                & (TennisMatchHistory.opponent_name == m["opponent"])
-                & (TennisMatchHistory.match_date == iso_date)
-            )
-            if existing_row is None:
-                result = _derive_result_from_comma_score(m["score"])
-                TennisMatchHistory.create(
-                    player_name=player_name, opponent_name=m["opponent"], match_date=iso_date,
-                    result=result, score=m["score"], source="tennisexplorer",
-                    tournament=m["tournament"], round=m["round"], surface=m["surface"],
-                    fetched_at=now,
-                )
-                inserted_matches += 1
-            else:
-                repaired_this_row = False
-                if existing_row.tournament is None and m["tournament"] is not None:
-                    # 2026-08-04, pedido explícito -- REPARAR filas ya
-                    # existentes que quedaron con tournament=NULL por el
-                    # bug real de `type-women2` hardcodeado (ver
-                    # tennisexplorer_player_scraper.py), ahora corregido.
-                    # Sin esto, re-correr el backfill saltearía estas filas
-                    # para siempre (el chequeo de existencia de arriba las
-                    # trata como "ya migradas") sin repararlas nunca.
-                    existing_row.tournament = m["tournament"]
-                    existing_row.round = m["round"]
-                    existing_row.surface = m["surface"]
-                    repaired_this_row = True
-                if not existing_row.score and m["score"]:
-                    # 2026-08-06, pedido explícito del usuario: "junta
-                    # todos los matches sin score y sin cuotas y arma un
-                    # script que haga fill de ambos campos" -- filas que
-                    # quedaron con `score` vacío en un fetch previo (fallo
-                    # puntual de esa corrida, no de la fuente -- re-fetch
-                    # real puede traer el dato esta vez).
-                    existing_row.score = m["score"]
-                    existing_row.result = _derive_result_from_comma_score(m["score"])
-                    repaired_this_row = True
-                if repaired_this_row:
-                    existing_row.save()
-                    repaired_matches += 1
 
             if m["odds_self"] is not None or m["odds_opponent"] is not None:
                 if not TennisHistoricalOdds.select().where(
@@ -261,8 +195,7 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
     return {
         "player": player_name, "status": "ok", "slug": slug,
         "matches_found": len(matches_by_year),
-        "matches_inserted": inserted_matches, "odds_inserted": inserted_odds,
-        "matches_repaired": repaired_matches,
+        "odds_inserted": inserted_odds,
         "match_details_created": details_created, "match_details_updated": details_updated,
         "match_details_unchanged": details_unchanged, "match_details_error": details_error,
     }
@@ -312,8 +245,7 @@ def _run_backfill_for_names(names: list[str], tag: str, max_workers: int = 1) ->
             done += 1
             print(
                 f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
-                f"-> {r['status']}, matches+{r.get('matches_inserted', 0)}, "
-                f"repaired+{r.get('matches_repaired', 0)}, "
+                f"-> {r['status']}, match_history+{r.get('match_details_created', 0)}, "
                 f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
                 flush=True,
             )
@@ -328,21 +260,18 @@ def _run_backfill_for_names(names: list[str], tag: str, max_workers: int = 1) ->
                 done += 1
                 print(
                     f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
-                    f"-> {r['status']}, matches+{r.get('matches_inserted', 0)}, "
-                    f"repaired+{r.get('matches_repaired', 0)}, "
+                    f"-> {r['status']}, match_history+{r.get('match_details_created', 0)}, "
                     f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
                     flush=True,
                 )
 
     ok = sum(1 for r in summary if r["status"] == "ok")
     skipped = sum(1 for r in summary if r["status"] != "ok")
-    total_matches = sum(r.get("matches_inserted", 0) for r in summary)
-    total_repaired = sum(r.get("matches_repaired", 0) for r in summary)
+    total_match_history = sum(r.get("match_details_created", 0) for r in summary)
     total_odds = sum(r.get("odds_inserted", 0) for r in summary)
     print(
         f"[{tag}_backfill] TERMINADO: {ok} ok, {skipped} sin slug/skip, "
-        f"{total_matches} partidos nuevos, {total_repaired} partidos reparados "
-        f"(tournament=NULL -> real), {total_odds} cuotas nuevas",
+        f"{total_match_history} partidos nuevos en MatchHistory, {total_odds} cuotas nuevas",
         flush=True,
     )
     return summary
@@ -395,24 +324,27 @@ def run_backfill_from_atp_roster(max_workers: int = 1) -> list[dict]:
 
     A diferencia de WTA (que necesitó `WtaPlayerRankingHistory` para el
     roster porque TML-Database no tiene equivalente ATP), acá el
-    roster real sale directo de TML-Database: TODOS los nombres
-    (ganador+perdedor) de partidos 2016+ nivel 250+ (`TOUR_LEVELS_250_PLUS`)
-    -- exactamente el universo que puede llegar a aparecer en el pool
-    evaluable de `favorite_surface_winrate_filter_backtest.py`. Medido
-    en vivo: 739 jugadores reales (vs 7,536 del historial completo
-    1968-2026 sin filtrar) -- acotar al rango/nivel relevante evita un
-    backfill de +50h innecesario sobre jugadores que nunca calificarían
-    para el pool filtrado igual."""
-    from database.historical.tennis import TmlDatabaseMatch
-    from outer_apis.scrapers.tennis.tml_database_scraper import TOUR_LEVELS_250_PLUS
+    roster real salía directo de TML-Database (TODOS los nombres de
+    partidos 2016+ nivel 250+).
+
+    2026-08-09, pedido explícito del usuario ("modifica las
+    importaciones para que sólo se utilice la tabla de matchhistory"):
+    `TmlDatabaseMatch` ya no existe (migrada completa a `MatchHistory`,
+    ver `database/historical/tennis/models.py::MatchHistory.tour`) --
+    el roster ahora sale de `MatchHistory` filtrando `tour="ATP"`.
+    CAMBIO DE COMPORTAMIENTO real y documentado: `MatchHistory` no
+    conserva `level`/año de torneo por fila (a diferencia de
+    `TmlDatabaseMatch`), así que este roster ya NO se acota a "2016+,
+    250+" -- es el universo COMPLETO de jugadores ATP conocidos
+    (más amplio que antes, nunca más angosto -- prioriza correctitud
+    sobre la optimización de acotar el volumen de la corrida)."""
+    from database.historical.tennis import MatchHistory
 
     init_db_historical()
     names: set[str] = set()
-    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.winner_name, TmlDatabaseMatch.loser_name).where(
-        (TmlDatabaseMatch.date >= "2016-01-01") & (TmlDatabaseMatch.level.in_(list(TOUR_LEVELS_250_PLUS)))
-    ):
-        names.add(r.winner_name)
-        names.add(r.loser_name)
+    for r in MatchHistory.select(MatchHistory.player_a_name, MatchHistory.player_b_name).where(MatchHistory.tour == "ATP"):
+        names.add(r.player_a_name)
+        names.add(r.player_b_name)
     return _run_backfill_for_names(sorted(names), tag="atp_full_roster", max_workers=max_workers)
 
 
@@ -430,67 +362,30 @@ def run_backfill_for_missing_odds_opponents(max_workers: int = 1) -> list[dict]:
     scrapeada en TennisExplorer (solo aparece como oponente abreviado
     en la página de alguien más, nunca como "self").
 
-    Esta función identifica exactamente esos rivales (mismo criterio
-    para ATP y WTA, ambos comparten `TennisMatchHistory`): para cada
-    fila SIN fila hermana en `TennisHistoricalOdds`, resuelve el nombre
-    abreviado del oponente contra el universo MÁS AMPLIO posible
-    (TML-Database + `WtaPlayerRankingHistory` + `TennisMatchHistory`
-    ya conocidos) y, si resuelve a alguien que TODAVÍA no tiene su
-    propia página backfilleada, lo agrega a la lista -- backfillearlo
-    puede revelar el mismo partido (con cuota) desde SU perspectiva.
-
-    Mismo throttle ya vigente (`_PAUSE_BETWEEN_REQUESTS_S`=1.5s entre
-    años, `_PAUSE_BETWEEN_PLAYERS_S`=3s entre jugador/a) -- sin cambios,
-    ya es conservador (739 jugadores ATP corridos de un tirón sin
-    incidentes en la sesión anterior)."""
-    from database.historical.tennis import TennisHistoricalOdds, WtaPlayerRankingHistory
-    from database.historical.tennis import TmlDatabaseMatch
+    2026-08-09, pedido explícito del usuario ("modifica las
+    importaciones para que sólo se utilice la tabla de matchhistory"):
+    `TennisMatchHistory` ya no existe -- SIMPLIFICADO respecto a la
+    versión original: como `MatchHistory` siempre tiene nombre completo
+    real en AMBOS lados (nunca abreviado, a diferencia de la vieja
+    `TennisMatchHistory`), ya no hace falta ninguna resolución de
+    abreviación por apellido+inicial (la fuente real de los bugs de
+    misattribution de esta sesión) -- se identifica directo: cualquier
+    jugador/a de `MatchHistory` que TODAVÍA no tenga su propia página
+    backfilleada (nunca aparece como `player_name` en
+    `TennisHistoricalOdds`, que sigue existiendo) es candidato."""
+    from database.historical.tennis import TennisHistoricalOdds, MatchHistory
 
     init_db_historical()
 
-    # universo AMPLIO de nombres completos reales para resolver
-    # abreviaciones -- ATP (TML-Database) + WTA (ranking oficial) +
-    # cualquier jugador/a ya conocido/a como "self".
-    full_names: set[str] = set()
-    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.winner_name).distinct():
-        full_names.add(r.winner_name)
-    for r in TmlDatabaseMatch.select(TmlDatabaseMatch.loser_name).distinct():
-        full_names.add(r.loser_name)
-    for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct():
-        full_names.add(r.player_name)
-    already_self = {r.player_name for r in TennisMatchHistory.select(TennisMatchHistory.player_name).distinct()}
-    full_names |= already_self
-
-    seen_keys: dict[str, set[str]] = {}
-    for full_name in full_names:
-        tokens = full_name.strip().split(" ")
-        if len(tokens) < 2:
-            continue
-        first, last = tokens[0], " ".join(tokens[1:])
-        key = f"{last.replace('-', ' ').strip().lower()} {first[0].lower()}"
-        seen_keys.setdefault(key, set()).add(full_name)
-    abbrev_index = {k: (next(iter(v)) if len(v) == 1 else None) for k, v in seen_keys.items()}
-
-    def _resolve(abbrev: str) -> str | None:
-        parts = abbrev.strip().rstrip(".").rsplit(" ", 1)
-        if len(parts) != 2:
-            return None
-        last, initial = parts
-        return abbrev_index.get(f"{last.replace('-', ' ').strip().lower()} {initial.lower()}")
-
-    odds_row_keys = {
-        (o.player_name, o.opponent_name, o.match_date)
-        for o in TennisHistoricalOdds.select(TennisHistoricalOdds.player_name, TennisHistoricalOdds.opponent_name, TennisHistoricalOdds.match_date)
+    already_self = {
+        o.player_name for o in TennisHistoricalOdds.select(TennisHistoricalOdds.player_name).distinct()
     }
 
     missing_opponents: set[str] = set()
-    for r in TennisMatchHistory.select(TennisMatchHistory.player_name, TennisMatchHistory.opponent_name, TennisMatchHistory.match_date):
-        if (r.player_name, r.opponent_name, r.match_date) in odds_row_keys:
-            continue
-        full_opp = _resolve(r.opponent_name)
-        if full_opp is None or full_opp in already_self:
-            continue
-        missing_opponents.add(full_opp)
+    for r in MatchHistory.select(MatchHistory.player_a_name, MatchHistory.player_b_name):
+        for name in (r.player_a_name, r.player_b_name):
+            if name not in already_self:
+                missing_opponents.add(name)
 
     return _run_backfill_for_names(sorted(missing_opponents), tag="missing_odds_opponents", max_workers=max_workers)
 

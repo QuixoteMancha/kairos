@@ -63,10 +63,6 @@ from database.historical.tennis.player_sync_status import (
 # deportes, que hoy no existen). Este paquete reexporta todo bajo los
 # nombres históricos (`TennisScannedMatch`, etc.) para no romper el
 # código existente.
-from database.historical.tennis.chartedmatchimport import (
-    find_overlapping_scanned_match, save_charted_match, save_charted_match_stats,
-    import_or_merge_match,
-)
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled, backfill_missing_tournaments,
@@ -112,6 +108,4 @@ __all__ = [
     "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
     "get_pending_priority_requests", "mark_player_synced",
     "ChartedMatch", "ChartedMatchStats",
-    "find_overlapping_scanned_match", "save_charted_match", "save_charted_match_stats",
-    "import_or_merge_match",
 ]

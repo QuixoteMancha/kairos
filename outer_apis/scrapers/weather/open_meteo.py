@@ -69,3 +69,59 @@ def get_weather_at(lat: float, lon: float, when: datetime) -> dict[str, Any] | N
         return None
 
     return {"temperature_c": temp, "humidity_pct": humidity, "wind_kmh": wind}
+
+
+# --- Rate limiter compartido para backfills masivos (2026-08-04,
+# hallazgo real: free tier de Open-Meteo es 600/min, 5000/hora,
+# 10000/día -- un jitter simple por request no alcanza para respetar
+# los 3 límites a la vez) -- 2026-08-09, movido acá desde
+# `outer_apis/sports/tennis/match_weather.py` porque también lo usa
+# `outer_apis/sports/baseball/match_weather.py`; no es exclusivo de
+# ningún deporte, es un límite real de la API de clima.
+
+import random
+import time
+from collections import deque
+
+_MIN_INTERVAL_S = 0.15  # ~400 req/min, con margen bajo 600/min documentado
+_MAX_INTERVAL_S = 0.9   # jitter (no periódico) en vez de pausa fija
+_MAX_REQUESTS_PER_HOUR = 4000   # margen real bajo 5000/hora documentado
+_MAX_REQUESTS_PER_DAY = 8000    # margen real bajo 10000/día documentado
+_HOUR_S = 3600.0
+_DAY_S = 86400.0
+
+# timestamps (epoch, float) de requests reales ya hechas -- ventana
+# rodante en memoria del proceso (no persiste entre reinicios, pero es
+# lo que corresponde para un backfill de una sola corrida larga).
+_request_timestamps: deque[float] = deque()
+
+
+class DailyBudgetExhausted(Exception):
+    """Se agotó el cupo diario real de Open-Meteo (con margen) durante
+    esta corrida -- el caller debe detener el backfill en vez de seguir
+    pegándole a la API y arriesgarse a un 429 real."""
+
+
+def throttle_sleep() -> None:
+    """Jitter base (piso mínimo real de cortesía) + limitador de
+    ventana rodante que frena adicionalmente si se acerca al límite
+    real por HORA o por DÍA de Open-Meteo."""
+    now = time.monotonic()
+    while _request_timestamps and now - _request_timestamps[0] > _DAY_S:
+        _request_timestamps.popleft()
+
+    in_last_day = len(_request_timestamps)
+    if in_last_day >= _MAX_REQUESTS_PER_DAY:
+        raise DailyBudgetExhausted(
+            f"Cupo diario de Open-Meteo agotado (con margen: {_MAX_REQUESTS_PER_DAY} "
+            "de las últimas 24h) -- deteniendo el backfill para esta corrida."
+        )
+
+    in_last_hour = sum(1 for t in _request_timestamps if now - t <= _HOUR_S)
+    if in_last_hour >= _MAX_REQUESTS_PER_HOUR:
+        oldest_in_hour = next(t for t in _request_timestamps if now - t <= _HOUR_S)
+        wait_s = _HOUR_S - (now - oldest_in_hour) + 1.0
+        time.sleep(max(wait_s, 0.0))
+
+    time.sleep(random.uniform(_MIN_INTERVAL_S, _MAX_INTERVAL_S))
+    _request_timestamps.append(time.monotonic())

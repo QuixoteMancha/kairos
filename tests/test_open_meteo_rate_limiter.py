@@ -2,7 +2,11 @@
 (2026-08-04, pedido explícito del usuario: "¿los backfills de clima
 respetan los rate limits de Open-Meteo?" -- el jitter por request solo
 respetaba el límite por MINUTO, no el de HORA/DÍA, ver docstring de
-`_open_meteo_throttle_sleep`)."""
+`throttle_sleep`).
+
+2026-08-09: movido de `outer_apis.sports.tennis.match_weather` a
+`outer_apis.scrapers.weather.open_meteo` -- no es exclusivo de tenis,
+también lo usa `outer_apis.sports.baseball.match_weather`."""
 
 from __future__ import annotations
 
@@ -10,18 +14,18 @@ from unittest.mock import patch
 
 import pytest
 
-from outer_apis.sports.tennis import match_weather
-from outer_apis.sports.tennis.match_weather import (
-    _open_meteo_throttle_sleep, DailyBudgetExhausted,
+from outer_apis.scrapers.weather import open_meteo
+from outer_apis.scrapers.weather.open_meteo import (
+    throttle_sleep, DailyBudgetExhausted,
     _MAX_REQUESTS_PER_HOUR, _MAX_REQUESTS_PER_DAY,
 )
 
 
 @pytest.fixture(autouse=True)
 def clean_request_timestamps():
-    match_weather._request_timestamps.clear()
+    open_meteo._request_timestamps.clear()
     yield
-    match_weather._request_timestamps.clear()
+    open_meteo._request_timestamps.clear()
 
 
 def test_limits_are_within_documented_open_meteo_caps():
@@ -43,11 +47,11 @@ def test_jitter_alone_does_not_exceed_hourly_limit_on_average():
 
 def test_throttle_raises_when_daily_budget_exhausted():
     now = 1_000_000.0
-    match_weather._request_timestamps.extend(now - i for i in reversed(range(_MAX_REQUESTS_PER_DAY)))
-    with patch("outer_apis.sports.tennis.match_weather.time.monotonic", return_value=now), \
-         patch("outer_apis.sports.tennis.match_weather.time.sleep"):
+    open_meteo._request_timestamps.extend(now - i for i in reversed(range(_MAX_REQUESTS_PER_DAY)))
+    with patch("outer_apis.scrapers.weather.open_meteo.time.monotonic", return_value=now), \
+         patch("outer_apis.scrapers.weather.open_meteo.time.sleep"):
         with pytest.raises(DailyBudgetExhausted):
-            _open_meteo_throttle_sleep()
+            throttle_sleep()
 
 
 def test_throttle_sleeps_extra_when_hourly_budget_reached():
@@ -56,28 +60,28 @@ def test_throttle_sleeps_extra_when_hourly_budget_reached():
     # _MAX_REQUESTS_PER_HOUR dentro de la ventana de 3600s), en orden
     # cronológico real (más vieja primero, mismo invariante que
     # `.append()` en producción)
-    match_weather._request_timestamps.extend(
+    open_meteo._request_timestamps.extend(
         now - i * 0.5 for i in reversed(range(_MAX_REQUESTS_PER_HOUR))
     )
     sleep_calls = []
-    with patch("outer_apis.sports.tennis.match_weather.time.monotonic", return_value=now), \
-         patch("outer_apis.sports.tennis.match_weather.time.sleep", side_effect=lambda s: sleep_calls.append(s)):
-        _open_meteo_throttle_sleep()
+    with patch("outer_apis.scrapers.weather.open_meteo.time.monotonic", return_value=now), \
+         patch("outer_apis.scrapers.weather.open_meteo.time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+        throttle_sleep()
     # el primer sleep (extra por límite horario) debe ser sustancialmente mayor al jitter máximo (0.9s)
     assert sleep_calls[0] > 0.9
 
 
 def test_throttle_records_timestamp_after_successful_call():
-    with patch("outer_apis.sports.tennis.match_weather.time.sleep"):
-        _open_meteo_throttle_sleep()
-    assert len(match_weather._request_timestamps) == 1
+    with patch("outer_apis.scrapers.weather.open_meteo.time.sleep"):
+        throttle_sleep()
+    assert len(open_meteo._request_timestamps) == 1
 
 
 def test_throttle_purges_timestamps_older_than_a_day():
     now = 1_000_000.0
-    match_weather._request_timestamps.append(now - 86400.0 - 10.0)  # más viejo que 24h
-    with patch("outer_apis.sports.tennis.match_weather.time.monotonic", return_value=now), \
-         patch("outer_apis.sports.tennis.match_weather.time.sleep"):
-        _open_meteo_throttle_sleep()
+    open_meteo._request_timestamps.append(now - 86400.0 - 10.0)  # más viejo que 24h
+    with patch("outer_apis.scrapers.weather.open_meteo.time.monotonic", return_value=now), \
+         patch("outer_apis.scrapers.weather.open_meteo.time.sleep"):
+        throttle_sleep()
     # la vieja se purgó, solo queda la nueva registrada por esta llamada
-    assert len(match_weather._request_timestamps) == 1
+    assert len(open_meteo._request_timestamps) == 1

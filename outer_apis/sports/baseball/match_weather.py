@@ -15,10 +15,10 @@ local -> estadio real), fail-closed si el equipo no está en la tabla.
 
 Clima: `outer_apis/scrapers/weather/open_meteo.py` (mismo cliente real
 que tenis, gratis, sin clave) + mismo throttle real de ventana rodante
-(`outer_apis.sports.tennis.match_weather._open_meteo_throttle_sleep` --
-reusado tal cual, es el mismo servidor Open-Meteo con el mismo
-presupuesto real compartido entre todos los deportes, no un límite
-separado por deporte)."""
+(`outer_apis.scrapers.weather.open_meteo.throttle_sleep` -- 2026-08-09,
+movido de `tennis/match_weather.py` a este módulo compartido, es el
+mismo servidor Open-Meteo con el mismo presupuesto real compartido
+entre todos los deportes, no un límite separado por deporte)."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from typing import Any
 from database.db import init_db_historical
 from outer_apis.scrapers.baseball.team_location import get_team_location
 from outer_apis.scrapers.weather import open_meteo
-from outer_apis.sports.tennis.match_weather import _open_meteo_throttle_sleep, DailyBudgetExhausted
+from outer_apis.scrapers.weather.open_meteo import throttle_sleep, DailyBudgetExhausted
 
 
 def _now():
@@ -98,7 +98,7 @@ def populate_weather_for_all_mlb_games() -> dict[str, Any]:
         else:
             processed += 1
             try:
-                _open_meteo_throttle_sleep()
+                throttle_sleep()
             except DailyBudgetExhausted:
                 budget_exhausted = True
                 break

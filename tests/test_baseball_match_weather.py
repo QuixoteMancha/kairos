@@ -98,7 +98,7 @@ def test_populate_all_mlb_games_aggregate():
     with patch(
         "outer_apis.sports.baseball.match_weather.open_meteo.get_weather_at",
         return_value={"temperature_c": 20.0, "humidity_pct": 50.0, "wind_kmh": 5.0},
-    ), patch("outer_apis.sports.baseball.match_weather._open_meteo_throttle_sleep"):
+    ), patch("outer_apis.sports.baseball.match_weather.throttle_sleep"):
         result = populate_weather_for_all_mlb_games()
     assert result["total"] == 2
     assert result["processed"] == 1

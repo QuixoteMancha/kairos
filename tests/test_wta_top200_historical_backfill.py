@@ -1,7 +1,16 @@
 """Tests del backfill masivo top-200 WTA (2026-08-03, pedido explícito
 del usuario). Mockea red (rankings + fetch de TennisExplorer) y usa la
 DB histórica real (sqlite en memoria/test) -- nunca golpea la red en
-tests."""
+tests.
+
+2026-08-09, pedido explícito del usuario ("modifica las importaciones
+para que sólo se utilice la tabla de matchhistory"): `TennisMatchHistory`
+fue borrada -- `backfill_player` ya NO escribe ahí, solo escribe
+`TennisHistoricalOdds` (sigue existiendo) y cosecha `MatchHistory` (vía
+`get_match_detail`/`save_match_detail`, ya cubierto por
+`test_save_match_detail.py`). Los tests que verificaban inserción/
+reparación de filas de `TennisMatchHistory` se removieron -- ya no
+aplica, ese comportamiento no existe más."""
 
 from __future__ import annotations
 
@@ -10,7 +19,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisMatchHistory, TennisHistoricalOdds
+from database.historical.tennis import TennisHistoricalOdds, MatchHistory
 from scripts.tennis.wta_top200_historical_backfill import (
     backfill_player, run_backfill, run_backfill_from_wta_roster, _to_iso_date, _run_backfill_for_names,
 )
@@ -21,11 +30,9 @@ from database.historical.tennis import WtaPlayerRankingHistory
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisMatchHistory.delete().where(TennisMatchHistory.source == "tennisexplorer").execute()
         TennisHistoricalOdds.delete().execute()
     yield
     with db_historical.connection_context():
-        TennisMatchHistory.delete().where(TennisMatchHistory.source == "tennisexplorer").execute()
         TennisHistoricalOdds.delete().execute()
 
 
@@ -47,14 +54,14 @@ def test_backfill_player_skips_when_no_slug():
     ):
         result = backfill_player("Nonexistent Player")
     assert result["status"] == "skipped_no_slug"
-    assert result["matches_inserted"] == 0
+    assert result["odds_inserted"] == 0
 
 
-def test_backfill_player_inserts_match_and_odds():
+def test_backfill_player_inserts_odds():
     fake_match = {
         "date": "03.08.", "tournament": "Washington", "surface": "hard",
         "opponent": "Pegula J.", "round": "F", "round_full": "final",
-        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": None,
     }
 
     def fake_fetch(slug, year=None):
@@ -77,17 +84,9 @@ def test_backfill_player_inserts_match_and_odds():
         result = backfill_player("Test Player")
 
     assert result["status"] == "ok"
-    assert result["matches_inserted"] == 1
     assert result["odds_inserted"] == 1
 
     with db_historical.connection_context():
-        assert TennisMatchHistory.select().where(TennisMatchHistory.player_name == "Test Player").count() == 1
-        row = TennisMatchHistory.get(TennisMatchHistory.player_name == "Test Player")
-        assert row.result == "W"
-        assert row.tournament == "Washington"
-        assert row.round == "F"
-        assert row.surface == "hard"
-
         odds_row = TennisHistoricalOdds.get(TennisHistoricalOdds.player_name == "Test Player")
         assert odds_row.odds_self == 2.36
         assert odds_row.odds_opponent == 1.58
@@ -97,17 +96,13 @@ def test_backfill_player_idempotent_on_second_run():
     fake_match = {
         "date": "03.08.", "tournament": "Washington", "surface": "hard",
         "opponent": "Pegula J.", "round": "F", "round_full": "final",
-        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": None,
     }
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill._fetch", return_value="<html>x</html>",
     ), patch(
-        # mismo partido reportado en LOS 11 años pedidos -> misma fecha real
-        # calculada distinta por año (2016-08-03 ... 2026-08-03) NO
-        # colapsa entre sí -- lo que sí debe colapsar es correr la
-        # función 2 VECES con el mismo input (esto es lo que se testea).
         "scripts.tennis.wta_top200_historical_backfill._parse_year_html", return_value=[fake_match],
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill.time.sleep",
@@ -115,68 +110,19 @@ def test_backfill_player_idempotent_on_second_run():
         first = backfill_player("Test Player")
         second = backfill_player("Test Player")
 
-    assert second["matches_inserted"] == 0
+    # mismo partido reportado en LOS 11 años pedidos -> "03.08." combinado
+    # con cada año da 11 fechas ISO reales DISTINTAS (2016-08-03 ...
+    # 2026-08-03) -- no colapsan entre sí, cada una es una cuota real
+    # nueva. Lo que sí debe colapsar es correr la función 2 VECES.
+    assert first["odds_inserted"] == 11
     assert second["odds_inserted"] == 0
-    with db_historical.connection_context():
-        assert TennisMatchHistory.select().where(
-            TennisMatchHistory.player_name == "Test Player"
-        ).count() == first["matches_inserted"]
-
-
-def test_backfill_player_repairs_existing_row_with_null_tournament():
-    """2026-08-04, pedido explícito del usuario -- reparar filas que
-    quedaron con tournament=NULL por el bug real de `type-women2`
-    hardcodeado en el scraper (ya corregido). Antes de este fix, el
-    chequeo de existencia trataba una fila con tournament=NULL como
-    "ya migrada" y la saltaba para siempre, sin repararla nunca."""
-    with db_historical.connection_context():
-        from datetime import datetime, timezone
-        TennisMatchHistory.create(
-            player_name="Test Player", opponent_name="Pegula J.", match_date="2026-08-03",
-            result="W", score="4-6, 6-4, 6-0", source="tennisexplorer",
-            tournament=None, round=None, surface=None,  # simula el bug real ya guardado
-            fetched_at=datetime.now(timezone.utc),
-        )
-
-    fake_match = {
-        "date": "03.08.", "tournament": "Washington", "surface": "hard",
-        "opponent": "Pegula J.", "round": "F", "round_full": "final",
-        "score": "4-6, 6-4, 6-0", "odds_self": None, "odds_opponent": None,
-    }
-
-    def fake_fetch(slug, year=None):
-        return f"year={year}"
-
-    def fake_parse(html, name):
-        # solo el año 2026 trae este partido -- coincide con la fila
-        # pre-existente (2026-08-03); los otros 10 años vienen vacíos.
-        return [fake_match] if html == "year=2026" else []
-
-    with patch(
-        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
-    ):
-        result = backfill_player("Test Player")
-
-    assert result["matches_inserted"] == 0  # la fila YA existía, no se duplica
-    assert result["matches_repaired"] == 1
-    with db_historical.connection_context():
-        row = TennisMatchHistory.get(TennisMatchHistory.player_name == "Test Player")
-        assert row.tournament == "Washington"
-        assert row.round == "F"
-        assert row.surface == "hard"
 
 
 def test_backfill_player_skips_match_without_valid_date():
     fake_match = {
         "date": "garbage", "tournament": "X", "surface": "hard",
         "opponent": "Y", "round": "F", "round_full": "final",
-        "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
+        "score": "6-4, 6-3", "odds_self": 1.5, "odds_opponent": 2.5, "match_id": None,
     }
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
@@ -188,14 +134,14 @@ def test_backfill_player_skips_match_without_valid_date():
         "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
         result = backfill_player("Test Player")
-    assert result["matches_inserted"] == 0
+    assert result["odds_inserted"] == 0
 
 
 def test_backfill_player_no_odds_row_when_both_odds_none():
     fake_match = {
         "date": "03.08.", "tournament": "X", "surface": "hard",
         "opponent": "Y", "round": "F", "round_full": "final",
-        "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None,
+        "score": "6-4, 6-3", "odds_self": None, "odds_opponent": None, "match_id": None,
     }
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
@@ -219,7 +165,7 @@ def test_run_backfill_paces_between_players_and_summarizes():
         "scripts.tennis.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 1, "odds_inserted": 1},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 1},
     ) as mock_bp, patch(
         "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ) as mock_sleep:
@@ -236,7 +182,7 @@ def test_run_backfill_uses_requested_tour_for_rankings():
         "scripts.tennis.wta_top200_historical_backfill.get_top_rankings", return_value=fake_players,
     ) as mock_rankings, patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 0},
     ), patch(
         "scripts.tennis.wta_top200_historical_backfill.time.sleep",
     ):
@@ -254,7 +200,7 @@ def test_run_backfill_from_wta_roster_uses_distinct_names_from_ranking_table():
 
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 0},
     ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
         summary = run_backfill_from_wta_roster()
 
@@ -263,98 +209,80 @@ def test_run_backfill_from_wta_roster_uses_distinct_names_from_ranking_table():
     assert len(summary) == 2
 
 
-def test_run_backfill_from_atp_roster_uses_2016plus_250plus_names():
+def test_run_backfill_from_atp_roster_uses_match_history_atp_names():
     from datetime import datetime, timezone
-    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_from_atp_roster
 
     now = datetime.now(timezone.utc)
-    TmlDatabaseMatch.delete().execute()
-    # partido real evaluable (2016+, nivel 250)
-    TmlDatabaseMatch.create(
-        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
-        winner_name="Player A", loser_name="Player B",
+    MatchHistory.delete().execute()
+    MatchHistory.create(
+        match_id="sackmann:1", source="sackmann", tour="ATP",
+        player_a_name="Player A", player_b_name="Player B", fetched_at=now,
     )
-    # partido FUERA de alcance (nivel ITF-equivalente D=Davis Cup, excluido de TOUR_LEVELS_250_PLUS)
-    TmlDatabaseMatch.create(
-        year=2016, tourney_name="Davis Cup", level="D", date="2016-01-01", round="F",
-        winner_name="Player C", loser_name="Player D",
-    )
-    # partido FUERA de rango (antes de 2016)
-    TmlDatabaseMatch.create(
-        year=2010, tourney_name="X", level="250", date="2010-01-01", round="F",
-        winner_name="Player E", loser_name="Player F",
+    # WTA -- no debe entrar en el roster ATP.
+    MatchHistory.create(
+        match_id="sackmann:2", source="sackmann", tour="WTA",
+        player_a_name="Player C", player_b_name="Player D", fetched_at=now,
     )
 
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 0},
     ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
-        summary = run_backfill_from_atp_roster()
+        run_backfill_from_atp_roster()
 
-    # solo Player A/B califican (2016+, nivel 250) -- C/D (Davis Cup) y E/F (2010) quedan afuera
-    assert mock_bp.call_count == 2
     called_names = {c.args[0] for c in mock_bp.call_args_list}
     assert called_names == {"Player A", "Player B"}
 
 
-def test_run_backfill_for_missing_odds_opponents_targets_unfetched_rival():
+def test_run_backfill_for_missing_odds_opponents_targets_unfetched_player():
     from datetime import datetime, timezone
-    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
 
     now = datetime.now(timezone.utc)
-    TmlDatabaseMatch.delete().execute()
-    TennisMatchHistory.delete().execute()
+    MatchHistory.delete().execute()
     TennisHistoricalOdds.delete().execute()
 
-    # universo real para poder resolver "Real R." -> "Rival Real"
-    TmlDatabaseMatch.create(
-        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
-        winner_name="Known Self", loser_name="Rival Real",
+    MatchHistory.create(
+        match_id="sackmann:1", source="sackmann", tour="ATP",
+        player_a_name="Known Self", player_b_name="Rival Real", fetched_at=now,
     )
-    # "Known Self" YA tiene su propia página backfilleada (self conocido).
-    TennisMatchHistory.create(
-        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
-        result="W", score="6-4, 6-3", source="tennisexplorer", surface="Hard", fetched_at=now,
+    # "Known Self" YA tiene su propia página backfilleada (aparece como
+    # `player_name` real en TennisHistoricalOdds) -- "Rival Real" no.
+    TennisHistoricalOdds.create(
+        player_name="Known Self", opponent_name="Rival R.", match_date="2016-06-01",
+        odds_self=1.5, odds_opponent=2.5, source="tennisexplorer", fetched_at=now,
     )
-    # sin fila hermana en TennisHistoricalOdds -- este partido NO tiene cuota real.
 
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 0},
     ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
-        summary = run_backfill_for_missing_odds_opponents()
+        run_backfill_for_missing_odds_opponents()
 
-    # "Rival Real" nunca tuvo su propia página -- debe agregarse a la lista.
-    # "Known Self" YA la tiene -- no debe re-backfillearse (aunque el
-    # partido siga sin cuota, reintentar su propia página no cambiaría nada).
     called_names = {c.args[0] for c in mock_bp.call_args_list}
     assert called_names == {"Rival Real"}
 
 
-def test_run_backfill_for_missing_odds_opponents_skips_rows_with_real_odds():
+def test_run_backfill_for_missing_odds_opponents_skips_players_already_fetched():
     from datetime import datetime, timezone
-    from database.historical.tennis import TmlDatabaseMatch
     from scripts.tennis.wta_top200_historical_backfill import run_backfill_for_missing_odds_opponents
 
     now = datetime.now(timezone.utc)
-    TmlDatabaseMatch.delete().execute()
-    TennisMatchHistory.delete().execute()
+    MatchHistory.delete().execute()
     TennisHistoricalOdds.delete().execute()
 
-    TmlDatabaseMatch.create(
-        year=2016, tourney_name="X", level="250", date="2016-01-01", round="F",
-        winner_name="Known Self", loser_name="Rival Real",
+    MatchHistory.create(
+        match_id="sackmann:1", source="sackmann", tour="ATP",
+        player_a_name="Known Self", player_b_name="Also Known", fetched_at=now,
     )
-    TennisMatchHistory.create(
-        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
-        result="W", score="6-4, 6-3", source="tennisexplorer", surface="Hard", fetched_at=now,
-    )
-    # ESTE partido SÍ tiene cuota real -- no debería disparar backfill de "Rival Real".
     TennisHistoricalOdds.create(
-        player_name="Known Self", opponent_name="Real R.", match_date="2016-06-01",
+        player_name="Known Self", opponent_name="Also K.", match_date="2016-06-01",
         odds_self=1.5, odds_opponent=2.5, source="tennisexplorer", fetched_at=now,
+    )
+    TennisHistoricalOdds.create(
+        player_name="Also Known", opponent_name="Known S.", match_date="2016-06-01",
+        odds_self=2.5, odds_opponent=1.5, source="tennisexplorer", fetched_at=now,
     )
 
     with patch(
@@ -415,7 +343,7 @@ def test_backfill_player_harvests_opponent_slugs_from_matches():
     fake_match = {
         "date": "03.08.", "tournament": "Washington", "surface": "hard",
         "opponent": "Pegula J.", "opponent_slug": "pegula-real123", "round": "F", "round_full": "final",
-        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58,
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": None,
     }
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
@@ -434,7 +362,7 @@ def test_backfill_player_harvests_opponent_slugs_from_matches():
 def test_run_backfill_for_names_sequential_by_default():
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 0, "odds_inserted": 0},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 0},
     ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
         summary = _run_backfill_for_names(["A", "B", "C"], tag="test")
     assert mock_bp.call_count == 3
@@ -444,55 +372,9 @@ def test_run_backfill_for_names_sequential_by_default():
 def test_run_backfill_for_names_with_thread_pool():
     with patch(
         "scripts.tennis.wta_top200_historical_backfill.backfill_player",
-        return_value={"player": "x", "status": "ok", "matches_inserted": 1, "odds_inserted": 1},
+        return_value={"player": "x", "status": "ok", "odds_inserted": 1},
     ) as mock_bp, patch("scripts.tennis.wta_top200_historical_backfill.time.sleep"):
         summary = _run_backfill_for_names(["A", "B", "C", "D"], tag="test", max_workers=4)
     assert mock_bp.call_count == 4
     assert len(summary) == 4
-    assert sum(r["matches_inserted"] for r in summary) == 4
-
-
-def test_backfill_player_repairs_existing_row_with_empty_score():
-    # 2026-08-06, pedido explícito del usuario: "junta todos los
-    # matches sin score y sin cuotas y arma un script que haga fill de
-    # ambos campos" -- fila que quedó con score vacío en una corrida
-    # previa (fallo puntual, no de la fuente) debe repararse igual que
-    # ya se reparaba tournament=NULL.
-    from datetime import datetime, timezone
-    TennisMatchHistory.create(
-        player_name="Test Player", opponent_name="Kudermetova P.", match_date="2026-07-31",
-        result="L", score="", source="flashscore",
-        tournament="Washington", round="R16", surface="hard",
-        fetched_at=datetime.now(timezone.utc),
-    )
-
-    fake_match = {
-        "date": "31.07.", "tournament": "Washington", "surface": "hard",
-        "opponent": "Kudermetova P.", "round": "R16", "round_full": "round of 16",
-        "score": "7-6, 6-4", "odds_self": 1.21, "odds_opponent": 4.30,
-    }
-
-    def fake_fetch(slug, year=None):
-        return f"year={year}"
-
-    def fake_parse(html, name):
-        return [fake_match] if html == "year=2026" else []
-
-    with patch(
-        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill._fetch", side_effect=fake_fetch,
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill._parse_year_html", side_effect=fake_parse,
-    ), patch(
-        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
-    ):
-        result = backfill_player("Test Player")
-
-    assert result["matches_inserted"] == 0
-    assert result["matches_repaired"] == 1
-    assert result["odds_inserted"] == 1
-    with db_historical.connection_context():
-        row = TennisMatchHistory.get(TennisMatchHistory.player_name == "Test Player")
-        assert row.score == "7-6, 6-4"
-        assert row.result == "W"  # recalculado desde el score real (antes tenía "L" viejo/vacío)
+    assert sum(r["odds_inserted"] for r in summary) == 4
