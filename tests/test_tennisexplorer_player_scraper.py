@@ -14,7 +14,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     _verify_player_page, _reorient_score_to_self,
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
     resolve_player_slug, _extract_href_slug,
-    get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix,
+    get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix, get_tour_by_sex,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -522,3 +522,62 @@ def test_parse_int_prefix_strips_unit_suffix():
 def test_parse_int_prefix_fail_closed_on_dash():
     assert _parse_int_prefix("-") is None
     assert _parse_int_prefix(None) is None
+
+
+# --- get_tour_by_sex (2026-08-09, pedido explícito del usuario --
+# resolver `MatchHistory.tour` vía el campo real "Sex: man"|"Sex: woman"
+# de la página de perfil de TennisExplorer) ---
+
+def test_get_tour_by_sex_resolves_wta_from_woman():
+    html = _TITLE_OK.replace("Alexandra Eala", "Aryna Sabalenka") + '<div class="date">Sex: woman</div>'
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value="sabalenka",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
+    ):
+        assert get_tour_by_sex("Aryna Sabalenka") == "WTA"
+
+
+def test_get_tour_by_sex_resolves_atp_from_man():
+    html = _TITLE_OK.replace("Alexandra Eala", "Novak Djokovic") + '<div class="date">Sex: man</div>'
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value="djokovic",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
+    ):
+        assert get_tour_by_sex("Novak Djokovic") == "ATP"
+
+
+def test_get_tour_by_sex_fail_closed_when_no_slug():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value=None,
+    ):
+        assert get_tour_by_sex("Nobody Known") is None
+
+
+def test_get_tour_by_sex_fail_closed_when_fetch_fails():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value="x",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=None,
+    ):
+        assert get_tour_by_sex("Someone") is None
+
+
+def test_get_tour_by_sex_fail_closed_when_field_missing():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value="x",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=_TITLE_OK,
+    ):
+        assert get_tour_by_sex("Alexandra Eala") is None
+
+
+def test_get_tour_by_sex_fail_closed_when_verification_fails():
+    html = "<title>Someone Else - Tennis Explorer</title>" + '<div class="date">Sex: woman</div>'
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.resolve_player_slug", return_value="x",
+    ), patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch", return_value=html,
+    ):
+        assert get_tour_by_sex("Alexandra Eala") is None

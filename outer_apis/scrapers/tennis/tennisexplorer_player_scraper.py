@@ -625,3 +625,34 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
         "player_b_weight_kg": _parse_int_prefix(b_weight_raw),
         "player_b_plays": b_plays_raw if b_plays_raw and b_plays_raw != "-" else None,
     }
+
+
+_SEX_RE = re.compile(r"<div class=\"date\">Sex:\s*([a-zA-Z]+)</div>")
+
+
+def get_tour_by_sex(player_name: str, candidate_slugs: list[str] = ()) -> str | None:
+    """Resuelve "ATP"|"WTA" a partir del campo real "Sex: man"|"Sex:
+    woman" de la página de perfil de TennisExplorer -- 2026-08-09,
+    pedido explícito del usuario: "usar el scraper de tennisexplorer
+    para obtener el sexo de los players" para resolver `tour` en
+    `MatchHistory` donde ni Sackmann ni el roster WTA lo confirmaron.
+
+    Verificado en vivo: "Sabalenka Aryna" -> "Sex: woman", "Djokovic
+    Novak" -> "Sex: man". Fail-closed: None si no se resuelve el slug,
+    el fetch falla, o el campo no aparece con el formato esperado --
+    nunca se adivina el tour."""
+    slug = resolve_player_slug(player_name, candidate_slugs=candidate_slugs)
+    if slug is None:
+        return None
+    html = _fetch(slug)
+    if html is None or not _verify_player_page(html, player_name):
+        return None
+    m = _SEX_RE.search(html)
+    if not m:
+        return None
+    sex = m.group(1).strip().lower()
+    if sex == "woman":
+        return "WTA"
+    if sex == "man":
+        return "ATP"
+    return None
