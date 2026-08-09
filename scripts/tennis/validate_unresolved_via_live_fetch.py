@@ -43,7 +43,14 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     expected_opponent_abbreviation,
 )
 
-_MAX_WORKERS = int(os.getenv("VALIDATE_UNRESOLVED_MAX_WORKERS", "4"))
+# 2026-08-09, pedido explícito del usuario: subido de 4 a 8 junto con
+# bajar el throttle real de TennisExplorer de 0.5s a 0.3s
+# (`_request_throttle.py`) -- con el delay extra promedio (~2.25s) por
+# thread, 4 workers rendían ~1.78 req/s (ya por debajo del viejo techo
+# de 2 req/s del lock compartido); 8 workers rinden ~3.5 req/s, que
+# ahora sí satura el nuevo techo de ~3.33 req/s (1 / 0.3s) -- el lock
+# compartido pasa a ser el limitante real, que es la intención.
+_MAX_WORKERS = int(os.getenv("VALIDATE_UNRESOLVED_MAX_WORKERS", "8"))
 _EXTRA_DELAY_MIN_S = float(os.getenv("VALIDATE_UNRESOLVED_DELAY_MIN_S", "1.0"))
 _EXTRA_DELAY_MAX_S = float(os.getenv("VALIDATE_UNRESOLVED_DELAY_MAX_S", "3.5"))
 

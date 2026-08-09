@@ -54,4 +54,9 @@ class RequestThrottle:
 # generar ráfagas visibles de bot incluso con el thread pool de
 # `prefetch_player_histories` (16 workers) sincronizado por este lock.
 flashscore_throttle = RequestThrottle(min_interval_s=0.5)
-tennisexplorer_throttle = RequestThrottle(min_interval_s=0.5)
+# 2026-08-09, pedido explícito del usuario: bajar el piso de
+# TennisExplorer de 0.5s a 0.3s (~3.3 req/s techo) para acelerar el
+# vaciado de la cola de 318K candidatos (`TennisMatchHistoryUnvalidated`)
+# -- no hay cifra oficial de límite de ninguno de los 2 sitios, este es
+# un ajuste puntual del usuario, no una re-evaluación de riesgo.
+tennisexplorer_throttle = RequestThrottle(min_interval_s=0.3)
