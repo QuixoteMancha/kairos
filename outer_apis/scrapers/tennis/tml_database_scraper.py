@@ -155,55 +155,111 @@ def get_matches_range(start_year: int, end_year: int,
     return result
 
 
+def _find_existing_match_history_row(MatchHistory, name_a: str, name_b: str, match_date: str):
+    return MatchHistory.get_or_none(
+        (MatchHistory.match_date == match_date)
+        & (
+            ((MatchHistory.player_a_name == name_a) & (MatchHistory.player_b_name == name_b))
+            | ((MatchHistory.player_a_name == name_b) & (MatchHistory.player_b_name == name_a))
+        )
+    )
+
+
 def save_matches_to_db(year: int, matches: list[dict[str, Any]]) -> int:
     """Persiste partidos de un año (YA parseados, formato de
-    `get_year_matches`) en la tabla local `TmlDatabaseMatch` -- usado
-    SOLO por `scripts/tml_database_local_backfill.py`. Reemplaza
-    cualquier fila previa de ese año (backfill idempotente: correr de
-    nuevo actualiza con los datos más recientes del CSV real, no
-    duplica). Devuelve el número de filas insertadas."""
+    `get_year_matches`) en `MatchHistory` -- usado SOLO por
+    `scripts/tml_database_local_backfill.py`.
+
+    2026-08-09, MIGRADO de la tabla propia `TmlDatabaseMatch` (eliminada,
+    pedido explícito del usuario) a `MatchHistory` (1 fila por partido
+    compartida entre todas las fuentes). Cambio de comportamiento real:
+    ya NO borra+reinserta todas las filas del año en cada corrida
+    (`TmlDatabaseMatch` era una tabla propia, podía darse ese lujo;
+    `MatchHistory` es compartida -- borrar sus filas rompería otras
+    fuentes que ya la usan, ej. `match-detail` real). Ahora es UPSERT
+    idempotente por (par de jugadores + fecha): si el partido ya existe
+    en `MatchHistory` (por esta misma fuente en una corrida anterior, o
+    por cualquier otra fuente -- ej. ya validado vía match-detail real),
+    solo completa los campos que falten (nunca pisa un dato ya
+    confirmado); si no existe, lo crea con `source="sackmann"`."""
+    from datetime import datetime, timezone
+
     from database.db import init_db_historical
-    from database.historical.tennis import TmlDatabaseMatch
+    from database.historical.tennis.models import MatchHistory
 
     init_db_historical()
-    with TmlDatabaseMatch._meta.database.atomic():
-        TmlDatabaseMatch.delete().where(TmlDatabaseMatch.year == year).execute()
-        if not matches:
-            return 0
-        rows = [{
-            "year": year, "tourney_name": m.get("tourney_name"), "level": m.get("level"),
-            "date": m["date"], "round": m.get("round"), "surface": m.get("surface"),
-            "best_of": m.get("best_of"), "winner_name": m["winner_name"],
-            "winner_rank": m.get("winner_rank"), "winner_age": m.get("winner_age"),
-            "loser_name": m["loser_name"], "loser_rank": m.get("loser_rank"),
-            "loser_age": m.get("loser_age"), "score": m.get("score"), "minutes": m.get("minutes"),
-        } for m in matches]
-        # 2026-08-04, hallazgo real corriendo el backfill: TML-Database
-        # tiene un puñado de filas duplicadas EXACTAS dentro del mismo
-        # año (mismo día/ganador/perdedor/torneo -- calidad de datos de
-        # la fuente, no un bug nuestro). `on_conflict_ignore` descarta
-        # el duplicado exacto en vez de fallar todo el backfill del año.
-        TmlDatabaseMatch.insert_many(rows).on_conflict_ignore().execute()
-    return len(matches)
+    if not matches:
+        return 0
+    now = datetime.now(timezone.utc)
+    saved = 0
+    with MatchHistory._meta.database.atomic():
+        for m in matches:
+            winner_name, loser_name, date = m["winner_name"], m["loser_name"], m["date"]
+            existing = _find_existing_match_history_row(MatchHistory, winner_name, loser_name, date)
+            extra_fields = {
+                "tournament": m.get("tourney_name"), "level": m.get("level"), "round": m.get("round"),
+                "surface": m.get("surface"), "best_of": m.get("best_of"), "score": m.get("score"),
+                "minutes": m.get("minutes"), "winner_age": m.get("winner_age"), "loser_age": m.get("loser_age"),
+            }
+            if existing is not None:
+                changed = False
+                winner_is_a = existing.player_a_name == winner_name
+                rank_a_new = m.get("winner_rank") if winner_is_a else m.get("loser_rank")
+                rank_b_new = m.get("loser_rank") if winner_is_a else m.get("winner_rank")
+                if existing.player_a_ranking is None and rank_a_new is not None:
+                    existing.player_a_ranking, changed = rank_a_new, True
+                if existing.player_b_ranking is None and rank_b_new is not None:
+                    existing.player_b_ranking, changed = rank_b_new, True
+                if existing.winner_side is None:
+                    existing.winner_side, changed = ("a" if winner_is_a else "b"), True
+                for f, v in extra_fields.items():
+                    if getattr(existing, f) is None and v is not None:
+                        setattr(existing, f, v)
+                        changed = True
+                if changed:
+                    existing.updated_at = now
+                    existing.save()
+            else:
+                try:
+                    MatchHistory.create(
+                        match_id=f"tmldb:{date}:{winner_name}:{loser_name}",
+                        source="sackmann", tour="ATP", winner_side="a",
+                        player_a_name=winner_name, player_a_ranking=m.get("winner_rank"),
+                        player_b_name=loser_name, player_b_ranking=m.get("loser_rank"),
+                        match_date=date, fetched_at=now, **extra_fields,
+                    )
+                except Exception:
+                    # 2026-08-04, hallazgo real: TML-Database tiene un
+                    # puñado de filas duplicadas EXACTAS dentro del mismo
+                    # año (mismo día/ganador/perdedor/torneo) -- el
+                    # unique constraint de match_id las descarta acá en
+                    # vez de fallar todo el backfill del año.
+                    continue
+            saved += 1
+    return saved
 
 
 def has_cached_year(year: int) -> bool:
-    """True si ya hay partidos de ese año en la DB local (cualquier
-    nivel de torneo -- el backfill siempre persiste TODO, el filtro de
-    niveles se aplica al leer)."""
+    """True si ya hay partidos de ese año en `MatchHistory` con
+    `source="sackmann"` (2026-08-09, migrado de `TmlDatabaseMatch`)."""
     from database.db import init_db_historical
-    from database.historical.tennis import TmlDatabaseMatch
+    from database.historical.tennis.models import MatchHistory
 
     init_db_historical()
-    return TmlDatabaseMatch.select().where(TmlDatabaseMatch.year == year).exists()
+    return MatchHistory.select().where(
+        (MatchHistory.source == "sackmann") & (MatchHistory.match_date.startswith(str(year)))
+    ).exists()
 
 
 def get_matches_range_from_db(start_year: int, end_year: int,
                                levels: frozenset[str] | None = TOUR_LEVELS_250_PLUS) -> list[dict[str, Any]]:
     """Lee partidos [start_year, end_year] SOLO de la DB local
-    (`TmlDatabaseMatch`) -- NUNCA toca la red. Esta es la función que
-    deben usar todos los scripts de backtest (2026-08-04, pedido
-    explícito del usuario).
+    (`MatchHistory`, `source="sackmann"` -- 2026-08-09, migrado de
+    `TmlDatabaseMatch`, eliminada) -- NUNCA toca la red. Esta es la
+    función que deben usar todos los scripts de backtest (2026-08-04,
+    pedido explícito del usuario). Devuelve exactamente la misma forma
+    que la versión vieja (mismos keys de dict) para no romper a ninguno
+    de los 4 backtests que la consumen.
 
     Fail-closed real: si un año no tiene datos en la DB local (nunca se
     corrió el backfill, o se corrió para un rango distinto), ese año se
@@ -214,31 +270,28 @@ def get_matches_range_from_db(start_year: int, end_year: int,
     un error de operación (backfill no corrido), no un fallo
     transitorio, así que el mensaje es más directo."""
     from database.db import init_db_historical
-    from database.historical.tennis import TmlDatabaseMatch
+    from database.historical.tennis.models import MatchHistory
 
     init_db_historical()
 
     result: list[dict[str, Any]] = []
     missing_years: list[int] = []
     for year in range(start_year, end_year + 1):
-        # 2026-08-05, bug real encontrado y corregido: SIN order_by()
-        # explícito, SQLite no garantiza el orden físico de lectura --
-        # `save_matches_to_db` hace delete()+insert_many() en cada
-        # backfill, lo que reasigna rowids nuevos aunque el CONTENIDO
-        # de las filas sea idéntico. Río abajo, los backtests agrupan
-        # partidos por día y aplican el cupo de capital del 50% en el
-        # orden en que llegan -- un simple refresh de backfill (incluso
-        # uno que no trae partidos nuevos) podía cambiar qué partidos
-        # entran al cupo diario y cuáles quedan afuera, moviendo el
-        # capital final compuesto sobre miles de operaciones sin que
-        # cambiara ningún dato real. Verificado en vivo: 2 corridas
-        # idénticas post-refresh daban el mismo número, pero el número
-        # PRE-refresh vs POST-refresh (mismas 137 filas de 2026)
-        # diferían -- la causa era el reordenamiento físico, no un dato
-        # nuevo. `id` como desempate estable hace el orden 100%
-        # reproducible sin importar el historial de inserciones.
-        query = TmlDatabaseMatch.select().where(TmlDatabaseMatch.year == year).order_by(
-            TmlDatabaseMatch.date, TmlDatabaseMatch.id,
+        # 2026-08-05, bug real encontrado y corregido (ver también nota
+        # 2026-08-09 de migración): SIN order_by() explícito, SQLite no
+        # garantiza el orden físico de lectura -- río abajo, los
+        # backtests agrupan partidos por día y aplican el cupo de
+        # capital del 50% en el orden en que llegan, así que el orden
+        # debe ser 100% reproducible. `match_date, id` como desempate
+        # estable.
+        query = (
+            MatchHistory.select()
+            .where(
+                (MatchHistory.source == "sackmann")
+                & (MatchHistory.match_date.startswith(str(year)))
+                & (MatchHistory.winner_side.is_null(False))
+            )
+            .order_by(MatchHistory.match_date, MatchHistory.id)
         )
         rows = list(query)
         if not rows:
@@ -247,11 +300,16 @@ def get_matches_range_from_db(start_year: int, end_year: int,
         for r in rows:
             if levels is not None and (r.level or "") not in levels:
                 continue
+            winner_is_a = r.winner_side == "a"
+            winner_name = r.player_a_name if winner_is_a else r.player_b_name
+            loser_name = r.player_b_name if winner_is_a else r.player_a_name
+            winner_rank = r.player_a_ranking if winner_is_a else r.player_b_ranking
+            loser_rank = r.player_b_ranking if winner_is_a else r.player_a_ranking
             result.append({
-                "tourney_name": r.tourney_name, "level": r.level, "date": r.date,
+                "tourney_name": r.tournament, "level": r.level, "date": r.match_date,
                 "round": r.round, "surface": r.surface, "best_of": r.best_of,
-                "winner_name": r.winner_name, "winner_rank": r.winner_rank, "winner_age": r.winner_age,
-                "loser_name": r.loser_name, "loser_rank": r.loser_rank, "loser_age": r.loser_age,
+                "winner_name": winner_name, "winner_rank": winner_rank, "winner_age": r.winner_age,
+                "loser_name": loser_name, "loser_rank": loser_rank, "loser_age": r.loser_age,
                 "score": r.score, "minutes": r.minutes,
             })
 

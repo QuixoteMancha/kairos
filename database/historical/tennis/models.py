@@ -294,6 +294,26 @@ class MatchHistory(HistoricalBaseModel):
     player_b_weight_kg = IntegerField(null=True)
     player_b_plays = CharField(null=True)
 
+    # 2026-08-09, pedido explícito del usuario ("TmlDatabaseMatch... debe
+    # ser eliminado, para sacar el winrate por superficie y variante...
+    # copilot creó funciones"): estos 4 campos son los únicos que
+    # `TmlDatabaseMatch` (fuente ATP real vía TML-Database, ver
+    # `tml_database_scraper.py`) traía y `MatchHistory` no tenía --
+    # `winner_age`/`loser_age`/`minutes` (edad real y duración del
+    # partido) van atados a GANADOR/PERDEDOR (no a player_a/player_b, a
+    # propósito: así es como los consume el código real de
+    # `favorite_comeback_pattern_analysis.py`/backtests, sin traducción
+    # adicional). `best_of` sí es simétrico (no depende de quién ganó).
+    winner_age = FloatField(null=True)
+    loser_age = FloatField(null=True)
+    minutes = IntegerField(null=True)
+    best_of = IntegerField(null=True)
+    # Categoría de torneo real tal cual la trae TML-Database ('250'/'500'/
+    # 'M'=Masters1000/'G'=GrandSlam/'F'=ATPFinals/'D'=DavisCup/'A'=exhibición)
+    # -- `tournament` (arriba) es el nombre libre, esto es el nivel/categoría,
+    # ninguna otra fuente lo trae. Ver TOUR_LEVELS_250_PLUS en tml_database_scraper.py.
+    level = CharField(null=True)
+
     fetched_at = DateTimeField()
     updated_at = DateTimeField(null=True)  # solo se setea si una re-verificación cambió algún campo
 
@@ -372,26 +392,18 @@ class TennisHistoricalOdds(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
-class TmlDatabaseMatch(HistoricalBaseModel):
-    class Meta:
-        table_name = "tml_database_match"
-        indexes = ((("year", "date", "winner_name", "loser_name", "tourney_name"), True),)
-
-    year = IntegerField()
-    tourney_name = CharField(null=True)
-    level = CharField(null=True)
-    date = CharField()
-    round = CharField(null=True)
-    surface = CharField(null=True)
-    best_of = IntegerField(null=True)
-    winner_name = CharField()
-    winner_rank = IntegerField(null=True)
-    winner_age = FloatField(null=True)
-    loser_name = CharField()
-    loser_rank = IntegerField(null=True)
-    loser_age = FloatField(null=True)
-    score = CharField(null=True)
-    minutes = IntegerField(null=True)
+# `TmlDatabaseMatch` -- ELIMINADA 2026-08-09, pedido explícito del
+# usuario ("TmlDatabaseMatch... debe ser eliminado"). 1 fila por
+# partido ATP real (winner/loser), redundante con `MatchHistory` (su
+# portion `source="sackmann"` ya cubría casi 1:1 los mismos partidos,
+# ver saga de validación de esta sesión). Los 4 campos que
+# `MatchHistory` no tenía (`winner_age`/`loser_age`/`minutes`/`best_of`/
+# `level`) se agregaron directo a `MatchHistory` y se backfillearon
+# desde el backup antes de borrar esta clase -- ver
+# `outer_apis/scrapers/tennis/tml_database_scraper.py` (save_matches_to_db/
+# has_cached_year/get_matches_range_from_db, migrados a MatchHistory
+# con la MISMA forma externa de retorno, para no romper a los 4
+# backtests que los consumen).
 
 
 class TennisPlayerSyncStatus(HistoricalBaseModel):
@@ -454,20 +466,13 @@ class TennisServeCalibration(HistoricalBaseModel):
     calibrated_at = DateTimeField()
 
 
-class TennisSurfaceMatchHistory(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_surface_match_history"
-        indexes = ((("player_name",), False),)
-
-    player_name = CharField()
-    opponent_name = CharField()
-    match_date = CharField()
-    surface = CharField()
-    result = CharField()
-    score = CharField(null=True)
-    tournament = CharField(null=True)
-    source = CharField()
-    fetched_at = DateTimeField()
+# `TennisSurfaceMatchHistory` -- ELIMINADA 2026-08-09, pedido explícito
+# del usuario. 1 fila por JUGADOR por partido (con superficie real de
+# TennisExplorer), redundante con `MatchHistory` (que ya tiene su
+# propio campo `surface`). Sin consumidores de código reales al momento
+# de eliminarla (`save_surface_match_history`/`get_recent_surface_
+# match_history`/`get_all_surface_matches` en `writer.py` ya estaban
+# migradas a `MatchHistory` de una fase anterior de esta misma sesión).
 
 
 class TennisExplorerPlayerSlug(HistoricalBaseModel):

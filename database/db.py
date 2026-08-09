@@ -249,11 +249,11 @@ def init_db_historical() -> None:
     )
     from database.historical.tennis import (
         TennisPlayerRanking, TennisServeCalibration, TennisHistoricalOdds, TennisHeadToHead,
-        TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
+        TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        TmlDatabaseMatch, TournamentLocationCache,
+        TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
         MatchHistory, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
     )
@@ -265,11 +265,11 @@ def init_db_historical() -> None:
     db_historical.create_tables([
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating,
         TennisPlayerRanking, TennisServeCalibration, TennisHistoricalOdds, TennisHeadToHead,
-        TennisSurfaceMatchHistory, TennisAbstractElo, TennisAbstractYelo,
+        TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
-        TmlDatabaseMatch, TournamentLocationCache,
+        TournamentLocationCache,
         # 2026-08-08, pedido explícito del usuario -- 1 fila por partido
         # real (no 2 como TennisMatchHistory), con identidad resuelta
         # con certeza vía match-detail de TennisExplorer. Tabla nueva.
@@ -361,6 +361,11 @@ def init_db_historical() -> None:
     # vínculo mentiroso a un partido de Kalshi que no tiene nada que
     # ver).
     _add_column_if_missing(db_historical, "match_history", "tour", "VARCHAR(255)")
+    _add_column_if_missing(db_historical, "match_history", "winner_age", "REAL")
+    _add_column_if_missing(db_historical, "match_history", "loser_age", "REAL")
+    _add_column_if_missing(db_historical, "match_history", "minutes", "INTEGER")
+    _add_column_if_missing(db_historical, "match_history", "best_of", "INTEGER")
+    _add_column_if_missing(db_historical, "match_history", "level", "VARCHAR(255)")
     _add_column_if_missing(db_historical, "tennis_match_weather", "match_history_id", "INTEGER")
     # `charted_match` -- migraciones de columna REMOVIDAS 2026-08-09
     # junto con el modelo (ver models.py): la tabla/clase ya no existe,
