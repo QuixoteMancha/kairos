@@ -1,35 +1,46 @@
-"""Backfill de `MatchHistory.level` para filas `source="tennisexplorer"`,
-derivado directo del catálogo de niveles YA presente en las filas
-`source="sackmann"` -- 2026-08-09, pedido explícito del usuario:
-"tennisexplorer expone el torneo, se puede hacer un map para derivar/
-deducir el level del torneo".
+"""Backfill UNIFICADO de `MatchHistory.level` (y `tour` como bonus) para
+filas `source="tennisexplorer"` -- 2026-08-09, pedido explícito del
+usuario: "unificarlos y añadir el scraping de todos los datos
+faltantes... el level de wta" (primera versión de este script solo
+cubría ATP vía Sackmann).
 
-Sackmann/TML-Database trae `level` REAL por partido ('250'/'500'/'M'
-Masters/'G' Grand Slam/'F' ATP Finals/'D' Davis Cup/'A' exhibición) --
-TennisExplorer NUNCA expone esa categoría en ningún lado de su HTML
-(verificado, no hay fuente propia). Pero SÍ trae el nombre del torneo,
-y muchos torneos reales aparecen en AMBAS fuentes (mismo evento, año) --
-se puede resolver `level` por transitividad: mismo (año, torneo
+Dos catálogos, cero requests de red nuevos (ambos ya existen en la DB):
+
+  - ATP: filas `source="sackmann"` de `MatchHistory` (Sackmann/TML-Database
+    trae `level` real por partido: '250'/'500'/'M'/'G'/'F'/'D'/'A').
+  - WTA: `WtaTournamentLevel` (API oficial WTA, 17,902 torneos reales,
+    poblada por `wta_tournament_level_backfill.py`).
+
+TennisExplorer no expone la categoría del torneo en ningún lado de su
+HTML -- pero SÍ trae el nombre, y la mayoría de los torneos reales
+aparecen también en uno de los 2 catálogos de arriba (mismo evento,
+mismo año) -- se resuelve por transitividad: mismo (año, torneo
 normalizado) -> mismo nivel real.
 
-Verificado en vivo antes de implementar (2026-08-09): de 409,143 filas
-TennisExplorer sin `level` pero con torneo, 261,157 (63.8%) tienen su
-torneo también presente en Sackmann tras normalizar -- ganancia real
-grande, no marginal."""
+Selección de catálogo por fila:
+  - `tour="ATP"` conocido -> solo catálogo ATP.
+  - `tour="WTA"` conocido -> solo catálogo WTA.
+  - `tour` desconocido (`None`) -> se prueban AMBOS catálogos. Si
+    resuelve en uno solo, se usa ese nivel Y se completa `tour` como
+    bonus (match inequívoco de torneo real = tour real, sin adivinar).
+    Si resuelve en AMBOS con años/niveles distintos (colisión real de
+    nombre entre un evento ATP y uno WTA el mismo año -- rara pero
+    posible, ej. "United Cup" es mixto), fail-closed: no se toca ni
+    `level` ni `tour`, nunca se adivina cuál corresponde."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis.models import MatchHistory
+from database.historical.tennis.models import MatchHistory, WtaTournamentLevel
 
 # Mismo criterio de normalización que
 # `wta_favorite_surface_winrate_filter_backtest.py::_normalize_tournament_name`
 # (quita sufijos de tour/nivel + tokens numéricos sueltos de edición) --
-# no se importa de ahí a propósito (evitar que un módulo ATP dependa de
-# uno nombrado "wta_*"), es la misma lógica simple, duplicarla acá es
-# más claro que una dependencia cruzada rara.
+# no se importa de ahí a propósito (evitar que este módulo dependa de
+# uno nombrado "wta_*" cuando ahora también cubre ATP), duplicar esta
+# lógica simple es más claro que una dependencia cruzada rara.
 _DROP_TOKENS = {"WTA", "ITF", "CHALLENGER"}
 
 
@@ -43,20 +54,29 @@ def _normalize_tournament_name(raw: str | None) -> str | None:
     return " ".join(kept)
 
 
-# Prioridad real de categoría ATP -- usada SOLO para resolver colisiones
-# cuando 2+ torneos reales distintos normalizan a la MISMA clave
-# (ej. "Rome" Masters1000 vs "Rome 4 challenger" -> ambos normalizan a
-# "ROME" -- se conserva el nivel de MAYOR jerarquía real, mismo criterio
-# de no-degradación que la versión WTA). Orden real aproximado por
-# prestigio/premio: Grand Slam > ATP Finals > Masters1000 > 500 > 250 >
-# Davis Cup (formato de equipos, no comparable directo) > exhibición.
+# Prioridad real de categoría ATP -- usada para resolver colisiones
+# cuando 2+ torneos reales distintos normalizan a la MISMA clave (ej.
+# "Rome" Masters1000 vs "Rome 4 challenger" -> ambos "ROME"). Orden
+# real aproximado por prestigio/premio.
 _ATP_LEVEL_PRIORITY = {"G": 6, "F": 5, "M": 4, "500": 3, "250": 2, "D": 1, "A": 0}
+
+# Prioridad real de categoría WTA -- mismo criterio, valores tomados de
+# `wta_tournament_level_backfill.py::_LEVEL_PRIORITY` (no se importa
+# para no acoplar el orden de carga de módulos, son constantes fijas).
+_WTA_LEVEL_PRIORITY = {
+    "Grand Slam": 6, "WTA 1000": 5, "Premier Mandatory": 5, "Premier 5": 5,
+    "WTA 500": 4, "Premier": 4, "Finals": 4,
+    "WTA 250": 3, "International": 3,
+    "WTA 125": 2, "125K": 2,
+    "ITF": 1,
+}
 
 
 def build_level_index_from_sackmann() -> dict[tuple[int, str], str]:
-    """{(year, normalized_tournament_name): level} -- cargado desde las
-    filas `source="sackmann"` de `MatchHistory` (ya tienen `level` real
-    embebido, no hace falta ninguna fuente externa nueva)."""
+    """{(year, normalized_tournament_name): level} -- catálogo ATP,
+    derivado de las filas `source="sackmann"` de `MatchHistory` (ya
+    tienen `level` real embebido, no hace falta ninguna fuente externa
+    nueva)."""
     init_db_historical()
     index: dict[tuple[int, str], str] = {}
     rows = (
@@ -82,25 +102,46 @@ def build_level_index_from_sackmann() -> dict[tuple[int, str], str]:
     return index
 
 
-def run_backfill() -> dict[str, Any]:
-    """Completa `level` en filas `source="tennisexplorer"` que tengan
-    torneo pero no nivel, usando el índice derivado de Sackmann.
-    Fail-closed real por fila: si el torneo no normaliza a nada, o el
-    (año, torneo normalizado) no está en el índice, la fila queda sin
-    tocar (nunca se adivina un nivel)."""
+def build_level_index_from_wta_catalog() -> dict[tuple[int, str], str]:
+    """{(year, normalized_tournament_name): level} -- catálogo WTA,
+    derivado de `WtaTournamentLevel` (API oficial WTA, ya backfilleada
+    aparte vía `wta_tournament_level_backfill.py`)."""
     init_db_historical()
-    level_index = build_level_index_from_sackmann()
+    index: dict[tuple[int, str], str] = {}
+    for r in WtaTournamentLevel.select():
+        norm = _normalize_tournament_name(r.tournament_name)
+        if norm is None:
+            continue
+        key = (r.year, norm)
+        if key not in index or _WTA_LEVEL_PRIORITY.get(r.level, 0) > _WTA_LEVEL_PRIORITY.get(index[key], 0):
+            index[key] = r.level
+    return index
+
+
+def run_backfill() -> dict[str, Any]:
+    """Completa `level` (y `tour` como bonus, ver docstring del módulo)
+    en filas `source="tennisexplorer"` que tengan torneo pero no nivel,
+    usando los 2 índices. Fail-closed real por fila: si el torneo no
+    normaliza a nada, si el (año, torneo normalizado) no está en NINGÚN
+    índice, o si está en AMBOS con resultado ambiguo, la fila queda sin
+    tocar (nunca se adivina un nivel ni un tour)."""
+    init_db_historical()
+    atp_index = build_level_index_from_sackmann()
+    wta_index = build_level_index_from_wta_catalog()
 
     rows = list(
         MatchHistory
-        .select(MatchHistory.id, MatchHistory.tournament, MatchHistory.match_date)
+        .select(MatchHistory.id, MatchHistory.tournament, MatchHistory.match_date, MatchHistory.tour)
         .where(
             (MatchHistory.source == "tennisexplorer")
             & (MatchHistory.level.is_null(True))
             & (MatchHistory.tournament.is_null(False))
         )
     )
-    to_update: list[tuple[int, str]] = []
+    resolved_atp = resolved_wta = resolved_ambiguous_skipped = 0
+    tour_also_filled = 0
+    to_update: list[tuple[int, str, str | None]] = []  # (id, level, tour_if_new)
+
     for r in rows:
         norm = _normalize_tournament_name(r.tournament)
         if norm is None or not r.match_date:
@@ -109,17 +150,52 @@ def run_backfill() -> dict[str, Any]:
             year = int(r.match_date[:4])
         except (ValueError, TypeError):
             continue
-        level = level_index.get((year, norm))
-        if level is not None:
-            to_update.append((r.id, level))
+        key = (year, norm)
+
+        if r.tour == "ATP":
+            level = atp_index.get(key)
+            if level is not None:
+                to_update.append((r.id, level, None))
+                resolved_atp += 1
+            continue
+        if r.tour == "WTA":
+            level = wta_index.get(key)
+            if level is not None:
+                to_update.append((r.id, level, None))
+                resolved_wta += 1
+            continue
+
+        # tour desconocido -- probar ambos catálogos.
+        atp_level = atp_index.get(key)
+        wta_level = wta_index.get(key)
+        if atp_level is not None and wta_level is not None:
+            resolved_ambiguous_skipped += 1
+            continue  # colisión real de nombre entre evento ATP y WTA -- fail-closed
+        if atp_level is not None:
+            to_update.append((r.id, atp_level, "ATP"))
+            resolved_atp += 1
+            tour_also_filled += 1
+        elif wta_level is not None:
+            to_update.append((r.id, wta_level, "WTA"))
+            resolved_wta += 1
+            tour_also_filled += 1
 
     with MatchHistory._meta.database.atomic():
-        for row_id, level in to_update:
-            MatchHistory.update(level=level).where(MatchHistory.id == row_id).execute()
+        for row_id, level, tour in to_update:
+            fields = {"level": level}
+            if tour is not None:
+                fields["tour"] = tour
+            MatchHistory.update(**fields).where(MatchHistory.id == row_id).execute()
 
     return {
-        "rows_checked": len(rows), "rows_resolved": len(to_update),
-        "level_index_size": len(level_index),
+        "rows_checked": len(rows),
+        "rows_resolved": len(to_update),
+        "resolved_atp": resolved_atp,
+        "resolved_wta": resolved_wta,
+        "resolved_ambiguous_skipped": resolved_ambiguous_skipped,
+        "tour_also_filled": tour_also_filled,
+        "atp_level_index_size": len(atp_index),
+        "wta_level_index_size": len(wta_index),
     }
 
 
