@@ -15,6 +15,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
     resolve_player_slug, _extract_href_slug,
     get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix, get_tour_by_sex,
+    _tour_from_tournament_href,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -429,6 +430,7 @@ def test_get_match_detail_parses_real_page_structure():
         "match_id": "2692781",
         "match_date": "2024-08-10",
         "tournament": "Toronto WTA",
+        "tour": "WTA",
         "round": "quarterfinal",
         "surface": "hard",
         "score": "6-4, 6-2",
@@ -448,6 +450,26 @@ def test_get_match_detail_parses_real_page_structure():
         "player_b_weight_kg": 80,
         "player_b_plays": "right",
     }
+
+
+def test_tour_from_tournament_href_resolves_atp_and_wta():
+    # 2026-08-09, pedido explícito del usuario -- verificado en vivo:
+    # "/santiago/2026/atp-men/" -> ATP, "/masters-cup-wta/2025/wta-women/" -> WTA.
+    assert _tour_from_tournament_href("/santiago/2026/atp-men/") == "ATP"
+    assert _tour_from_tournament_href("/masters-cup-wta/2025/wta-women/") == "WTA"
+
+
+def test_tour_from_tournament_href_covers_itf_by_same_suffix():
+    # mismo sufijo -men/-women cubre niveles bajos (itf-men/itf-women)
+    # sin necesitar un caso especial.
+    assert _tour_from_tournament_href("/some-itf-event/2026/itf-men/") == "ATP"
+    assert _tour_from_tournament_href("/some-itf-event/2026/itf-women/") == "WTA"
+
+
+def test_tour_from_tournament_href_fail_closed_on_unexpected_pattern():
+    assert _tour_from_tournament_href("/davis-cup/2026/davis-cup/") is None
+    assert _tour_from_tournament_href(None) is None
+    assert _tour_from_tournament_href("") is None
 
 
 def test_get_match_detail_fail_closed_on_fetch_failure():

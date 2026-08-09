@@ -502,8 +502,31 @@ _MATCH_DETAIL_HEADER_RE = re.compile(
     re.DOTALL,
 )
 _MATCH_DETAIL_MATCH_INFO_RE = re.compile(
-    r'<span class="upper">([^<]*)</span>,\s*[\d:]*,?\s*<a[^>]*>([^<]*)</a>,\s*([^,<]*),\s*([^<]*)<'
+    r'<span class="upper">([^<]*)</span>,\s*[\d:]*,?\s*<a href="([^"]*)"[^>]*>([^<]*)</a>,\s*([^,<]*),\s*([^<]*)<'
 )
+
+
+def _tour_from_tournament_href(href: str | None) -> str | None:
+    """"/santiago/2026/atp-men/" -> "ATP", "/masters-cup-wta/2025/wta-women/"
+    -> "WTA" -- 2026-08-09, pedido explícito del usuario: "revisar si
+    tennisexplorer muestra el torneo, tour y sexo de los players" --
+    confirmado en vivo, el link del torneo en `match-detail` YA trae la
+    categoría real ("atp-men"/"wta-women", también cubre "itf-men"/
+    "itf-women" de nivel bajo por el mismo sufijo -men/-women) sin
+    request adicional (viene en la MISMA página que ya se fetchea para
+    identidad). Reemplaza la necesidad de `get_tour_by_sex` (que hacía
+    un fetch aparte por jugador) para todo partido resuelto vía
+    match-detail -- 1 sola fuente de verdad, más barata. Fail-closed:
+    None si el href no matchea el patrón esperado (categorías raras
+    tipo dobles mixtos/junior)."""
+    if not href:
+        return None
+    slug = href.rstrip("/").rsplit("/", 1)[-1]
+    if slug.endswith("-women"):
+        return "WTA"
+    if slug.endswith("-men"):
+        return "ATP"
+    return None
 
 
 def _bio_row(html: str, label: str) -> tuple[str | None, str | None]:
@@ -586,15 +609,16 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
             winner_side = "b"
 
     info = _MATCH_DETAIL_MATCH_INFO_RE.search(html)
-    match_date = tournament = round_ = surface = None
+    match_date = tournament = round_ = surface = tour = None
     if info:
-        raw_date, tournament, round_, surface = info.groups()
+        raw_date, tournament_href, tournament, round_, surface = info.groups()
         d = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", raw_date.strip())
         if d:
             match_date = f"{d.group(3)}-{d.group(2)}-{d.group(1)}"
         tournament = tournament.strip() or None
         round_ = round_.strip() or None
         surface = surface.strip() or None
+        tour = _tour_from_tournament_href(tournament_href)
 
     a_rank_raw, b_rank_raw = _bio_row(html, "Singles ranking")
     a_birth_raw, b_birth_raw = _bio_row(html, "Birthdate")
@@ -606,6 +630,7 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
         "match_id": match_id,
         "match_date": match_date,
         "tournament": tournament,
+        "tour": tour,
         "round": round_,
         "surface": surface,
         "score": sets_score.strip() or None,

@@ -27,6 +27,7 @@ def _detail(**overrides) -> dict:
         "match_id": "2692781",
         "match_date": "2024-08-10",
         "tournament": "Toronto WTA",
+        "tour": "WTA",
         "round": "quarterfinal",
         "surface": "hard",
         "score": "6-4, 6-2",
@@ -58,6 +59,17 @@ def test_creates_new_row_on_first_save():
     assert row.player_b_name == "Sabalenka Aryna"
     assert row.player_a_ranking == 10
     assert row.player_a_birthdate.isoformat() == "2001-08-31"
+    assert row.tour == "WTA"
+
+
+def test_tour_persisted_from_get_match_detail_href_parsing():
+    # 2026-08-09, pedido explícito del usuario: "revisar si tennisexplorer
+    # muestra el torneo, tour y sexo de los players" -- confirmado, el
+    # link del torneo en match-detail YA trae la categoría real, se
+    # persiste sin request adicional.
+    save_match_detail(_detail(match_id="999888", tour="ATP", player_a_name="Djokovic Novak"))
+    row = MatchHistory.get(MatchHistory.match_id == "999888")
+    assert row.tour == "ATP"
     assert row.updated_at is None
 
 

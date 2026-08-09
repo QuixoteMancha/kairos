@@ -72,7 +72,7 @@ def _synthetic_recentform_match_id(name_a: str, name_b: str, match_date: str) ->
 # los timestamps propios (`fetched_at`/`updated_at`, nunca son "el dato
 # cambió", son metadata nuestra).
 _MATCH_DETAIL_COMPARABLE_FIELDS = (
-    "match_date", "tournament", "round", "surface", "score", "winner_side",
+    "match_date", "tournament", "tour", "round", "surface", "score", "winner_side",
     "player_a_name", "player_a_slug", "player_a_ranking", "player_a_birthdate",
     "player_a_height_cm", "player_a_weight_kg", "player_a_plays",
     "player_b_name", "player_b_slug", "player_b_ranking", "player_b_birthdate",
@@ -212,6 +212,12 @@ def save_match_detail(detail: dict[str, Any]) -> str:
         fields = {
             "match_date": detail.get("match_date"),
             "tournament": detail.get("tournament"),
+            # 2026-08-09, pedido explícito del usuario -- "revisar si
+            # tennisexplorer muestra el torneo, tour y sexo de los
+            # players": confirmado, el link del torneo en match-detail
+            # YA trae la categoría real (atp-men/wta-women/itf-*), sin
+            # request adicional -- ver `_tour_from_tournament_href`.
+            "tour": detail.get("tour"),
             "round": detail.get("round"),
             "surface": detail.get("surface"),
             "score": detail.get("score"),
