@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisScannedMatch, MatchHistory
 from database.historical.tennis.matchstats import has_match_stats_for_history, save_match_stats_for_history
+from database.historical.tennis.player_sync_status import get_pending_priority_requests, mark_player_synced
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.flashscore_scraper import find_match_id, get_match_statistics
 from scripts.tennis.wta_top200_historical_backfill import backfill_player
@@ -89,21 +90,37 @@ def fill_missing_stats_for_player(player_name: str, limit: int = _STATS_FILL_LIM
     return {"attempted": attempted, "filled": filled}
 
 
-def sync_match(match) -> dict:
-    """Sincroniza historial+stats de AMBOS jugadores de `match` (una
-    fila de `TennisScannedMatch`). Fail-closed por jugador -- un error
-    en uno no impide procesar al otro."""
+def sync_player(player_name: str) -> dict:
+    """Sincroniza UN jugador: historial reciente (TennisExplorer) +
+    stats faltantes (Flashscore), y marca `TennisPlayerSyncStatus`
+    (`mark_player_synced`) al terminar -- esto es lo que el engine de
+    scan (`engine.py`) consulta después vía `is_player_data_fresh`,
+    nunca fetcheando nada él mismo. Fail-closed por sub-paso: un error
+    en historial no impide intentar stats, y viceversa -- siempre se
+    marca sincronizado al final, sea cual sea el resultado real (un
+    intento real, aunque falle parcialmente, sigue siendo mejor
+    información que "nunca se intentó")."""
     years = _recent_years()
-    result: dict = {"market_id": match.market_id, "players": {}, "stats": {}}
+    result: dict = {}
+    try:
+        result["history"] = backfill_player(player_name, years=years)
+    except Exception as e:
+        result["history"] = {"status": "error", "error": str(e)}
+    try:
+        result["stats"] = fill_missing_stats_for_player(player_name)
+    except Exception as e:
+        result["stats"] = {"status": "error", "error": str(e)}
+    mark_player_synced(player_name)
+    return result
+
+
+def sync_match(match) -> dict:
+    """Sincroniza AMBOS jugadores de `match` (una fila de
+    `TennisScannedMatch`) vía `sync_player`. Fail-closed por jugador --
+    un error en uno no impide procesar al otro."""
+    result: dict = {"market_id": match.market_id, "players": {}}
     for side, name in (("player_a", match.player_a_name), ("player_b", match.player_b_name)):
-        try:
-            result["players"][side] = backfill_player(name, years=years)
-        except Exception as e:
-            result["players"][side] = {"status": "error", "error": str(e)}
-        try:
-            result["stats"][side] = fill_missing_stats_for_player(name)
-        except Exception as e:
-            result["stats"][side] = {"status": "error", "error": str(e)}
+        result["players"][side] = sync_player(name)
     return result
 
 
@@ -113,6 +130,19 @@ def run_once() -> dict:
         get_top_rankings(200, "both")
     except Exception:
         pass
+
+    # 2026-08-09, pedido explícito del usuario -- cola de prioridad
+    # PRIMERO, antes del barrido normal por partido: el engine de scan
+    # puede pedir "actualizá a este jugador ya" (`request_priority_sync`)
+    # cuando detecta uno nuevo, y necesita que se procese antes de
+    # decidir con él, no en cualquier momento del ciclo de fondo.
+    priority_synced = 0
+    for player_name in get_pending_priority_requests():
+        try:
+            sync_player(player_name)
+            priority_synced += 1
+        except Exception as e:
+            print(f"[tennis_match_history_sync_worker] error prioridad {player_name}: {e}", flush=True)
 
     with db_historical.connection_context():
         matches = list(
@@ -131,7 +161,7 @@ def run_once() -> dict:
             match.save()
         synced += 1
 
-    summary = {"matches_synced": synced, "candidates_found": len(matches)}
+    summary = {"priority_synced": priority_synced, "matches_synced": synced, "candidates_found": len(matches)}
     print(f"[tennis_match_history_sync_worker] {summary}", flush=True)
     return summary
 

@@ -255,7 +255,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
         ChartedMatch, ChartedMatchStats, TmlDatabaseMatch, TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
-        MatchHistory, TennisMatchHistoryUnvalidated,
+        MatchHistory, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
     )
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
 
@@ -276,6 +276,10 @@ def init_db_historical() -> None:
         # que no se pudieron validar contra Sackmann, "en una tabla
         # aparte" (nunca se descartan). Tabla nueva.
         TennisMatchHistoryUnvalidated,
+        # 2026-08-09, pedido explícito del usuario -- cola de prioridad +
+        # frescura de sync por jugador (engine.py nunca fetchea en vivo,
+        # solo lee esto). Tabla nueva.
+        TennisPlayerSyncStatus,
         TeamMatchHistory, TeamHeadToHead, MlbGameHistory,
         # 2026-08-05, pedido explícito del usuario -- tracking de scan +
         # ticks tick-by-tick para MLB, mismo patrón que tenis (tablas

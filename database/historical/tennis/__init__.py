@@ -28,6 +28,7 @@ from database.historical.tennis.models import (
     MatchStatsSet as TennisMatchStatsSet,
     TennisPlayerBio,
     TennisPlayerRanking,
+    TennisPlayerSyncStatus,
     TennisServeCalibration,
     TennisMatchHistory,
     MatchHistory,
@@ -49,6 +50,9 @@ from database.historical.tennis.models import (
     ChartedMatchStats,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
+from database.historical.tennis.player_sync_status import (
+    request_priority_sync, is_player_data_fresh, get_pending_priority_requests, mark_player_synced,
+)
 # 2026-08-08, corregido tras revisión del usuario ("dejaste un modelo
 # propio de tennis en models.py"): `Match`/`ProbabilityTick`/
 # `MatchWeather`/`MatchStats`/`MatchStatsSet` son 100% tenis en la
@@ -105,6 +109,8 @@ __all__ = [
     "TennisMatchWeather",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
     "TennisPlayerBio",
+    "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
+    "get_pending_priority_requests", "mark_player_synced",
     "ChartedMatch", "ChartedMatchStats",
     "find_overlapping_scanned_match", "save_charted_match", "save_charted_match_stats",
     "import_or_merge_match",

@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisScannedMatch, MatchHistory, TennisMatchStats
+from database.historical.tennis import TennisScannedMatch, MatchHistory, TennisMatchStats, TennisPlayerSyncStatus
 from workers.tennis_match_history_sync_worker import (
     run_once, sync_match, fill_missing_stats_for_player,
 )
@@ -22,11 +22,13 @@ def clean_db():
         TennisScannedMatch.delete().execute()
         MatchHistory.delete().execute()
         TennisMatchStats.delete().execute()
+        TennisPlayerSyncStatus.delete().execute()
     yield
     with db_historical.connection_context():
         TennisScannedMatch.delete().execute()
         MatchHistory.delete().execute()
         TennisMatchStats.delete().execute()
+        TennisPlayerSyncStatus.delete().execute()
 
 
 def _now():
@@ -55,8 +57,8 @@ def test_sync_match_calls_backfill_player_for_both_players():
     assert mock_backfill.call_count == 2
     called_names = {c.args[0] for c in mock_backfill.call_args_list}
     assert called_names == {"Novak Djokovic", "Carlos Alcaraz"}
-    assert result["players"]["player_a"]["status"] == "ok"
-    assert result["players"]["player_b"]["status"] == "ok"
+    assert result["players"]["player_a"]["history"]["status"] == "ok"
+    assert result["players"]["player_b"]["history"]["status"] == "ok"
 
 
 def test_sync_match_uses_recent_years_only():
@@ -90,8 +92,8 @@ def test_sync_match_one_player_error_does_not_block_the_other():
     ):
         result = sync_match(match)
 
-    assert result["players"]["player_a"]["status"] == "error"
-    assert result["players"]["player_b"]["status"] == "ok"
+    assert result["players"]["player_a"]["history"]["status"] == "error"
+    assert result["players"]["player_b"]["history"]["status"] == "ok"
 
 
 def test_run_once_marks_matches_as_synced_and_skips_them_next_time():
@@ -162,3 +164,50 @@ def test_fill_missing_stats_skips_already_covered_matches():
         result = fill_missing_stats_for_player("Novak Djokovic")
     mock_find.assert_not_called()
     assert result == {"attempted": 0, "filled": 0}
+
+
+# --- cola de prioridad (2026-08-09, pedido explícito del usuario --
+# engine.py pide sync urgente para jugadores nuevos, el worker debe
+# procesarlos ANTES del barrido normal por partido) ---
+
+def test_sync_player_marks_player_synced():
+    from database.historical.tennis import is_player_data_fresh
+    with patch(
+        "workers.tennis_match_history_sync_worker.backfill_player", return_value={"status": "ok"},
+    ), patch(
+        "workers.tennis_match_history_sync_worker.fill_missing_stats_for_player",
+        return_value={"attempted": 0, "filled": 0},
+    ):
+        from workers.tennis_match_history_sync_worker import sync_player
+        sync_player("Novak Djokovic")
+    assert is_player_data_fresh("Novak Djokovic") is True
+
+
+def test_run_once_processes_priority_queue_before_regular_batch():
+    from database.historical.tennis import request_priority_sync
+
+    request_priority_sync("Iga Swiatek")  # nunca apareció en ningún Match, pedido directo
+
+    with patch(
+        "workers.tennis_match_history_sync_worker.sync_player", return_value={},
+    ) as mock_sync_player, patch(
+        "workers.tennis_match_history_sync_worker.get_top_rankings",
+    ):
+        summary = run_once()
+
+    assert summary["priority_synced"] == 1
+    mock_sync_player.assert_any_call("Iga Swiatek")
+
+
+def test_run_once_priority_request_processed_only_once():
+    from database.historical.tennis import request_priority_sync, mark_player_synced
+
+    request_priority_sync("Iga Swiatek")
+    # `sync_player` real es lo que marca `mark_player_synced` -- el mock
+    # tiene que replicar ESE efecto para que la cola avance de verdad.
+    with patch(
+        "workers.tennis_match_history_sync_worker.sync_player", side_effect=lambda n: mark_player_synced(n),
+    ), patch("workers.tennis_match_history_sync_worker.get_top_rankings"):
+        run_once()
+        summary2 = run_once()
+    assert summary2["priority_synced"] == 0

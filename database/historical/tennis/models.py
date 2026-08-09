@@ -401,6 +401,40 @@ class TmlDatabaseMatch(HistoricalBaseModel):
     minutes = IntegerField(null=True)
 
 
+class TennisPlayerSyncStatus(HistoricalBaseModel):
+    """Estado de sincronización de `MatchHistory`/ranking/stats POR
+    JUGADOR (no por partido) -- 2026-08-09, pedido explícito del
+    usuario: "el engine de scan sólo debe usar la data de la base...
+    debe haber una columna/campo de última actualización... se podrá
+    lanzar una orden al worker... indicarle prioridad".
+
+    Cola de prioridad simple vía DB (sin message broker en este stack,
+    ambos procesos son contenedores separados que solo comparten la
+    base): `priority_requested_at` lo setea el ENGINE de scan
+    (`engine.py`) cuando detecta un jugador nuevo y necesita su data
+    actualizada YA, antes de decidir con él. El worker
+    (`workers/tennis_match_history_sync_worker.py`) revisa esta tabla
+    PRIMERO en cada ciclo (antes de su barrido normal por partido
+    viejo), procesa esos jugadores con prioridad, y marca
+    `priority_processed_at` al terminar. `match_history_updated_at`/
+    `stats_checked_at` se actualizan en CADA sync real (prioritario o
+    no) -- son lo que el engine consulta para decidir si la data está
+    lo bastante fresca para confiar en ella, SIN fetchear nada él
+    mismo (fail-closed: si nunca se sincronizó, o hay un pedido de
+    prioridad todavía sin procesar, el engine debe tratar a ese
+    jugador como "no listo" y saltarlo ese ciclo, no adivinar)."""
+
+    class Meta:
+        table_name = "tennis_player_sync_status"
+        indexes = ((("player_name",), True),)
+
+    player_name = CharField(unique=True)
+    match_history_updated_at = DateTimeField(null=True)
+    stats_checked_at = DateTimeField(null=True)
+    priority_requested_at = DateTimeField(null=True)
+    priority_processed_at = DateTimeField(null=True)
+
+
 class TennisPlayerRanking(HistoricalBaseModel):
     class Meta:
         table_name = "tennis_player_ranking"
