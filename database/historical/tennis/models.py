@@ -171,9 +171,18 @@ class MatchStatsSet(HistoricalBaseModel):
 
     class Meta:
         table_name = "tennis_match_stats_set"
-        indexes = ((("match", "set_number"), True),)
+        indexes = ((("match", "set_number"), True), (("match_history", "set_number"), True))
 
-    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE")
+    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE", null=True)
+    # 2026-08-09, pedido explícito del usuario -- mismo patrón que
+    # `MatchStats.match_history`/`MatchWeather.match_history`: `match`
+    # (arriba) sigue apuntando a `Match` (tracker vivo de Kalshi,
+    # retrocompatibilidad) por si alguna fila real ya está vinculada
+    # así; `match_history` es el vínculo NUEVO para partidos con
+    # identidad ya cierta en `MatchHistory` -- da `match.set_stats`
+    # (queryset de sets de ESE partido, ya filtrado por el FK, sin
+    # necesidad de re-filtrar por match del lado del caller).
+    match_history = DeferredForeignKey("MatchHistory", backref="set_stats", on_delete="CASCADE", null=True)
     set_number = IntegerField()
     raw_stats_json = TextField(null=True)
     fetched_at = DateTimeField(null=True)

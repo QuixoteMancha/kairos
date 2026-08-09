@@ -252,11 +252,17 @@ def init_db_historical() -> None:
         TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
-        TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
+        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
         TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, TennisExplorerPlayerSlug,
         MatchHistory, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
     )
+    # `TennisMatchStatsSet` (2026-08-09, pedido explícito del usuario --
+    # match.set_stats): estaba definida en models.py pero NUNCA se había
+    # registrado acá -- gap real preexistente, la tabla no existía en
+    # producción. Se crea limpia con el esquema nuevo (match/match_history
+    # ambos nullable desde el día 1, sin el problema de NOT NULL legacy
+    # que sí tuvo MatchWeather).
     # ChartedMatch/ChartedMatchStats -- REMOVIDOS 2026-08-09 (ver
     # models.py), ya fusionados en MatchHistory/MatchStats.
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
@@ -268,7 +274,7 @@ def init_db_historical() -> None:
         TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
-        TennisMatchWeather, TennisMatchStats, TennisPlayerBio,
+        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
         TournamentLocationCache,
         # 2026-08-08, pedido explícito del usuario -- 1 fila por partido
         # real (no 2 como TennisMatchHistory), con identidad resuelta
@@ -366,6 +372,10 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "match_history", "minutes", "INTEGER")
     _add_column_if_missing(db_historical, "match_history", "best_of", "INTEGER")
     _add_column_if_missing(db_historical, "match_history", "level", "VARCHAR(255)")
+    # `tennis_match_stats_set.match_history_id` -- defensivo, la tabla
+    # se crea limpia con esta columna vía create_tables() en la mayoría
+    # de los entornos, pero por si ya existía sin ella en algún dev DB.
+    _add_column_if_missing(db_historical, "tennis_match_stats_set", "match_history_id", "INTEGER")
     _add_column_if_missing(db_historical, "tennis_match_weather", "match_history_id", "INTEGER")
     # `charted_match` -- migraciones de columna REMOVIDAS 2026-08-09
     # junto con el modelo (ver models.py): la tabla/clase ya no existe,

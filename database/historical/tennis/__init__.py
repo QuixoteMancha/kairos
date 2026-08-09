@@ -97,7 +97,7 @@ __all__ = [
     "save_probability_tick", "mark_match_settled", "backfill_missing_tournaments",
     "backfill_missing_rounds", "filter_new_markets",
     "TennisRecentResult", "save_recent_results", "get_recent_results",
-    "TennisMatchWeather",
+    "TennisMatchWeather", "TennisMatchStatsSet",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
     "TennisPlayerBio",
     "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
