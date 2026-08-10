@@ -267,7 +267,19 @@ class Player(HistoricalBaseModel):
     fila de `Player` con 1 solo `tour`)."""
 
     class Meta:
-        table_name = "player"
+        # 2026-08-10, bug real encontrado desplegando en producción: YA
+        # existía una tabla `player` huérfana en la DB (era, "nombre"/
+        # "edad"/"sofascore_id"/etc., resto del proyecto PRE-PIVOT a
+        # mercados de predicción, sin modelo actual en el código --
+        # nunca se dropeó al migrar). `create_tables(safe=True)` usa
+        # CREATE TABLE IF NOT EXISTS, así que silenciosamente NO creó
+        # la tabla nueva -- la vieja quedó ahí con su esquema viejo,
+        # `Player.canonical_name` no existía. Se usa `tennis_player`
+        # (mismo prefijo que el resto de las tablas de este archivo,
+        # ej. `tennis_player_bio`) para evitar la colisión -- la tabla
+        # `player` vieja se deja INTACTA, sin tocar (dato huérfano, no
+        # se borra sin decisión explícita aparte).
+        table_name = "tennis_player"
         indexes = ((("canonical_name",), True),)
 
     # 2026-08-10: nombre COMPLETO real, en el formato nativo de
