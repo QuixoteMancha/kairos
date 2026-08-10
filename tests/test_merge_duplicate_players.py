@@ -103,6 +103,39 @@ def test_apply_never_overwrites_survivor_confirmed_field():
     assert reloaded.tour == "WTA"
 
 
+def test_find_duplicate_pairs_deduplicates_symmetric_direction():
+    # Bug real encontrado en producción (2026-08-10): "Naomi Osaka" y
+    # "Osaka Naomi" ambos existían como Player, y AMBOS calificaban como
+    # candidato de reorden (cada uno con texto crudo TE sin normalizar
+    # en distintas filas) -- sin dedup, el par aparecía 2 veces en
+    # direcciones opuestas, causando doble-merge y FKs huérfanas.
+    p1 = Player.create(canonical_name="Osaka Naomi", created_at=_now())
+    p2 = Player.create(canonical_name="Naomi Osaka", created_at=_now())
+    _row("1", "Opponent X", "Osaka Naomi", player_b_id=p1.id, source="tennisexplorer")
+    _row("2", "Opponent Y", "Naomi Osaka", player_b_id=p2.id, source="tennisexplorer")
+
+    pairs = find_duplicate_pairs()
+
+    assert len(pairs) == 1
+
+
+def test_run_apply_symmetric_pair_leaves_exactly_one_player_alive():
+    p1 = Player.create(canonical_name="Osaka Naomi", created_at=_now())
+    p2 = Player.create(canonical_name="Naomi Osaka", created_at=_now())
+    _row("1", "Opponent X", "Osaka Naomi", player_b_id=p1.id, source="tennisexplorer")
+    _row("2", "Opponent Y", "Naomi Osaka", player_b_id=p2.id, source="tennisexplorer")
+
+    run(apply=True)
+
+    survivors = list(Player.select())
+    assert len(survivors) == 1
+    # y NINGÚN match_history debe quedar con FK huérfana
+    m1 = MatchHistory.get(MatchHistory.match_id == "1")
+    m2 = MatchHistory.get(MatchHistory.match_id == "2")
+    assert m1.player_b_id == survivors[0].id
+    assert m2.player_b_id == survivors[0].id
+
+
 def test_dry_run_does_not_mutate():
     dup = Player.create(canonical_name="Knapp Karin", created_at=_now())
     survivor = Player.create(canonical_name="Karin Knapp", created_at=_now())

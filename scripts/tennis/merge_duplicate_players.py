@@ -53,10 +53,27 @@ def find_duplicate_pairs() -> list[tuple[Player, Player]]:
     nombre crudo sin normalizar vs. uno ya correcto)."""
     candidates = find_reorder_candidates()
     pairs: list[tuple[Player, Player]] = []
+    seen_unordered_pairs: set[frozenset[int]] = set()
     for dup, proposed in candidates:
         survivor = Player.get_or_none(Player.canonical_name == proposed)
         if survivor is None or survivor.id == dup.id:
             continue
+        # BUG REAL encontrado en vivo en producción (2026-08-10):
+        # `find_reorder_candidates` puede devolver el MISMO par de
+        # jugadores en AMBAS direcciones (ej. dup=A->survivor=B Y
+        # dup=B->survivor=A) cuando ambos nombres existen como texto
+        # crudo sin normalizar en distintas filas de MatchHistory. Sin
+        # esta dedup, el 2do merge del ciclo operaba sobre un objeto
+        # `survivor` en memoria YA BORRADO por el 1er merge -- repuntó
+        # matches a un Player inexistente Y borró al sobreviviente real
+        # del 1er merge, dejando ~23,668 FKs huérfanas (incidente real,
+        # detectado y reparado por `repair_orphaned_player_fk_after_
+        # merge_bug.py`). Cada par {dup.id, survivor.id} se procesa
+        # UNA sola vez, sin importar en qué dirección se detectó primero.
+        key = frozenset({dup.id, survivor.id})
+        if key in seen_unordered_pairs:
+            continue
+        seen_unordered_pairs.add(key)
         pairs.append((dup, survivor))
     return pairs
 
@@ -71,6 +88,28 @@ def _bio_conflict(dup: Player, survivor: Player) -> str | None:
 
 
 def _merge_one(dup: Player, survivor: Player, apply: bool) -> dict:
+    # Defensa en profundidad (además del dedup de pares en
+    # `find_duplicate_pairs`): re-verificar en vivo que AMBAS filas
+    # todavía existen antes de mutar nada -- si `run()` procesa varios
+    # pares en la misma pasada, un merge previo puede haber borrado uno
+    # de los 2 IDs de un par posterior por una razón no anticipada acá.
+    # Fail-closed: si alguno ya no existe, saltar y reportar en vez de
+    # operar sobre un objeto en memoria obsoleto (root cause real del
+    # incidente de 23,668 FKs huérfanas, 2026-08-10).
+    if apply:
+        if Player.get_or_none(Player.id == dup.id) is None:
+            return {
+                "dup_id": dup.id, "dup_name": dup.canonical_name,
+                "survivor_id": survivor.id, "survivor_name": survivor.canonical_name,
+                "status": "skipped_stale", "reason": "dup no longer exists",
+            }
+        if Player.get_or_none(Player.id == survivor.id) is None:
+            return {
+                "dup_id": dup.id, "dup_name": dup.canonical_name,
+                "survivor_id": survivor.id, "survivor_name": survivor.canonical_name,
+                "status": "skipped_stale", "reason": "survivor no longer exists",
+            }
+
     conflict_field = _bio_conflict(dup, survivor)
     if conflict_field is not None:
         return {
@@ -108,16 +147,20 @@ def run(apply: bool) -> dict:
     pairs = find_duplicate_pairs()
     merged = []
     conflicts = []
+    skipped_stale = []
     for dup, survivor in pairs:
         result = _merge_one(dup, survivor, apply=apply)
         if result["status"] == "conflict":
             conflicts.append(result)
+        elif result["status"] == "skipped_stale":
+            skipped_stale.append(result)
         else:
             merged.append(result)
     return {
         "pairs_found": len(pairs),
         "merged": merged,
         "conflicts_skipped": conflicts,
+        "stale_skipped": skipped_stale,
         "mode": "apply" if apply else "dry-run",
     }
 
