@@ -15,7 +15,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     get_player_recent_matches, _to_iso_date, _derive_result_from_score,
     resolve_player_slug, _extract_href_slug,
     get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix, get_tour_by_sex,
-    _tour_from_tournament_href, get_next_match,
+    _tour_from_tournament_href, get_next_match, _te_native_to_nombre_apellido,
 )
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
@@ -440,14 +440,14 @@ def test_get_match_detail_parses_real_page_structure():
         "surface": "hard",
         "score": "6-4, 6-2",
         "winner_side": "a",
-        "player_a_name": "Anisimova Amanda",
+        "player_a_name": "Amanda Anisimova",
         "player_a_slug": "anisimova-3be62",
         "player_a_ranking": 10,
         "player_a_birthdate": "2001-08-31",
         "player_a_height_cm": 180,
         "player_a_weight_kg": 59,
         "player_a_plays": "right",
-        "player_b_name": "Sabalenka Aryna",
+        "player_b_name": "Aryna Sabalenka",
         "player_b_slug": "sabalenka",
         "player_b_ranking": 1,
         "player_b_birthdate": "1998-05-05",
@@ -455,6 +455,25 @@ def test_get_match_detail_parses_real_page_structure():
         "player_b_weight_kg": 80,
         "player_b_plays": "right",
     }
+
+
+def test_te_native_to_nombre_apellido_reorders_simple_name():
+    assert _te_native_to_nombre_apellido("Svitolina Elina") == "Elina Svitolina"
+
+
+def test_te_native_to_nombre_apellido_handles_compound_surname():
+    assert (
+        _te_native_to_nombre_apellido("Bouzas Maneiro Jessica")
+        == "Jessica Bouzas Maneiro"
+    )
+
+
+def test_te_native_to_nombre_apellido_fail_closed_single_token():
+    assert _te_native_to_nombre_apellido("Svitolina") == "Svitolina"
+
+
+def test_te_native_to_nombre_apellido_fail_closed_none():
+    assert _te_native_to_nombre_apellido(None) is None
 
 
 def test_tour_from_tournament_href_resolves_atp_and_wta():
@@ -542,8 +561,8 @@ def test_get_match_detail_resolves_future_unplayed_match():
     ):
         result = get_match_detail("3290769")
     assert result is not None
-    assert result["player_a_name"] == "Alexandrova Ekaterina"
-    assert result["player_b_name"] == "Svitolina Elina"
+    assert result["player_a_name"] == "Ekaterina Alexandrova"
+    assert result["player_b_name"] == "Elina Svitolina"
     assert result["score"] is None
     assert result["winner_side"] is None
     assert result["tournament"] == "Toronto WTA"

@@ -585,6 +585,34 @@ _MATCH_DETAIL_MATCH_INFO_RE = re.compile(
 )
 
 
+def _te_native_to_nombre_apellido(name: str | None) -> str | None:
+    """Convierte un nombre en formato NATIVO de TennisExplorer
+    ("Apellido(s) Nombre", ej. "Svitolina Elina", confirmado en vivo
+    repetidas veces en producción) a la convención "Nombre Apellido"
+    (ej. "Elina Svitolina") -- 2026-08-10, pedido explícito del usuario:
+    "para el backfill, primero ordenemos los nombres y apellidos, y que
+    el scraper de tennisexplorer cuando entrega el nombre del player lo
+    deje con esa nomenclatura". En TE, el ÚLTIMO token es siempre el
+    nombre de pila; todo lo anterior es el apellido (soporta apellidos
+    compuestos, ej. "Bouzas Maneiro Jessica" -> "Jessica Bouzas
+    Maneiro"). Aplicado ACÁ (el punto de entrada real de todo nombre
+    completo que resuelve el proyecto, `get_match_detail`) para que
+    TODO consumidor (`save_match_detail`, el worker de backfill
+    masivo, la migración a `Player`) reciba la convención ya
+    normalizada, sin tener que reordenar después en cada lugar.
+
+    Fail-closed: `None`/nombre de 1 solo token se devuelven tal cual
+    (nunca se inventa un apellido que reordenar)."""
+    if not name:
+        return name
+    tokens = name.strip().split(" ")
+    if len(tokens) < 2:
+        return name
+    given = tokens[-1]
+    surname = " ".join(tokens[:-1])
+    return f"{given} {surname}"
+
+
 def _tour_from_tournament_href(href: str | None) -> str | None:
     """"/santiago/2026/atp-men/" -> "ATP", "/masters-cup-wta/2025/wta-women/"
     -> "WTA" -- 2026-08-09, pedido explícito del usuario: "revisar si
@@ -714,14 +742,14 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
         "surface": surface,
         "score": sets_score.strip() if sets_score else None,
         "winner_side": winner_side,
-        "player_a_name": a_name.strip(),
+        "player_a_name": _te_native_to_nombre_apellido(a_name.strip()),
         "player_a_slug": a_slug,
         "player_a_ranking": _parse_int_prefix(a_rank_raw),
         "player_a_birthdate": _parse_birthdate(a_birth_raw),
         "player_a_height_cm": _parse_int_prefix(a_height_raw),
         "player_a_weight_kg": _parse_int_prefix(a_weight_raw),
         "player_a_plays": a_plays_raw if a_plays_raw and a_plays_raw != "-" else None,
-        "player_b_name": b_name.strip(),
+        "player_b_name": _te_native_to_nombre_apellido(b_name.strip()),
         "player_b_slug": b_slug,
         "player_b_ranking": _parse_int_prefix(b_rank_raw),
         "player_b_birthdate": _parse_birthdate(b_birth_raw),

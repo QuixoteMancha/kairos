@@ -63,6 +63,7 @@ from database.historical.tennis.writer import _resolve_and_save_via_match_detail
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
+    _te_native_to_nombre_apellido,
 )
 
 _YEARS = list(range(2016, 2027))
@@ -109,25 +110,6 @@ def _surname_key_from_abbrev(abbrev: str) -> str:
         return ""
     surname = parts[0]
     return surname.replace("-", " ").strip().lower()
-
-
-def _te_native_to_nombre_apellido(name: str) -> str:
-    """Convierte un nombre en formato NATIVO de TennisExplorer
-    ("Apellido(s) Nombre", ej. "Svitolina Elina" -- confirmado en vivo
-    repetidas veces esta sesión, ver `get_match_detail`) a la
-    convención "Nombre Apellido" (ej. "Elina Svitolina") -- 2026-08-10,
-    pedido explícito del usuario: "que integre lo de los nombres que
-    estén normalizados como nombre y apellido". En TE, el ÚLTIMO token
-    es siempre el nombre de pila; todo lo anterior es el apellido
-    (soporta apellidos compuestos, ej. "Bouzas Maneiro Jessica" ->
-    "Jessica Bouzas Maneiro"). Fail-closed: nombre de 1 solo token se
-    devuelve tal cual (no hay apellido que reordenar)."""
-    tokens = name.strip().split(" ")
-    if len(tokens) < 2:
-        return name
-    given = tokens[-1]
-    surname = " ".join(tokens[:-1])
-    return f"{given} {surname}"
 
 
 def _get_candidate_slugs(player_name: str) -> list[str]:
