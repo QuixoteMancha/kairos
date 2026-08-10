@@ -13,9 +13,12 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import MatchHistory, TennisMatchHistoryUnvalidated
+from unittest.mock import patch
+
 from scripts.tennis.dedupe_triplicated_match_history import (
     run_dedup, prune_resolved_candidates_from_queue, dedupe_unvalidated_queue,
     _surname_guess, _canonical_key, _names_confirm_identity,
+    _approx_identity_key, _is_legit_mixed_exhibition, find_tour_sex_mismatches, fix_tour_sex_mismatches,
 )
 
 
@@ -216,3 +219,92 @@ def test_dedupe_unvalidated_queue_does_not_merge_same_surname_different_person()
 
     assert result["reciprocal_pairs_merged"] == 0
     assert TennisMatchHistoryUnvalidated.select().count() == 2
+
+
+def test_approx_identity_key_groups_name_variants():
+    # nota: la heurística "token más largo = apellido" puede fallar en
+    # casos reales donde el nombre de pila es más largo que el apellido
+    # (ej. "Sebastian" > "Baez") -- lo importante es que la clave sea
+    # CONSISTENTE entre variantes del mismo nombre, no cuál mitad elige.
+    key_full_1 = _approx_identity_key("Baez Sebastian")
+    key_full_2 = _approx_identity_key("Sebastian Baez")
+    assert key_full_1 == key_full_2 == "sebastian|b"
+
+
+def test_approx_identity_key_fail_closed_single_token():
+    assert _approx_identity_key("Baez") is None
+
+
+def test_is_legit_mixed_exhibition_matches_known_patterns():
+    assert _is_legit_mixed_exhibition("Battle of the Sexes") is True
+    assert _is_legit_mixed_exhibition("Mixed Exhibition Match") is True
+    assert _is_legit_mixed_exhibition("Toronto WTA") is False
+    assert _is_legit_mixed_exhibition(None) is False
+
+
+def test_find_tour_sex_mismatches_detects_real_contradiction():
+    # 2026-08-10, bug real encontrado en producción: "Baez Sebastian vs
+    # Brooksby Jenson" (ambos ATP reales) con una fila tour="ATP"
+    # (Sackmann, fuente de verdad) y otra tour="WTA" (colisión real de
+    # catálogo de torneo ambiguo, ej. "Rome" ATP+WTA la misma semana).
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Rome")
+
+    mismatches = find_tour_sex_mismatches()
+
+    assert "sebastian|b" in mismatches
+    assert len(mismatches["sebastian|b"]) == 2
+
+
+def test_find_tour_sex_mismatches_no_contradiction_when_tour_consistent():
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("2", "Baez Sebastian", "Brooksby Jenson", tour="ATP", tournament="Rome")
+
+    assert find_tour_sex_mismatches() == {}
+
+
+def test_fix_tour_sex_mismatches_corrects_real_mismatch_via_confirmed_sex():
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    row_wta = _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Rome")
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value="ATP",
+    ):
+        result = fix_tour_sex_mismatches()
+
+    assert result["rows_fixed"] == 1
+    fixed = MatchHistory.get(MatchHistory.match_id == "999")
+    assert fixed.tour == "ATP"
+
+
+def test_fix_tour_sex_mismatches_leaves_legit_mixed_exhibition_untouched():
+    # "un jugador se hombre y el otro femenino por un amistoso (Battle
+    # of the Sexes), pero se debe confirmar el tournament" -- pedido
+    # explícito del usuario.
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Battle of the Sexes")
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value="ATP",
+    ):
+        result = fix_tour_sex_mismatches()
+
+    assert result["rows_fixed"] == 0
+    assert result["rows_skipped_legit_mixed_exhibition"] == 1
+    untouched = MatchHistory.get(MatchHistory.match_id == "999")
+    assert untouched.tour == "WTA"  # sin tocar, exhibición legítima
+
+
+def test_fix_tour_sex_mismatches_fail_closed_when_sex_not_confirmed():
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Rome")
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value=None,
+    ):
+        result = fix_tour_sex_mismatches()
+
+    assert result["rows_fixed"] == 0
+    assert result["groups_unresolved_no_sex_confirmed"] == 2  # 2 grupos, 1 por cada jugador contradictorio
+    untouched = MatchHistory.get(MatchHistory.match_id == "999")
+    assert untouched.tour == "WTA"  # sin confirmación real, no se toca

@@ -312,7 +312,157 @@ def prune_resolved_candidates_from_queue() -> dict[str, Any]:
     return result
 
 
+def _approx_identity_key(name: str) -> str | None:
+    """Clave aproximada (apellido + inicial del nombre de pila) para
+    AGRUPAR apariciones del mismo jugador/a real entre filas -- más
+    laxa que `_names_confirm_identity` (que exige nombre completo o
+    inicial exacta en AMBOS lados) a propósito, para no perderse
+    variantes reales de un mismo nombre (ej. "Baez Sebastian" /
+    "Sebastian Baez" / "Baez S." -> misma clave "baez|s"). El riesgo
+    residual de colisión (2 personas reales, mismo apellido+inicial,
+    ej. hipotético "Ruud C." para Casper Y Christian si alguna vez
+    apareciera abreviado así) se cubre DESPUÉS con la confirmación real
+    contra la bio de TennisExplorer (`get_tour_by_sex`), nunca se
+    arregla nada solo con esta clave."""
+    tokens = _tokens(name)
+    if len(tokens) < 2:
+        return None
+    surname = max(tokens, key=len).lower()
+    given = [t for t in tokens if t.lower() != surname]
+    if not given:
+        return None
+    return f"{surname}|{given[0][0].lower()}"
+
+
+# 2026-08-10, pedido explícito del usuario: "un jugador se ahombre[e] y
+# el otro femenino por un amistoso (Battle of the Sexes), pero se debe
+# confirmar el tournament, también antes de decidir" -- palabras reales
+# de torneo que indican un partido mixto LEGÍTIMO (no un bug de tour) --
+# lista conservadora, ampliable si aparecen más casos reales.
+_MIXED_EXHIBITION_TOURNAMENT_KEYWORDS = ("battle of the sexes", "mixed exhibition", "battle of sexes")
+
+
+def _is_legit_mixed_exhibition(tournament: str | None) -> bool:
+    if not tournament:
+        return False
+    t = tournament.lower()
+    return any(kw in t for kw in _MIXED_EXHIBITION_TOURNAMENT_KEYWORDS)
+
+
+def find_tour_sex_mismatches() -> dict[str, list]:
+    """SIN RED -- cruza SOLO datos que ya tenemos en `MatchHistory`: un
+    jugador/a real nunca debería aparecer con `tour="ATP"` en una fila y
+    `tour="WTA"` en otra (salvo el caso real de exhibición mixta, ver
+    `_is_legit_mixed_exhibition`) -- si aparece, es una contradicción
+    real (bug de asignación de tour en algún punto de la resolución, ej.
+    colisión de catálogo de torneo ambiguo como "Rome", que tiene evento
+    ATP Y WTA reales la misma semana).
+
+    Devuelve `{approx_key: [(row_id, name, tour, tournament, match_date), ...]}`
+    SOLO para claves con 2+ tours distintos entre sus filas -- candidatos
+    a verificar con `fix_tour_sex_mismatches` (que sí usa red, acotado a
+    estos candidatos, no a toda la tabla)."""
+    init_db_historical()
+    with db_historical.connection_context():
+        rows = list(
+            MatchHistory.select(
+                MatchHistory.id, MatchHistory.player_a_name, MatchHistory.player_b_name,
+                MatchHistory.tour, MatchHistory.tournament, MatchHistory.match_date,
+            ).where(MatchHistory.tour.is_null(False))
+        )
+
+    buckets: dict[str, list[tuple]] = defaultdict(list)
+    for r in rows:
+        for name in (r.player_a_name, r.player_b_name):
+            key = _approx_identity_key(name)
+            if key:
+                buckets[key].append((r.id, name, r.tour, r.tournament, r.match_date))
+
+    return {key: entries for key, entries in buckets.items() if len({e[2] for e in entries}) > 1}
+
+
+def fix_tour_sex_mismatches() -> dict[str, Any]:
+    """PASO con red, ACOTADO solo a los candidatos reales de
+    `find_tour_sex_mismatches` (nunca a toda la tabla -- inviable en
+    volumen y redundante, la inmensa mayoría de filas no tiene
+    contradicción). Para cada grupo contradictorio: confirma el sexo
+    REAL vía la bio de TennisExplorer (`get_tour_by_sex`, campo "Sex:
+    man"/"Sex: woman", no una heurística) usando el nombre más completo
+    disponible del grupo. Con el tour confirmado:
+
+      - Fila cuyo `tour` YA coincide con el confirmado: sin cambios.
+      - Fila cuyo `tour` NO coincide: si el `tournament` de esa fila
+        puntual matchea un patrón real de exhibición mixta (Battle of
+        the Sexes), se DEJA INTACTA (partido legítimamente mixto, no un
+        bug) -- pedido explícito del usuario. Si no, se corrige el
+        `tour` al confirmado (bug real de asignación).
+
+    Fail-closed: si `get_tour_by_sex` no logra confirmar (red/parseo/
+    verificación de identidad fallan), el grupo entero se deja intacto
+    y se reporta aparte -- nunca se adivina un tour sin confirmación
+    real."""
+    from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_tour_by_sex
+
+    groups = find_tour_sex_mismatches()
+    unresolved_groups = 0
+    # 2026-08-10, bug real encontrado en el propio test: un MISMO
+    # partido puede aparecer en 2 GRUPOS distintos a la vez (uno por
+    # cada jugador contradictorio, ej. Baez Y Brooksby ambos generan su
+    # propio grupo para el mismo partido real) -- deduplicar por
+    # `row_id` ANTES de aplicar/contar, para no arreglar (ni reportar)
+    # la misma fila 2 veces.
+    to_fix: dict[int, dict[str, Any]] = {}
+    to_skip: dict[int, dict[str, Any]] = {}
+
+    for key, entries in groups.items():
+        # nombre más completo del grupo (más tokens = más info) para el
+        # fetch real de sexo.
+        best_name = max({e[1] for e in entries}, key=lambda n: len(_tokens(n)))
+        confirmed_tour = get_tour_by_sex(best_name)
+        if confirmed_tour is None:
+            unresolved_groups += 1
+            continue
+
+        for row_id, name, tour, tournament, match_date in entries:
+            if tour == confirmed_tour:
+                continue
+            if _is_legit_mixed_exhibition(tournament):
+                to_skip[row_id] = {
+                    "row_id": row_id, "name": name, "tour": tour,
+                    "tournament": tournament, "match_date": match_date,
+                }
+            else:
+                to_fix[row_id] = {
+                    "row_id": row_id, "name": name, "old_tour": tour, "new_tour": confirmed_tour,
+                    "tournament": tournament, "match_date": match_date,
+                }
+
+    # exhibición legítima gana sobre "arreglar" si algún grupo contradictorio
+    # la marcó como tal -- más seguro nunca tocar un partido mixto real
+    # por error de que otro jugador del mismo partido generara su propio
+    # grupo sin el contexto del torneo.
+    for row_id in to_skip:
+        to_fix.pop(row_id, None)
+
+    if to_fix:
+        with db_historical.connection_context():
+            for row_id, info in to_fix.items():
+                MatchHistory.update(tour=info["new_tour"]).where(MatchHistory.id == row_id).execute()
+
+    result = {
+        "groups_checked": len(groups),
+        "groups_unresolved_no_sex_confirmed": unresolved_groups,
+        "rows_fixed": len(to_fix),
+        "rows_skipped_legit_mixed_exhibition": len(to_skip),
+        "fixed_rows_sample": list(to_fix.values())[:20],
+        "skipped_exhibition_rows_sample": list(to_skip.values())[:20],
+    }
+    print(f"[dedupe_triplicated_match_history] fix_tour_sex_mismatches {result}", flush=True)
+    return result
+
+
 if __name__ == "__main__":
     dedupe_unvalidated_queue()
     run_dedup()
     prune_resolved_candidates_from_queue()
+    fix_tour_sex_mismatches()
