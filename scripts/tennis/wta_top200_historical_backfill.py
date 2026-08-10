@@ -59,7 +59,7 @@ from database.historical.tennis import MatchHistory
 # vía `resolve_level_for_tournament` -- este script antes NO completaba
 # `level` para los partidos que resolvía, a diferencia del worker
 # unificado.
-from database.historical.tennis.writer import _resolve_and_save_via_match_detail
+from database.historical.tennis.writer import _resolve_and_save_via_match_detail, _names_confirm_identity
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
@@ -111,6 +111,25 @@ def _surname_key_from_abbrev(abbrev: str) -> str:
     return surname.replace("-", " ").strip().lower()
 
 
+def _te_native_to_nombre_apellido(name: str) -> str:
+    """Convierte un nombre en formato NATIVO de TennisExplorer
+    ("Apellido(s) Nombre", ej. "Svitolina Elina" -- confirmado en vivo
+    repetidas veces esta sesión, ver `get_match_detail`) a la
+    convención "Nombre Apellido" (ej. "Elina Svitolina") -- 2026-08-10,
+    pedido explícito del usuario: "que integre lo de los nombres que
+    estén normalizados como nombre y apellido". En TE, el ÚLTIMO token
+    es siempre el nombre de pila; todo lo anterior es el apellido
+    (soporta apellidos compuestos, ej. "Bouzas Maneiro Jessica" ->
+    "Jessica Bouzas Maneiro"). Fail-closed: nombre de 1 solo token se
+    devuelve tal cual (no hay apellido que reordenar)."""
+    tokens = name.strip().split(" ")
+    if len(tokens) < 2:
+        return name
+    given = tokens[-1]
+    surname = " ".join(tokens[:-1])
+    return f"{given} {surname}"
+
+
 def _get_candidate_slugs(player_name: str) -> list[str]:
     """Slugs REALES ya cosechados (de `hrefs` de partidos previamente
     fetcheados) para el apellido de `player_name` (nombre COMPLETO) --
@@ -160,34 +179,17 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
             matches_by_year.append((year, m))
 
     now = datetime.now(timezone.utc)
-    inserted_odds = 0
     with db_historical.connection_context():
         for _year, m in matches_by_year:
             _harvest_opponent_slug(m["opponent"], m.get("opponent_slug"), now)
-        for year, m in matches_by_year:
-            iso_date = _to_iso_date(m["date"], year)
-            if iso_date is None:
-                continue
-
-            if m["odds_self"] is not None or m["odds_opponent"] is not None:
-                if not TennisHistoricalOdds.select().where(
-                    (TennisHistoricalOdds.player_name == player_name)
-                    & (TennisHistoricalOdds.opponent_name == m["opponent"])
-                    & (TennisHistoricalOdds.match_date == iso_date)
-                ).exists():
-                    TennisHistoricalOdds.create(
-                        player_name=player_name, opponent_name=m["opponent"], match_date=iso_date,
-                        odds_self=m["odds_self"], odds_opponent=m["odds_opponent"],
-                        source="tennisexplorer", fetched_at=now,
-                    )
-                    inserted_odds += 1
 
     # 2026-08-08, pedido explícito del usuario -- "adapta el scraper...
     # para que sólo guarde una fila por match" (ver `MatchHistory`):
     # 1 fila REAL por partido (identidad cierta, no heurística), idempotente
-    # por `match_id`. Se cosecha DESPUÉS del loop principal, y solo para los
-    # `match_id` que todavía no tengamos -- cada partido real aparece en la
-    # página de LOS 2 jugadores (mismo match_id), así que el backfill del
+    # por `match_id`. Se cosecha ANTES de crear las filas de cuotas
+    # (reordenado 2026-08-10, ver más abajo) y solo para los `match_id`
+    # que todavía no tengamos -- cada partido real aparece en la página
+    # de LOS 2 jugadores (mismo match_id), así que el backfill del
     # segundo jugador no vuelve a pedir la página de detalle, solo lee de
     # `MatchHistory` (ya existe) y sigue de largo.
     #
@@ -211,6 +213,55 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
             details_resolved += 1
         else:
             details_error += 1
+
+    # 2026-08-10, pedido explícito del usuario: "que integre lo de los
+    # nombres que estén normalizados como nombre y apellido" -- ahora
+    # que la identidad ya está resuelta (loop de arriba), se arma un
+    # mapa {match_id: nombre_completo_del_rival_en_"Nombre Apellido"}
+    # ANTES de crear las filas de `TennisHistoricalOdds`, para guardar
+    # el rival con nombre COMPLETO real (no abreviado, "Pegula J.") en
+    # convención "Nombre Apellido" (no la nativa de TennisExplorer,
+    # "Apellido Nombre") cuando la resolución esté disponible.
+    # LIMITACIÓN CONOCIDA: el dedupe de `TennisHistoricalOdds` es por
+    # (player_name, opponent_name, match_date) -- si una corrida previa
+    # ya guardó la fila con el rival ABREVIADO (match_id no resolvió
+    # esa vez) y una corrida posterior sí resuelve, esto crea una
+    # segunda fila con el nombre completo en vez de actualizar la
+    # existente (la tabla no tiene `match_id` para dedupe robusto) --
+    # aceptado como limitación conocida, no bloqueante (dato redundante,
+    # no incorrecto).
+    resolved_opponent_names: dict[str, str] = {}
+    if unique_match_ids:
+        with db_historical.connection_context():
+            for row in MatchHistory.select().where(MatchHistory.match_id.in_(list(unique_match_ids))):
+                if _names_confirm_identity(player_name, row.player_a_name):
+                    opponent_full = row.player_b_name
+                elif _names_confirm_identity(player_name, row.player_b_name):
+                    opponent_full = row.player_a_name
+                else:
+                    continue
+                resolved_opponent_names[row.match_id] = _te_native_to_nombre_apellido(opponent_full)
+
+    inserted_odds = 0
+    with db_historical.connection_context():
+        for year, m in matches_by_year:
+            iso_date = _to_iso_date(m["date"], year)
+            if iso_date is None:
+                continue
+
+            opponent_name = resolved_opponent_names.get(m.get("match_id"), m["opponent"])
+            if m["odds_self"] is not None or m["odds_opponent"] is not None:
+                if not TennisHistoricalOdds.select().where(
+                    (TennisHistoricalOdds.player_name == player_name)
+                    & (TennisHistoricalOdds.opponent_name == opponent_name)
+                    & (TennisHistoricalOdds.match_date == iso_date)
+                ).exists():
+                    TennisHistoricalOdds.create(
+                        player_name=player_name, opponent_name=opponent_name, match_date=iso_date,
+                        odds_self=m["odds_self"], odds_opponent=m["odds_opponent"],
+                        source="tennisexplorer", fetched_at=now,
+                    )
+                    inserted_odds += 1
 
     return {
         "player": player_name, "status": "ok", "slug": slug,

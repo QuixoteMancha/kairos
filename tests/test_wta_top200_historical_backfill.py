@@ -488,3 +488,84 @@ def test_cli_top_n_ignores_subcommand_keywords():
         assert _cli_top_n() == 200
     finally:
         sys.argv = old_argv
+
+
+def test_te_native_to_nombre_apellido_reorders_correctly():
+    from scripts.tennis.wta_top200_historical_backfill import _te_native_to_nombre_apellido
+
+    assert _te_native_to_nombre_apellido("Svitolina Elina") == "Elina Svitolina"
+    assert _te_native_to_nombre_apellido("Bouzas Maneiro Jessica") == "Jessica Bouzas Maneiro"
+    assert _te_native_to_nombre_apellido("Sabalenka") == "Sabalenka"  # 1 solo token, fail-closed
+
+
+def test_backfill_player_stores_full_normalized_opponent_name_when_resolved():
+    # 2026-08-10, pedido explícito del usuario: "que integre lo de los
+    # nombres que estén normalizados como nombre y apellido" --
+    # TennisHistoricalOdds.opponent_name debe guardar el nombre COMPLETO
+    # real en "Nombre Apellido" (no el rival abreviado "Pegula J.")
+    # cuando el match-detail resuelve identidad.
+    from datetime import datetime, timezone
+
+    MatchHistory.delete().execute()
+    TennisHistoricalOdds.delete().execute()
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": "999",
+    }
+
+    def fake_resolve(player_name, match_id):
+        MatchHistory.create(
+            match_id=match_id, player_a_name="Test Player", player_b_name="Pegula Jessica",
+            match_date="2026-08-03", source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
+        )
+        return True
+
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch",
+        side_effect=lambda slug, year=None: "year=2026" if year == 2026 else None,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html",
+        side_effect=lambda html, name: [fake_match] if html == "year=2026" else [],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._resolve_and_save_via_match_detail",
+        side_effect=fake_resolve,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        result = backfill_player("Test Player")
+
+    assert result["odds_inserted"] == 1
+    odds_row = TennisHistoricalOdds.get(TennisHistoricalOdds.player_name == "Test Player")
+    assert odds_row.opponent_name == "Jessica Pegula"  # completo, "Nombre Apellido" -- no "Pegula J."
+
+
+def test_backfill_player_falls_back_to_abbreviated_opponent_when_not_resolved():
+    from datetime import datetime, timezone
+
+    MatchHistory.delete().execute()
+    TennisHistoricalOdds.delete().execute()
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": "999",
+    }
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch",
+        side_effect=lambda slug, year=None: "year=2026" if year == 2026 else None,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html",
+        side_effect=lambda html, name: [fake_match] if html == "year=2026" else [],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._resolve_and_save_via_match_detail", return_value=False,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        backfill_player("Test Player")
+
+    odds_row = TennisHistoricalOdds.get(TennisHistoricalOdds.player_name == "Test Player")
+    assert odds_row.opponent_name == "Pegula J."  # fallback abreviado, resolución falló
