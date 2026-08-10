@@ -6,20 +6,24 @@ que tiene su propia extracción de edad pero solo para ATP y nunca
 persistida (ver auditoría 2026-08-01) -- Tennis Abstract cubre ambos
 tours con el mismo formato.
 
+2026-08-10, pedido explícito del usuario ("eliminé TennisPlayerBio, ya
+que es redundante"): el cache ahora vive en `Player.birthdate` (la
+entidad canónica real, ver `database/historical/tennis/writer.py::
+_resolve_player_id`) en vez de una tabla propia redundante -- reusa la
+MISMA resolución fuzzy find-or-create ya establecida (evita crear
+duplicados de identidad por fuera del flujo canónico).
+
 Fail-closed en cada capa: sin dato real, `get_age`/`get_date_of_birth`
 devuelven None, nunca fabrican una edad."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 
 from database.db import init_db_historical
-from database.historical.tennis.models import TennisPlayerBio
+from database.historical.tennis.models import Player
+from database.historical.tennis.writer import _resolve_player_id
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import get_date_of_birth as _fetch_dob
-
-
-def _now():
-    return datetime.now(timezone.utc)
 
 
 def get_date_of_birth_cached(player_name: str) -> date | None:
@@ -27,9 +31,11 @@ def get_date_of_birth_cached(player_name: str) -> date | None:
     Fail-closed: None si nunca se pudo obtener un dato real."""
     try:
         init_db_historical()
-        row = TennisPlayerBio.get_or_none(TennisPlayerBio.player_name == player_name)
-        if row is not None:
-            return row.date_of_birth
+        player_id = _resolve_player_id(player_name)
+        if player_id is not None:
+            row = Player.get_by_id(player_id)
+            if row.birthdate is not None:
+                return row.birthdate
     except Exception:
         pass
 
@@ -43,7 +49,7 @@ def get_date_of_birth_cached(player_name: str) -> date | None:
 
     try:
         init_db_historical()
-        TennisPlayerBio.create(player_name=player_name, date_of_birth=dob, fetched_at=_now())
+        _resolve_player_id(player_name, birthdate=dob)
     except Exception:
         pass  # el fetch en sí fue exitoso, solo falló guardarlo -- se devuelve igual
 

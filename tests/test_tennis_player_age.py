@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.models import TennisPlayerBio
+from database.historical.tennis.models import Player, MatchHistory
 from outer_apis.sports.tennis.player_age import get_date_of_birth_cached, get_age
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import get_date_of_birth
 
@@ -19,10 +19,12 @@ from outer_apis.scrapers.tennis.tennisabstract_player_scraper import get_date_of
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisPlayerBio.delete().execute()
+        MatchHistory.delete().execute()
+        Player.delete().execute()
     yield
     with db_historical.connection_context():
-        TennisPlayerBio.delete().execute()
+        MatchHistory.delete().execute()
+        Player.delete().execute()
 
 
 def _fake_html_with_dob(dob_digits: str) -> str:

@@ -220,21 +220,6 @@ class MatchStatsSet(HistoricalBaseModel):
     serve_games_played_b = IntegerField(null=True)
 
 
-class TennisPlayerBio(HistoricalBaseModel):
-    """Fecha de nacimiento real por jugador/a -- cache PERMANENTE
-    (nunca cambia, se sirve para siempre sin volver a pedirla). Ver
-    `outer_apis/scrapers/tennis/tennisabstract_player_scraper.py::
-    get_date_of_birth`."""
-
-    class Meta:
-        table_name = "tennis_player_bio"
-        indexes = ((("player_name",), True),)
-
-    player_name = CharField(unique=True)
-    date_of_birth = DateField()
-    fetched_at = DateTimeField()
-
-
 class Player(HistoricalBaseModel):
     """Entidad canónica de jugador/a de tenis -- 2026-08-10, pedido
     explícito del usuario tras la saga de bugs de esta sesión

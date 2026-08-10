@@ -26,7 +26,6 @@ from database.historical.tennis.models import (
     MatchWeather as TennisMatchWeather,
     MatchStats as TennisMatchStats,
     MatchStatsSet as TennisMatchStatsSet,
-    TennisPlayerBio,
     TennisPlayerRanking,
     TennisPlayerSyncStatus,
     TennisServeCalibration,
@@ -104,7 +103,6 @@ __all__ = [
     "TennisRecentResult", "save_recent_results", "get_recent_results",
     "TennisMatchWeather", "TennisMatchStatsSet",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
-    "TennisPlayerBio",
     "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
     "get_pending_priority_requests", "mark_player_synced",
 ]

@@ -252,7 +252,7 @@ def init_db_historical() -> None:
         TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
-        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
+        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet,
         TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, AtpTournamentLevel, TennisExplorerPlayerSlug,
         MatchHistory, Player, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
@@ -275,7 +275,7 @@ def init_db_historical() -> None:
         TennisAbstractElo, TennisAbstractYelo,
         TennisAbstractCareerSplit, TennisAbstractH2H,
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
-        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
+        TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet,
         TournamentLocationCache,
         # 2026-08-10, pedido explícito del usuario -- entidad canónica de
         # jugador/a ("los datos de player deben ir en el modelo de
