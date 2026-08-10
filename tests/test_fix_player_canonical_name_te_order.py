@@ -98,6 +98,29 @@ def test_skips_single_token_name_fail_closed():
     assert candidates == []
 
 
+def test_skips_abbreviated_surname_initial_form_fail_closed():
+    # Bug real encontrado en dry-run contra producción: 12,539/16,871
+    # candidatos crudos eran de este patrón ("Apellido Inicial.") --
+    # reordenar ciegamente produce basura ("A. Del Federico").
+    p = Player.create(canonical_name="Del Federico A.", created_at=_now())
+    _row("1", "Opponent X", "Del Federico A.", player_b_id=p.id, source="tennisexplorer")
+
+    candidates = find_reorder_candidates()
+
+    assert candidates == []
+
+
+def test_skips_parenthetical_birth_year_suffix_fail_closed():
+    # Bug real encontrado en dry-run: sufijo de desambiguación por año
+    # de nacimiento se rompe al reordenar ("(1990) Moreno Alejandro").
+    p = Player.create(canonical_name="Moreno Alejandro (1990)", created_at=_now())
+    _row("1", "Opponent X", "Moreno Alejandro (1990)", player_b_id=p.id, source="tennisexplorer")
+
+    candidates = find_reorder_candidates()
+
+    assert candidates == []
+
+
 def test_run_dry_run_does_not_mutate():
     p = Player.create(canonical_name="Vanta Valentin", created_at=_now())
     _row("1", "Rodesch Chris", "Vanta Valentin", player_b_id=p.id, source="tennisexplorer")

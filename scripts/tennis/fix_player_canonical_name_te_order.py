@@ -79,9 +79,40 @@ def _collect_sources_and_raw_names_by_player_id() -> tuple[
     return sources_by_pid, names_by_pid
 
 
+def _is_abbreviated_or_malformed_raw_name(name: str) -> bool:
+    """Fail-closed contra 2 patrones reales encontrados corriendo este
+    script en --dry-run contra producción (2026-08-10, 16,871
+    candidatos crudos, la mayoría basura antes de este filtro):
+
+    1. Nombre ABREVIADO estilo TE "Apellido Inicial." (ej. "Del
+       Federico A.", "Gonzalez Huerta I.") -- el ÚLTIMO token es una
+       inicial de 1 letra + punto, NO un nombre de pila completo.
+       `_te_native_to_nombre_apellido` fue diseñada para nombres
+       COMPLETOS; aplicada acá produce basura tipo "A. Del Federico".
+       74% (12,539/16,871) de los candidatos crudos eran de este tipo.
+
+    2. Sufijo parentético de desambiguación por año de nacimiento (ej.
+       "Moreno Alejandro (1990)", patrón ya documentado en memoria del
+       proyecto -- "(birth year) homonym suffix sometimes appended").
+       Reordenar ciegamente rompe el paréntesis (ej. "(1990) Moreno
+       Alejandro"). 35 candidatos de este tipo encontrados.
+
+    Ambos se saltan: mejor dejar el nombre como está que producir un
+    nombre peor."""
+    tokens = name.strip().split(" ")
+    if not tokens:
+        return True
+    last = tokens[-1]
+    if len(last) <= 2 and last.endswith("."):
+        return True
+    if "(" in name or ")" in name:
+        return True
+    return False
+
+
 def find_reorder_candidates() -> list[tuple[Player, str]]:
     """Devuelve [(player, nombre_propuesto), ...] -- SOLO candidatos que
-    pasan las 3 condiciones fail-closed del docstring del módulo."""
+    pasan las condiciones fail-closed del docstring del módulo."""
     sources_by_pid, names_by_pid = _collect_sources_and_raw_names_by_player_id()
     candidates: list[tuple[Player, str]] = []
     for player in Player.select():
@@ -92,6 +123,8 @@ def find_reorder_candidates() -> list[tuple[Player, str]]:
         if player.canonical_name not in raw_names:
             continue
         if len(player.canonical_name.strip().split(" ")) < 2:
+            continue
+        if _is_abbreviated_or_malformed_raw_name(player.canonical_name):
             continue
         proposed = _te_native_to_nombre_apellido(player.canonical_name)
         if proposed == player.canonical_name:
