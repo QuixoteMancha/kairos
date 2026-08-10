@@ -53,14 +53,64 @@ from database.historical.tennis.models import (
 # POR-JUGADOR-en-cada-fetch, no cross-fuente."""
 
 
+def _tokens(name: str) -> list[str]:
+    return [t.strip(".") for t in name.replace("-", " ").split() if t.strip(".")]
+
+
+def _names_confirm_identity(name_a: str, name_b: str) -> bool:
+    """Verificación de identidad por APELLIDO + NOMBRE/INICIAL (no solo
+    apellido) -- 2026-08-10, FIX DE CAUSA RAÍZ de la triplicación real
+    de partidos en `MatchHistory`/`TennisMatchHistoryUnvalidated` (ver
+    kairos-matchhistory-triplication-dedup-2026-08-10): antes de este
+    fix, `_find_existing_match_history_row` comparaba por IGUALDAD DE
+    STRING EXACTA, y el mismo partido real casi siempre llega con
+    formato de nombre distinto según quién lo escribió ("Elina
+    Svitolina" vs "Svitolina Elina", mayúsculas del rival distintas) --
+    nunca matcheaba, generando una fila nueva cada vez.
+
+    Tolerante a las 3 convenciones reales de orden del proyecto
+    ("Nombre Apellido" / "Apellido Nombre" / "Apellido Inicial.") sin
+    necesitar saber cuál es cada lado -- el apellido se aproxima con el
+    TOKEN MÁS LARGO (heurística verificada en vivo). Exige TAMBIÉN
+    nombre/inicial coincidente, no solo apellido -- evita colisiones
+    reales de personas distintas con el mismo apellido (ver
+    kairos-critical-misattribution-bug-2026-08-06: "Casper Ruud" vs
+    "Christian Ruud", padre/hijo). Fail-closed: si a algún lado le
+    falta el nombre de pila (1 solo token), no se confirma."""
+    tokens_a, tokens_b = _tokens(name_a), _tokens(name_b)
+    if not tokens_a or not tokens_b:
+        return False
+    surname_a = max(tokens_a, key=len).lower()
+    surname_b = max(tokens_b, key=len).lower()
+    if surname_a != surname_b:
+        return False
+    given_a = [t.lower() for t in tokens_a if t.lower() != surname_a]
+    given_b = [t.lower() for t in tokens_b if t.lower() != surname_b]
+    if not given_a or not given_b:
+        return False
+    for ga in given_a:
+        for gb in given_b:
+            if ga == gb or (len(ga) == 1 and gb.startswith(ga)) or (len(gb) == 1 and ga.startswith(gb)):
+                return True
+    return False
+
+
 def _find_existing_match_history_row(name_a: str, name_b: str, match_date: str):
-    return MatchHistory.get_or_none(
-        (MatchHistory.match_date == match_date)
-        & (
-            ((MatchHistory.player_a_name == name_a) & (MatchHistory.player_b_name == name_b))
-            | ((MatchHistory.player_a_name == name_b) & (MatchHistory.player_b_name == name_a))
-        )
-    )
+    """2026-08-10, fix de causa raíz -- ya NO filtra por igualdad de
+    string exacta en la query SQL (eso era el bug real, ver
+    `_names_confirm_identity`). Trae las filas de la MISMA fecha (bien
+    acotado, un calendar-day real nunca tiene más que unos pocos cientos
+    de partidos en toda la DB) y confirma identidad de ambos lados en
+    Python, tolerante a formato de nombre."""
+    candidates = MatchHistory.select().where(MatchHistory.match_date == match_date)
+    for row in candidates:
+        if (
+            _names_confirm_identity(name_a, row.player_a_name) and _names_confirm_identity(name_b, row.player_b_name)
+        ) or (
+            _names_confirm_identity(name_a, row.player_b_name) and _names_confirm_identity(name_b, row.player_a_name)
+        ):
+            return row
+    return None
 
 
 def _synthetic_recentform_match_id(name_a: str, name_b: str, match_date: str) -> str:

@@ -22,7 +22,9 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory, AtpTournamentLevel, WtaTournamentLevel
-from database.historical.tennis.writer import save_match_history, _identity_matches_detail_side
+from database.historical.tennis.writer import (
+    save_match_history, _identity_matches_detail_side, _find_existing_match_history_row, _names_confirm_identity,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -147,3 +149,49 @@ def test_save_match_history_fills_tour_bonus_when_unknown_and_level_resolves_una
     row = MatchHistory.get(MatchHistory.match_id == "999")
     assert row.tour == "ATP"
     assert row.level == "M"
+
+
+def test_find_existing_match_history_row_root_cause_fix_2026_08_10():
+    # 2026-08-10, FIX DE CAUSA RAÍZ de la triplicación real encontrada
+    # en producción (ver kairos-matchhistory-triplication-dedup):
+    # `_find_existing_match_history_row` comparaba por igualdad de
+    # string EXACTA -- el mismo partido real, escrito por el fetch de
+    # CADA jugador, casi siempre difiere en formato de nombre ("Elina
+    # Svitolina" vs "Svitolina Elina", mayúsculas del rival distintas)
+    # y nunca se encontraba a sí mismo -- generaba una fila nueva cada
+    # vez (triplicación real verificada en producción). Ahora debe
+    # encontrarla sin importar el formato.
+    MatchHistory.create(
+        match_id="recentform:x", player_a_name="Elina Svitolina", player_b_name="Alexandrova E.",
+        match_date="2026-08-11", source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
+    )
+    found = _find_existing_match_history_row("Ekaterina Alexandrova", "Svitolina E.", "2026-08-11")
+    assert found is not None
+    assert found.match_id == "recentform:x"
+
+
+def test_find_existing_match_history_row_does_not_collide_same_surname_different_person():
+    # mismo criterio estricto que `_names_confirm_identity` -- no debe
+    # confundir 2 personas reales distintas con el mismo apellido (ver
+    # kairos-critical-misattribution-bug-2026-08-06, Casper/Christian Ruud).
+    MatchHistory.create(
+        match_id="1", player_a_name="Christian Ruud", player_b_name="Someone Rival",
+        match_date="2026-08-11", source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
+    )
+    assert _find_existing_match_history_row("Casper Ruud", "Someone Rival", "2026-08-11") is None
+
+
+def test_save_match_history_no_longer_triplicates_across_name_formats():
+    # test end-to-end del fix real: 2 llamadas a save_match_history con
+    # el MISMO partido real, cada una desde la perspectiva de un
+    # jugador distinto (formato de nombre distinto) -- antes del fix
+    # esto generaba 2 filas; ahora debe generar 1 sola.
+    save_match_history("Elina Svitolina", [
+        {"oponente": "Alexandrova E.", "fecha": "2026-08-11", "resultado": "W", "score": "6-4, 6-2",
+         "source": "tennisexplorer", "match_id": None},
+    ])
+    save_match_history("Ekaterina Alexandrova", [
+        {"oponente": "Svitolina E.", "fecha": "2026-08-11", "resultado": "L", "score": "4-6, 2-6",
+         "source": "tennisexplorer", "match_id": None},
+    ])
+    assert MatchHistory.select().count() == 1

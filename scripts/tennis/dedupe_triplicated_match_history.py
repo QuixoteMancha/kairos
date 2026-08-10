@@ -44,6 +44,12 @@ from typing import Any
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import MatchHistory, TennisMatchHistoryUnvalidated
+# 2026-08-10, fix de causa raíz: `_names_confirm_identity` ahora vive en
+# `writer.py` (usada también por `_find_existing_match_history_row`, el
+# punto real donde se generaba la triplicación) -- se importa de ahí en
+# vez de duplicarla, única fuente de verdad para ambos usos (prevención
+# en el hot path de escritura + reparación retroactiva acá).
+from database.historical.tennis.writer import _names_confirm_identity, _tokens
 
 _SYNTHETIC_PREFIXES = ("recentform:", "tmldb:")
 
@@ -66,10 +72,6 @@ def _is_synthetic(match_id: str) -> bool:
     return any(match_id.startswith(p) for p in _SYNTHETIC_PREFIXES)
 
 
-def _tokens(name: str) -> list[str]:
-    return [t.strip(".") for t in name.replace("-", " ").split() if t.strip(".")]
-
-
 def _surname_guess(full_name: str) -> str:
     """Aproxima el apellido real -- el TOKEN MÁS LARGO del nombre,
     robusto contra los 3 formatos reales vistos en producción ("Nombre
@@ -78,36 +80,6 @@ def _surname_guess(full_name: str) -> str:
     Svitolina/Alexandrova."""
     tokens = _tokens(full_name)
     return max(tokens, key=len).lower() if tokens else ""
-
-
-def _names_confirm_identity(name_a: str, name_b: str) -> bool:
-    """Verificación de identidad MÁS ESTRICTA que solo-apellido --
-    2026-08-10, pedido explícito del usuario ("verificación más
-    avanzada de deduplicación"): exige que el APELLIDO coincida Y que
-    exista AL MENOS 1 token de nombre/inicial en común (igualdad
-    completa o coincidencia de inicial) -- nunca confía en el apellido
-    solo, evita colisiones reales de personas distintas con el mismo
-    apellido (ver kairos-critical-misattribution-bug-2026-08-06: "Casper
-    Ruud" vs "Christian Ruud", padre/hijo). Fail-closed: si a alguno de
-    los 2 lados le falta el nombre de pila por completo (nombre de 1
-    solo token), no se confirma -- no hay suficiente información para
-    descartar una colisión real."""
-    tokens_a, tokens_b = _tokens(name_a), _tokens(name_b)
-    if not tokens_a or not tokens_b:
-        return False
-    surname_a = max(tokens_a, key=len).lower()
-    surname_b = max(tokens_b, key=len).lower()
-    if surname_a != surname_b:
-        return False
-    given_a = [t.lower() for t in tokens_a if t.lower() != surname_a]
-    given_b = [t.lower() for t in tokens_b if t.lower() != surname_b]
-    if not given_a or not given_b:
-        return False
-    for ga in given_a:
-        for gb in given_b:
-            if ga == gb or (len(ga) == 1 and gb.startswith(ga)) or (len(gb) == 1 and ga.startswith(gb)):
-                return True
-    return False
 
 
 def _canonical_key(row) -> tuple[str, str, str] | None:
