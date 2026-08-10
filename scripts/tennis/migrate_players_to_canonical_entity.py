@@ -141,19 +141,53 @@ def run_migration() -> dict[str, Any]:
             for name in cluster:
                 name_to_player_id[name] = player_id
 
+    # 2026-08-10, fix real de performance (encontrado en producción: 18+
+    # minutos sin terminar, matando el proceso) -- `match_history` NO
+    # tiene índice en `player_a_name`/`player_b_name` (solo en
+    # `match_id`), así que 1 UPDATE por cada uno de los ~32K nombres
+    # distintos (2 por nombre, ~63K UPDATEs) hacía un FULL TABLE SCAN
+    # de las 619K filas cada vez. Fix: 1 sola lectura de (id +
+    # nombres + FK actual) para TODA la tabla, resolver el `Player` en
+    # MEMORIA, y actualizar en LOTES por `id` (columna PK, indexada por
+    # diseño) -- mismo patrón de batching ya usado en
+    # `dedupe_triplicated_match_history.py` para borrados masivos.
+    with db_historical.connection_context():
+        row_refs = list(
+            MatchHistory.select(
+                MatchHistory.id, MatchHistory.player_a_name, MatchHistory.player_b_name,
+                MatchHistory.player_a_id, MatchHistory.player_b_id,
+            )
+        )
+
+    ids_by_player_a: dict[int, list[int]] = defaultdict(list)
+    ids_by_player_b: dict[int, list[int]] = defaultdict(list)
+    for r in row_refs:
+        if r.player_a_id is None:
+            pid = name_to_player_id.get(r.player_a_name)
+            if pid is not None:
+                ids_by_player_a[pid].append(r.id)
+        if r.player_b_id is None:
+            pid = name_to_player_id.get(r.player_b_name)
+            if pid is not None:
+                ids_by_player_b[pid].append(r.id)
+
+    _BATCH = 500  # límite real de variables por query en SQLite (999 default)
     rows_updated_a = rows_updated_b = 0
     with db_historical.connection_context():
-        for name, player_id in name_to_player_id.items():
-            rows_updated_a += (
-                MatchHistory.update(player_a_id=player_id)
-                .where((MatchHistory.player_a_name == name) & MatchHistory.player_a_id.is_null(True))
-                .execute()
-            )
-            rows_updated_b += (
-                MatchHistory.update(player_b_id=player_id)
-                .where((MatchHistory.player_b_name == name) & MatchHistory.player_b_id.is_null(True))
-                .execute()
-            )
+        for pid, ids in ids_by_player_a.items():
+            for i in range(0, len(ids), _BATCH):
+                rows_updated_a += (
+                    MatchHistory.update(player_a_id=pid)
+                    .where(MatchHistory.id.in_(ids[i:i + _BATCH]))
+                    .execute()
+                )
+        for pid, ids in ids_by_player_b.items():
+            for i in range(0, len(ids), _BATCH):
+                rows_updated_b += (
+                    MatchHistory.update(player_b_id=pid)
+                    .where(MatchHistory.id.in_(ids[i:i + _BATCH]))
+                    .execute()
+                )
 
     result = {
         "distinct_names_scanned": len(info_by_name),
