@@ -60,3 +60,16 @@ flashscore_throttle = RequestThrottle(min_interval_s=0.5)
 # -- no hay cifra oficial de límite de ninguno de los 2 sitios, este es
 # un ajuste puntual del usuario, no una re-evaluación de riesgo.
 tennisexplorer_throttle = RequestThrottle(min_interval_s=0.3)
+# 2026-08-10, pedido explícito del usuario: verificar sexo/género de
+# jugadores contra Wikidata en vez de seguir hiteando TennisExplorer.
+# Wikidata NO publica un límite numérico duro para su API REST/Action
+# estándar -- la etiqueta oficial pide requests SERIALES (no paralelos)
+# + User-Agent identificable + backoff ante 429 (ver
+# https://www.wikidata.org/wiki/Wikidata:Data_access). El servicio
+# SPARQL (el que usamos, 1 query combinada por jugador) sí publica un
+# límite explícito: 60s de tiempo de query por minuto por IP (ráfaga
+# 120s/min), máx 5 concurrentes (ver
+# https://www.wikidata.org/wiki/Wikidata:SPARQL_query_service/query_limits).
+# 1s mínimo entre requests (1 req/s) es MUY conservador frente a ese
+# presupuesto real.
+wikidata_throttle = RequestThrottle(min_interval_s=1.0)

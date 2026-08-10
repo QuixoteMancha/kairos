@@ -381,7 +381,7 @@ def find_tour_sex_mismatches() -> dict[str, list]:
     return {key: entries for key, entries in buckets.items() if len({e[2] for e in entries}) > 1}
 
 
-def fix_tour_sex_mismatches() -> dict[str, Any]:
+def fix_tour_sex_mismatches(use_wikidata_fallback: bool = True) -> dict[str, Any]:
     """PASO con red, ACOTADO solo a los candidatos reales de
     `find_tour_sex_mismatches` (nunca a toda la tabla -- inviable en
     volumen y redundante, la inmensa mayoría de filas no tiene
@@ -397,14 +397,24 @@ def fix_tour_sex_mismatches() -> dict[str, Any]:
         bug) -- pedido explícito del usuario. Si no, se corrige el
         `tour` al confirmado (bug real de asignación).
 
-    Fail-closed: si `get_tour_by_sex` no logra confirmar (red/parseo/
-    verificación de identidad fallan), el grupo entero se deja intacto
-    y se reporta aparte -- nunca se adivina un tour sin confirmación
-    real."""
+    2026-08-10, pedido explícito del usuario ("verifiquemos todos los
+    que estén con data ambigua [contra Wikidata]... para no hitear
+    tanto tennisexplorer"): `use_wikidata_fallback=True` (default) --
+    cuando `get_tour_by_sex` (TennisExplorer) NO logra confirmar, se
+    intenta `get_tennis_player_tour_by_gender` (Wikidata, fuente
+    externa independiente con su propio throttle) ANTES de rendirse.
+    Reduce la carga real sobre TennisExplorer para el subconjunto que
+    ya falló ahí, sin dejar de intentar una segunda fuente real.
+
+    Fail-closed: si NINGUNA fuente logra confirmar (red/parseo/
+    verificación de identidad fallan en ambas), el grupo entero se deja
+    intacto y se reporta aparte -- nunca se adivina un tour."""
     from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_tour_by_sex
+    from outer_apis.scrapers.tennis.wikidata_scraper import get_tennis_player_tour_by_gender
 
     groups = find_tour_sex_mismatches()
     unresolved_groups = 0
+    confirmed_via_wikidata = 0
     # 2026-08-10, bug real encontrado en el propio test: un MISMO
     # partido puede aparecer en 2 GRUPOS distintos a la vez (uno por
     # cada jugador contradictorio, ej. Baez Y Brooksby ambos generan su
@@ -419,6 +429,10 @@ def fix_tour_sex_mismatches() -> dict[str, Any]:
         # fetch real de sexo.
         best_name = max({e[1] for e in entries}, key=lambda n: len(_tokens(n)))
         confirmed_tour = get_tour_by_sex(best_name)
+        if confirmed_tour is None and use_wikidata_fallback:
+            confirmed_tour = get_tennis_player_tour_by_gender(best_name)
+            if confirmed_tour is not None:
+                confirmed_via_wikidata += 1
         if confirmed_tour is None:
             unresolved_groups += 1
             continue
@@ -452,6 +466,7 @@ def fix_tour_sex_mismatches() -> dict[str, Any]:
     result = {
         "groups_checked": len(groups),
         "groups_unresolved_no_sex_confirmed": unresolved_groups,
+        "groups_confirmed_via_wikidata_fallback": confirmed_via_wikidata,
         "rows_fixed": len(to_fix),
         "rows_skipped_legit_mixed_exhibition": len(to_skip),
         "fixed_rows_sample": list(to_fix.values())[:20],

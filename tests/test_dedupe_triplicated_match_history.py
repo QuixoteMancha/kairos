@@ -301,6 +301,8 @@ def test_fix_tour_sex_mismatches_fail_closed_when_sex_not_confirmed():
 
     with patch(
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value=None,
+    ), patch(
+        "outer_apis.scrapers.tennis.wikidata_scraper.get_tennis_player_tour_by_gender", return_value=None,
     ):
         result = fix_tour_sex_mismatches()
 
@@ -308,3 +310,39 @@ def test_fix_tour_sex_mismatches_fail_closed_when_sex_not_confirmed():
     assert result["groups_unresolved_no_sex_confirmed"] == 2  # 2 grupos, 1 por cada jugador contradictorio
     untouched = MatchHistory.get(MatchHistory.match_id == "999")
     assert untouched.tour == "WTA"  # sin confirmación real, no se toca
+
+
+def test_fix_tour_sex_mismatches_falls_back_to_wikidata_when_tennisexplorer_fails():
+    # 2026-08-10, pedido explícito del usuario: "verifiquemos todos los
+    # que estén con data ambigua [contra Wikidata]... para no hitear
+    # tanto tennisexplorer" -- si TennisExplorer no confirma, se intenta
+    # Wikidata (fuente externa independiente) antes de rendirse.
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Rome")
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value=None,
+    ), patch(
+        "outer_apis.scrapers.tennis.wikidata_scraper.get_tennis_player_tour_by_gender", return_value="ATP",
+    ):
+        result = fix_tour_sex_mismatches()
+
+    assert result["rows_fixed"] == 1
+    assert result["groups_confirmed_via_wikidata_fallback"] >= 1
+    fixed = MatchHistory.get(MatchHistory.match_id == "999")
+    assert fixed.tour == "ATP"
+
+
+def test_fix_tour_sex_mismatches_can_disable_wikidata_fallback():
+    _row("sackmann:1", "Jenson Brooksby", "Sebastian Baez", tour="ATP", tournament="Rome")
+    _row("999", "Baez Sebastian", "Brooksby Jenson", tour="WTA", tournament="Rome")
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_tour_by_sex", return_value=None,
+    ), patch(
+        "outer_apis.scrapers.tennis.wikidata_scraper.get_tennis_player_tour_by_gender",
+    ) as mock_wikidata:
+        result = fix_tour_sex_mismatches(use_wikidata_fallback=False)
+
+    mock_wikidata.assert_not_called()
+    assert result["rows_fixed"] == 0
