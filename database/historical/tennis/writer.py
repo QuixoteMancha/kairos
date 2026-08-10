@@ -25,7 +25,7 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisServeCalibration,
     TennisHeadToHead, TennisAbstractElo,
     TennisAbstractYelo, TennisAbstractCareerSplit, TennisAbstractH2H,
-    TennisRecentResult, MatchHistory,
+    TennisRecentResult, MatchHistory, Player,
 )
 
 # 2026-08-09, pedido explícito del usuario -- "cualquier tabla de matches
@@ -117,6 +117,64 @@ def _synthetic_recentform_match_id(name_a: str, name_b: str, match_date: str) ->
     pair = "|".join(sorted([name_a.strip().lower(), name_b.strip().lower()]))
     return f"recentform:{pair}|{match_date}"
 
+
+def _resolve_player_id(
+    name: str, tour: str | None = None, slug: str | None = None, birthdate=None,
+    height_cm: int | None = None, weight_kg: int | None = None, plays: str | None = None,
+) -> int | None:
+    """Busca-o-crea la fila `Player` canónica para `name` -- 2026-08-10,
+    Fase 1 de la migración a entidad canónica de jugador (pedido
+    explícito del usuario: "los datos de player deben ir en el modelo
+    de player, y simplemente referenciar a los players en los
+    matches"). Reusa `_names_confirm_identity` (apellido + nombre/
+    inicial, tolerante a formato) para encontrar un `Player` YA
+    existente con un formato de nombre distinto -- mismo criterio que
+    ya usa `_find_existing_match_history_row`, no igualdad exacta.
+
+    Enriquecimiento PROGRESIVO: si el `Player` existente tiene algún
+    campo NULL y esta llamada trae un valor real, se completa (nunca se
+    sobreescribe un valor ya confirmado con uno distinto -- eso sería
+    tarea de `fix_tour_sex_mismatches`, no de este resolver silencioso
+    en el hot path de escritura).
+
+    Fail-closed: `None` si `name` viene vacío -- nunca crea un `Player`
+    fantasma. Nunca excepciona hacia el caller (mismo criterio del
+    resto de este archivo) -- un fallo acá no debe romper el guardado
+    del partido en sí."""
+    if not name or not name.strip():
+        return None
+    try:
+        init_db_historical()
+        existing = Player.get_or_none(Player.canonical_name == name)
+        if existing is None:
+            for candidate in Player.select():
+                if _names_confirm_identity(name, candidate.canonical_name):
+                    existing = candidate
+                    break
+
+        now = _now()
+        if existing is None:
+            player = Player.create(
+                canonical_name=name, tour=tour, slug=slug, birthdate=birthdate,
+                height_cm=height_cm, weight_kg=weight_kg, plays=plays, created_at=now,
+            )
+            return player.id
+
+        changed = False
+        for field_name, value in (
+            ("tour", tour), ("slug", slug), ("birthdate", birthdate),
+            ("height_cm", height_cm), ("weight_kg", weight_kg), ("plays", plays),
+        ):
+            if value is not None and getattr(existing, field_name) is None:
+                setattr(existing, field_name, value)
+                changed = True
+        if changed:
+            existing.updated_at = now
+            existing.save()
+        return existing.id
+    except Exception:
+        return None
+
 # Campos comparables de `MatchHistory` para detectar cambios reales
 # de la fuente en `save_match_detail` -- excluye `match_id` (la clave) y
 # los timestamps propios (`fetched_at`/`updated_at`, nunca son "el dato
@@ -127,6 +185,7 @@ _MATCH_DETAIL_COMPARABLE_FIELDS = (
     "player_a_height_cm", "player_a_weight_kg", "player_a_plays",
     "player_b_name", "player_b_slug", "player_b_ranking", "player_b_birthdate",
     "player_b_height_cm", "player_b_weight_kg", "player_b_plays",
+    "player_a_id", "player_b_id",
 )
 
 
@@ -510,6 +569,23 @@ def save_match_detail(detail: dict[str, Any]) -> str:
                         # para no mezclar bio de un lado con winner_side/
                         # ranking del otro.
                         fields = _swap_match_detail_sides(fields)
+
+        # 2026-08-10, Fase 1 de la migración a entidad canónica `Player`
+        # -- resuelve-o-crea el `Player` de cada lado DESPUÉS del swap
+        # de arriba (si aplicó), para que `player_a_id`/`player_b_id`
+        # queden del lado correcto. Dual-write: NO reemplaza los campos
+        # de texto libre (`player_a_name`, etc.), solo agrega el FK en
+        # paralelo -- ver docstring de `Player`.
+        fields["player_a_id"] = _resolve_player_id(
+            fields["player_a_name"], tour=fields.get("tour"), slug=fields.get("player_a_slug"),
+            birthdate=fields.get("player_a_birthdate"), height_cm=fields.get("player_a_height_cm"),
+            weight_kg=fields.get("player_a_weight_kg"), plays=fields.get("player_a_plays"),
+        )
+        fields["player_b_id"] = _resolve_player_id(
+            fields["player_b_name"], tour=fields.get("tour"), slug=fields.get("player_b_slug"),
+            birthdate=fields.get("player_b_birthdate"), height_cm=fields.get("player_b_height_cm"),
+            weight_kg=fields.get("player_b_weight_kg"), plays=fields.get("player_b_plays"),
+        )
 
         if existing is None:
             MatchHistory.create(match_id=match_id, fetched_at=now, **fields)

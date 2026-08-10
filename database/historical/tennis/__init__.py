@@ -31,6 +31,7 @@ from database.historical.tennis.models import (
     TennisPlayerSyncStatus,
     TennisServeCalibration,
     MatchHistory,
+    Player,
     TennisMatchHistoryUnvalidated,
     TennisHistoricalOdds,
     WtaPlayerRankingHistory,
@@ -78,7 +79,7 @@ from database.historical.tennis.writer import (
 )
 
 __all__ = [
-    "TennisPlayerRanking", "TennisServeCalibration", "MatchHistory", "save_match_detail", "save_next_match",
+    "TennisPlayerRanking", "TennisServeCalibration", "MatchHistory", "Player", "save_match_detail", "save_next_match",
     "has_real_match_detail_between",
     "TennisMatchHistoryUnvalidated",
     "TennisHistoricalOdds", "TennisHeadToHead",

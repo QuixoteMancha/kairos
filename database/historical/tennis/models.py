@@ -235,6 +235,57 @@ class TennisPlayerBio(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
+class Player(HistoricalBaseModel):
+    """Entidad canónica de jugador/a de tenis -- 2026-08-10, pedido
+    explícito del usuario tras la saga de bugs de esta sesión
+    (triplicación de `MatchHistory`, contaminación ATP/WTA en `tour`,
+    misattribution Casper/Christian Ruud): "los datos de player deben
+    ir en el modelo de player, y simplemente referenciar a los players
+    en los matches" -- `MatchHistory` no tenía ninguna FK a una entidad
+    de jugador, todo se identificaba por STRING de nombre libre
+    (`player_a_name`/`player_b_name`), causa raíz estructural de toda
+    esa clase de bugs (2 formatos de nombre distintos para la misma
+    persona real nunca se reconocían como la misma fila).
+
+    MIGRACIÓN EN 2 FASES (deliberado, sin romper nada en producción):
+    Fase 1 (esta clase + `player_a_id`/`player_b_id` en `MatchHistory`,
+    ver abajo): agrega la tabla y las columnas FK SIN tocar ni borrar
+    los campos de texto libre existentes (`player_a_name`, etc.) -- los
+    puntos de escritura (`save_match_detail`/`save_match_history`/
+    `save_next_match`) empiezan a resolver-o-crear `Player` y llenar el
+    FK, en paralelo al nombre de texto (dual-write, transición segura).
+    Fase 2 (NO implementada todavía, requiere aprobación aparte):
+    migrar los ~20 scripts que hoy leen `player_a_name`/`player_b_name`
+    como string a leer por FK/join, y recién ahí eliminar los campos de
+    texto libre viejos.
+
+    `tour` acá es la fuente de verdad REAL por jugador (una sola vez,
+    nunca por partido) -- una vez que `MatchHistory` empiece a
+    referenciar `Player.tour` en vez de guardar su propio `tour` por
+    fila, la clase entera de bug "mismo jugador con ATP en una fila y
+    WTA en otra" deja de ser posible estructuralmente (sería 1 sola
+    fila de `Player` con 1 solo `tour`)."""
+
+    class Meta:
+        table_name = "player"
+        indexes = ((("canonical_name",), True),)
+
+    # 2026-08-10: nombre COMPLETO real, en el formato nativo de
+    # TennisExplorer ("Apellido(s) Nombre", ver `get_match_detail`) --
+    # mismo criterio que ya usa `MatchHistory.player_a_name` hoy, para
+    # que la migración de datos existentes (Fase 1) sea directa sin
+    # tener que reordenar nada.
+    canonical_name = CharField(unique=True)
+    slug = CharField(null=True)  # slug real de TennisExplorer, si se conoce
+    tour = CharField(null=True)  # "ATP" | "WTA" -- fuente de verdad REAL, 1 sola vez
+    birthdate = DateField(null=True)
+    height_cm = IntegerField(null=True)
+    weight_kg = IntegerField(null=True)
+    plays = CharField(null=True)
+    created_at = DateTimeField()
+    updated_at = DateTimeField(null=True)
+
+
 class MatchHistory(HistoricalBaseModel):
     """Un registro por partido REAL (1 fila, NO duplicado por jugador
     como `TennisMatchHistory`) -- 2026-08-08, pedido explícito del
@@ -289,7 +340,7 @@ class MatchHistory(HistoricalBaseModel):
 
     player_a_name = CharField()  # nombre completo real, ej. "Anisimova Amanda"
     player_a_slug = CharField(null=True)
-    player_a_ranking = IntegerField(null=True)
+    player_a_ranking = IntegerField(null=True)  # ranking AL MOMENTO de este partido -- se queda acá, es del partido, no del jugador
     player_a_birthdate = DateField(null=True)
     player_a_height_cm = IntegerField(null=True)
     player_a_weight_kg = IntegerField(null=True)
@@ -302,6 +353,23 @@ class MatchHistory(HistoricalBaseModel):
     player_b_height_cm = IntegerField(null=True)
     player_b_weight_kg = IntegerField(null=True)
     player_b_plays = CharField(null=True)
+
+    # 2026-08-10, pedido explícito del usuario ("los datos de player
+    # deben ir en el modelo de player, y simplemente referenciar a los
+    # players en los matches") -- Fase 1 de la migración a entidad
+    # canónica `Player`: FK nuevas, EN PARALELO a los campos de texto
+    # libre de arriba (no se tocan todavía, ver docstring de `Player`).
+    # `null=True` a propósito -- filas viejas quedan sin FK hasta que la
+    # migración retroactiva (`scripts/tennis/migrate_players_to_canonical_entity.py`)
+    # las procese; filas nuevas se llenan en el momento vía
+    # `writer.py::_resolve_player_id`. Nombrado `player_a`/`player_b`
+    # (NO `player_a_id`) a propósito -- convención real de Peewee: el
+    # campo FK ya genera solo la columna `player_a_id` + el atributo
+    # `.player_a_id` (acceso al id crudo sin cargar la fila) -- nombrar
+    # el campo Python `player_a_id` directamente generaría una columna
+    # `player_a_id_id`, confuso y no lo que se pidió.
+    player_a = ForeignKeyField(Player, backref="matches_as_a", null=True, on_delete="SET NULL", column_name="player_a_id")
+    player_b = ForeignKeyField(Player, backref="matches_as_b", null=True, on_delete="SET NULL", column_name="player_b_id")
 
     # 2026-08-09, pedido explícito del usuario ("TmlDatabaseMatch... debe
     # ser eliminado, para sacar el winrate por superficie y variante...

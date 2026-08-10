@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import MatchHistory, save_match_detail
+from database.historical.tennis import MatchHistory, Player, save_match_detail
 
 
 @pytest.fixture(autouse=True)
@@ -17,9 +17,11 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         MatchHistory.delete().execute()
+        Player.delete().execute()
     yield
     with db_historical.connection_context():
         MatchHistory.delete().execute()
+        Player.delete().execute()
 
 
 def _detail(**overrides) -> dict:
@@ -168,3 +170,23 @@ def test_tolerates_missing_optional_bio_fields():
     row = MatchHistory.get(MatchHistory.match_id == "42")
     assert row.player_a_ranking is None
     assert row.player_a_birthdate is None
+
+
+def test_populates_canonical_player_fk_alongside_name_fields():
+    # 2026-08-10, Fase 1 de la migración a entidad canónica `Player`
+    # (dual-write: los campos de texto libre viejos siguen igual, el FK
+    # nuevo se llena en paralelo).
+    status = save_match_detail(_detail())
+    assert status == "created"
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
+    assert row.player_a_id is not None
+    assert row.player_b_id is not None
+    player_a = Player.get_by_id(row.player_a_id)
+    assert player_a.canonical_name == "Anisimova Amanda"
+    assert player_a.tour == "WTA"
+
+
+def test_reuses_same_player_across_2_different_matches():
+    save_match_detail(_detail(match_id="1", match_date="2024-08-10"))
+    save_match_detail(_detail(match_id="2", match_date="2024-08-12"))
+    assert Player.select().where(Player.canonical_name == "Anisimova Amanda").count() == 1

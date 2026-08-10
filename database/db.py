@@ -255,7 +255,7 @@ def init_db_historical() -> None:
         TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
         TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, AtpTournamentLevel, TennisExplorerPlayerSlug,
-        MatchHistory, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
+        MatchHistory, Player, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
     )
     # `TennisMatchStatsSet` (2026-08-09, pedido explícito del usuario --
     # match.set_stats): estaba definida en models.py pero NUNCA se había
@@ -276,6 +276,11 @@ def init_db_historical() -> None:
         TennisScannedMatch, TennisMatchProbabilityTick, TennisRecentResult,
         TennisMatchWeather, TennisMatchStats, TennisMatchStatsSet, TennisPlayerBio,
         TournamentLocationCache,
+        # 2026-08-10, pedido explícito del usuario -- entidad canónica de
+        # jugador/a ("los datos de player deben ir en el modelo de
+        # player"), referenciada por MatchHistory.player_a/player_b (FK,
+        # ver abajo) -- Fase 1 de la migración, tabla nueva.
+        Player,
         # 2026-08-08, pedido explícito del usuario -- 1 fila por partido
         # real (no 2 como TennisMatchHistory), con identidad resuelta
         # con certeza vía match-detail de TennisExplorer. Tabla nueva.
@@ -372,6 +377,16 @@ def init_db_historical() -> None:
     _add_column_if_missing(db_historical, "match_history", "minutes", "INTEGER")
     _add_column_if_missing(db_historical, "match_history", "best_of", "INTEGER")
     _add_column_if_missing(db_historical, "match_history", "level", "VARCHAR(255)")
+    # 2026-08-10, pedido explícito del usuario -- Fase 1 de la migración
+    # a entidad canónica `Player` ("los datos de player deben ir en el
+    # modelo de player, y simplemente referenciar a los players en los
+    # matches"): FK nuevas en `match_history`, ya existente en
+    # producción -- ALTER TABLE idempotente, mismo patrón que el resto.
+    # `INTEGER` (no una FK real a nivel SQL -- SQLite no aplica FK
+    # constraints vía ALTER TABLE de todas formas, Peewee la modela como
+    # FK a nivel Python/ORM igual).
+    _add_column_if_missing(db_historical, "match_history", "player_a_id", "INTEGER")
+    _add_column_if_missing(db_historical, "match_history", "player_b_id", "INTEGER")
     # `tennis_match_stats_set.match_history_id` -- defensivo, la tabla
     # se crea limpia con esta columna vía create_tables() en la mayoría
     # de los entornos, pero por si ya existía sin ella en algún dev DB.
