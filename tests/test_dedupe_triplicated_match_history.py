@@ -14,7 +14,8 @@ import pytest
 from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import MatchHistory, TennisMatchHistoryUnvalidated
 from scripts.tennis.dedupe_triplicated_match_history import (
-    run_dedup, prune_resolved_candidates_from_queue, _surname_guess, _canonical_key,
+    run_dedup, prune_resolved_candidates_from_queue, dedupe_unvalidated_queue,
+    _surname_guess, _canonical_key, _names_confirm_identity,
 )
 
 
@@ -47,6 +48,27 @@ def test_surname_guess_picks_longest_token():
     assert _surname_guess("Alexandrova E.") == "alexandrova"
     assert _surname_guess("Elina Svitolina") == "svitolina"
     assert _surname_guess("Svitolina Elina") == "svitolina"
+
+
+def test_names_confirm_identity_requires_surname_and_given_name():
+    assert _names_confirm_identity("Elina Svitolina", "Svitolina Elina") is True
+    assert _names_confirm_identity("Alexandrova E.", "Alexandrova Ekaterina") is True
+    assert _names_confirm_identity("Ekaterina Alexandrova", "Alexandrova E.") is True
+
+
+def test_names_confirm_identity_rejects_same_surname_different_person():
+    # 2026-08-10, pedido explícito del usuario ("verificación más
+    # avanzada") -- mismo bug real que kairos-critical-misattribution-
+    # bug-2026-08-06: "Casper Ruud" vs "Christian Ruud" (padre/hijo,
+    # mismo apellido exacto, personas DISTINTAS). Solo apellido NO
+    # alcanza para confirmar identidad.
+    assert _names_confirm_identity("Casper Ruud", "Christian Ruud") is False
+    assert _names_confirm_identity("Svitolina Elina", "Svitolina Anna") is False
+
+
+def test_names_confirm_identity_fail_closed_on_single_token_name():
+    assert _names_confirm_identity("Ruud", "Casper Ruud") is False
+    assert _names_confirm_identity("", "Casper Ruud") is False
 
 
 def test_canonical_key_ignores_side_order():
@@ -150,3 +172,47 @@ def test_prune_resolved_candidates_keeps_entries_with_no_matching_row():
 
     assert result["already_resolved_pruned"] == 0
     assert TennisMatchHistoryUnvalidated.select().where(TennisMatchHistoryUnvalidated.id == c.id).count() == 1
+
+
+def test_dedupe_unvalidated_queue_merges_reciprocal_candidates():
+    # el mismo partido real, sin resolver, visto desde la página de
+    # CADA jugador -- 2 filas distintas en la cola.
+    c1 = _candidate("Elina Svitolina", "Alexandrova E.", is_full_name=False)
+    c2 = _candidate("Ekaterina Alexandrova", "Svitolina E.", is_full_name=False, match_date="2026-08-11")
+
+    result = dedupe_unvalidated_queue()
+
+    assert result["reciprocal_pairs_merged"] == 1
+    assert result["rows_deleted"] == 1
+    assert TennisMatchHistoryUnvalidated.select().count() == 1
+
+
+def test_dedupe_unvalidated_queue_prefers_full_name_opponent_over_abbreviated():
+    c1 = _candidate("Elina Svitolina", "Alexandrova E.", is_full_name=False)
+    c2 = _candidate("Ekaterina Alexandrova", "Svitolina Elina", is_full_name=True)
+
+    dedupe_unvalidated_queue()
+
+    remaining = TennisMatchHistoryUnvalidated.get()
+    assert remaining.player_b_is_full_name is True  # se quedó el candidato con más información
+
+
+def test_dedupe_unvalidated_queue_leaves_unrelated_candidates_untouched():
+    _candidate("Nobody Real", "Someone Else", is_full_name=False)
+    _candidate("Other Person", "Another One", is_full_name=False, match_date="2026-08-12")
+
+    result = dedupe_unvalidated_queue()
+
+    assert result["reciprocal_pairs_merged"] == 0
+    assert TennisMatchHistoryUnvalidated.select().count() == 2
+
+
+def test_dedupe_unvalidated_queue_does_not_merge_same_surname_different_person():
+    # verificación avanzada: NO debe fusionar por apellido solo.
+    _candidate("Casper Ruud", "Some Rival R.", is_full_name=False)
+    _candidate("Christian Ruud", "Some Other Rival", is_full_name=False)
+
+    result = dedupe_unvalidated_queue()
+
+    assert result["reciprocal_pairs_merged"] == 0
+    assert TennisMatchHistoryUnvalidated.select().count() == 2

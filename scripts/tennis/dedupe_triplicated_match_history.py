@@ -13,30 +13,29 @@ partido casi siempre difieren en formato ("Elina Svitolina" vs
 "Svitolina Elina", mayúsculas/abreviación del rival distinta según
 quién la escribió) -- nunca matchean entre sí ni contra la fila real.
 
-MECANISMO: agrupa TODAS las filas por una clave canónica
-`(match_date, apellido_normalizado_lado_1, apellido_normalizado_lado_2)`
--- el apellido se aproxima con el TOKEN MÁS LARGO del nombre (heurística
-ya verificada en vivo: robusta contra "Nombre Apellido" vs "Apellido
-Nombre" vs "Apellido Inicial.", porque el apellido real casi siempre es
-más largo que un nombre de pila corto o una inicial). Dentro de cada
-grupo con 2+ filas (mismo partido real duplicado):
+MISMO patrón real en `TennisMatchHistoryUnvalidated`: el mismo partido
+real, sin resolver todavía, puede quedar en la cola como 2 candidatos
+DISTINTOS -- uno generado desde la página de cada jugador (cada uno se
+ve a sí mismo como "player_a"), sin que el dedupe original de esa cola
+los reconozca como el mismo partido.
 
-  1. Si HAY una fila con `match_id` real (no empieza con "recentform:"
-     ni "tmldb:"), se queda -- es la fuente de verdad (identidad
-     completa vía match-detail). Antes de borrar las demás, se
-     COMPLETAN los campos NULL de la fila ganadora con cualquier valor
-     no-nulo real de las filas perdedoras (nunca se pierde un dato ya
-     cosechado).
-  2. Si NINGUNA es real (2 sintéticas puras, partido aún no resuelto
-     vía match-detail), se colapsan en 1 sola fila (se queda la de
-     `match_id` sintético lexicográficamente menor, determinístico),
-     mismo criterio de fusión de campos.
+VERIFICACIÓN DE IDENTIDAD (2026-08-10, pedido explícito del usuario:
+"añade verificación más avanzada de deduplicación"): comparar SOLO el
+apellido (heurística "token más largo") es insuficiente -- 2 personas
+reales pueden compartir apellido (ver
+kairos-critical-misattribution-bug-2026-08-06, "Casper Ruud" vs
+"Christian Ruud", padre/hijo, mismo apellido exacto). `_names_confirm_
+identity` exige apellido Y AL MENOS 1 token de nombre/inicial
+coincidente (no solo apellido), tolerante a abreviación ("E." matchea
+"Ekaterina") y a las 2 convenciones de orden reales del proyecto
+("Nombre Apellido" / "Apellido Nombre") sin necesitar saber cuál es
+cada lado.
 
-Fail-closed: grupos ambiguos (3+ filas con match_id REAL distintos --
-no debería pasar nunca por diseño, `match_id` es único por partido real
-en TennisExplorer, pero si pasara sería una colisión real de datos) se
-DEJAN INTACTOS y se reportan aparte -- nunca se borra a ciegas cuando
-hay más de 1 candidato "real"."""
+ORDEN DE EJECUCIÓN (pedido explícito): `dedupe_unvalidated_queue()`
+PRIMERO (fusiona candidatos reciprocos dentro de la cola, sin tocar
+`MatchHistory`), después `run_dedup()` (triplicación real en
+`MatchHistory`) y `prune_resolved_candidates_from_queue()` (poda contra
+`MatchHistory` ya limpia)."""
 
 from __future__ import annotations
 
@@ -60,9 +59,15 @@ _MERGEABLE_FIELDS = (
     "level", "best_of", "winner_age", "loser_age", "minutes",
 )
 
+_UNVALIDATED_MERGEABLE_FIELDS = ("tournament", "round", "surface", "score_from_a", "reason")
+
 
 def _is_synthetic(match_id: str) -> bool:
     return any(match_id.startswith(p) for p in _SYNTHETIC_PREFIXES)
+
+
+def _tokens(name: str) -> list[str]:
+    return [t.strip(".") for t in name.replace("-", " ").split() if t.strip(".")]
 
 
 def _surname_guess(full_name: str) -> str:
@@ -71,8 +76,38 @@ def _surname_guess(full_name: str) -> str:
     Apellido", "Apellido Nombre", "Apellido Inicial.") sin necesitar
     saber cuál es. Verificado en vivo (2026-08-10) contra el caso real
     Svitolina/Alexandrova."""
-    tokens = [t.strip(".") for t in full_name.replace("-", " ").split() if t.strip(".")]
+    tokens = _tokens(full_name)
     return max(tokens, key=len).lower() if tokens else ""
+
+
+def _names_confirm_identity(name_a: str, name_b: str) -> bool:
+    """Verificación de identidad MÁS ESTRICTA que solo-apellido --
+    2026-08-10, pedido explícito del usuario ("verificación más
+    avanzada de deduplicación"): exige que el APELLIDO coincida Y que
+    exista AL MENOS 1 token de nombre/inicial en común (igualdad
+    completa o coincidencia de inicial) -- nunca confía en el apellido
+    solo, evita colisiones reales de personas distintas con el mismo
+    apellido (ver kairos-critical-misattribution-bug-2026-08-06: "Casper
+    Ruud" vs "Christian Ruud", padre/hijo). Fail-closed: si a alguno de
+    los 2 lados le falta el nombre de pila por completo (nombre de 1
+    solo token), no se confirma -- no hay suficiente información para
+    descartar una colisión real."""
+    tokens_a, tokens_b = _tokens(name_a), _tokens(name_b)
+    if not tokens_a or not tokens_b:
+        return False
+    surname_a = max(tokens_a, key=len).lower()
+    surname_b = max(tokens_b, key=len).lower()
+    if surname_a != surname_b:
+        return False
+    given_a = [t.lower() for t in tokens_a if t.lower() != surname_a]
+    given_b = [t.lower() for t in tokens_b if t.lower() != surname_b]
+    if not given_a or not given_b:
+        return False
+    for ga in given_a:
+        for gb in given_b:
+            if ga == gb or (len(ga) == 1 and gb.startswith(ga)) or (len(gb) == 1 and ga.startswith(gb)):
+                return True
+    return False
 
 
 def _canonical_key(row) -> tuple[str, str, str] | None:
@@ -84,6 +119,83 @@ def _canonical_key(row) -> tuple[str, str, str] | None:
     # mismo como "player_a").
     side_1, side_2 = sorted((a, b))
     return (row.match_date, side_1, side_2)
+
+
+def dedupe_unvalidated_queue() -> dict[str, Any]:
+    """PASO 1 (pedido explícito del usuario: correr esto primero) --
+    fusiona candidatos RECÍPROCOS dentro de `TennisMatchHistoryUnvalidated`:
+    el mismo partido real, sin resolver, puede haber quedado como 2
+    filas -- una generada desde la página de cada jugador. Verificación
+    vía `_names_confirm_identity` (apellido + nombre/inicial) en ambas
+    direcciones: `c1.player_a_name` debe confirmar contra el rival de
+    `c2`, Y `c2.player_a_name` debe confirmar contra el rival de `c1`.
+
+    Se queda con el candidato MÁS COMPLETO (rival en nombre completo >
+    abreviado; más campos no-nulos como desempate) y fusiona los campos
+    faltantes desde el descartado antes de borrarlo -- nunca se pierde
+    información ya cosechada."""
+    init_db_historical()
+    with db_historical.connection_context():
+        candidates = list(TennisMatchHistoryUnvalidated.select())
+
+    by_date: dict[str, list] = defaultdict(list)
+    for c in candidates:
+        if c.match_date:
+            by_date[c.match_date].append(c)
+
+    to_delete_ids: list[int] = []
+    fields_merged = 0
+    pairs_merged = 0
+    deleted_ids: set[int] = set()
+
+    with db_historical.connection_context():
+        for date, group in by_date.items():
+            n = len(group)
+            for i in range(n):
+                c1 = group[i]
+                if c1.id in deleted_ids:
+                    continue
+                for j in range(i + 1, n):
+                    c2 = group[j]
+                    if c2.id in deleted_ids:
+                        continue
+                    if not (
+                        _names_confirm_identity(c1.player_a_name, c2.player_b_name_or_abbrev)
+                        and _names_confirm_identity(c2.player_a_name, c1.player_b_name_or_abbrev)
+                    ):
+                        continue
+
+                    # más completo: rival en nombre completo gana sobre abreviado.
+                    if c1.player_b_is_full_name and not c2.player_b_is_full_name:
+                        winner, loser = c1, c2
+                    elif c2.player_b_is_full_name and not c1.player_b_is_full_name:
+                        winner, loser = c2, c1
+                    else:
+                        winner, loser = (c1, c2) if c1.id < c2.id else (c2, c1)
+
+                    changed = False
+                    for f in _UNVALIDATED_MERGEABLE_FIELDS:
+                        if getattr(winner, f) is None and getattr(loser, f) is not None:
+                            setattr(winner, f, getattr(loser, f))
+                            changed = True
+                            fields_merged += 1
+                    if changed:
+                        winner.save()
+
+                    loser.delete_instance()
+                    deleted_ids.add(loser.id)
+                    to_delete_ids.append(loser.id)
+                    pairs_merged += 1
+                    break  # c1 ya fusionado con su reciprocidad -- no seguir buscando más matches para c1
+
+    result = {
+        "candidates_scanned": len(candidates),
+        "reciprocal_pairs_merged": pairs_merged,
+        "rows_deleted": len(to_delete_ids),
+        "fields_merged": fields_merged,
+    }
+    print(f"[dedupe_triplicated_match_history] dedupe_queue {result}", flush=True)
+    return result
 
 
 def run_dedup() -> dict[str, Any]:
@@ -166,39 +278,47 @@ def prune_resolved_candidates_from_queue() -> dict[str, Any]:
     `TennisMatchHistoryUnvalidated` (pendientes de resolver vía red)
     pueden corresponder al MISMO partido real que YA tiene una fila con
     identidad completa en `MatchHistory` (`match_id` real, no
-    sintético) -- simplemente bajo otro formato de nombre, así que
-    nunca matchearon contra `TennisMatchHistory`/`TmlDatabaseMatch` en
-    el pipeline de dedupe original mismo llegaron acá.
+    sintético) -- simplemente bajo otro formato de nombre.
 
-    Solo se podan candidatos cuya clave canónica coincide con una fila
-    REAL (match-detail resuelto) -- NUNCA contra una fila sintética
-    "recentform:" (esa SÍ necesita el fetch real para conseguir
-    identidad completa; podarla ahí perdería la oportunidad de
-    resolverla alguna vez). Sin red -- solo lectura/borrado de DB."""
+    VERIFICACIÓN AVANZADA (2026-08-10, pedido explícito): en vez de solo
+    comparar apellidos, cada candidato se valida contra las filas reales
+    de la MISMA fecha con `_names_confirm_identity` en ambos lados (el
+    `player_a_name` del candidato -- SIEMPRE nombre completo -- contra
+    un lado de la fila real, y el rival del candidato -- completo o
+    abreviado -- contra el otro lado) -- exige apellido Y nombre/inicial
+    coincidentes, no solo apellido, mismo criterio que `dedupe_unvalidated_
+    queue`. Solo se podan candidatos que confirman contra una fila REAL
+    (no sintética) -- esa SÍ necesita el fetch real para conseguir
+    identidad completa. Sin red -- solo lectura/borrado de DB."""
     init_db_historical()
     with db_historical.connection_context():
         all_rows = list(MatchHistory.select())
-    real_keys: set[tuple[str, str, str]] = set()
+    real_by_date: dict[str, list] = defaultdict(list)
     for r in all_rows:
-        if _is_synthetic(r.match_id):
+        if _is_synthetic(r.match_id) or not r.match_date:
             continue
-        key = _canonical_key(r)
-        if key is not None:
-            real_keys.add(key)
+        real_by_date[r.match_date].append(r)
 
     with db_historical.connection_context():
         candidates = list(TennisMatchHistoryUnvalidated.select())
 
     to_delete_ids = []
     for c in candidates:
-        opponent_raw = c.player_b_name_or_abbrev
-        a_surname = _surname_guess(c.player_a_name)
-        b_surname = _surname_guess(opponent_raw)
-        if not (c.match_date and a_surname and b_surname):
+        if not c.match_date:
             continue
-        key = (c.match_date, *sorted((a_surname, b_surname)))
-        if key in real_keys:
-            to_delete_ids.append(c.id)
+        for real_row in real_by_date.get(c.match_date, ()):
+            for known_side, other_side in (
+                (real_row.player_a_name, real_row.player_b_name),
+                (real_row.player_b_name, real_row.player_a_name),
+            ):
+                if _names_confirm_identity(c.player_a_name, known_side) and _names_confirm_identity(
+                    c.player_b_name_or_abbrev, other_side,
+                ):
+                    to_delete_ids.append(c.id)
+                    break
+            else:
+                continue
+            break
 
     if to_delete_ids:
         with db_historical.connection_context():
@@ -214,12 +334,13 @@ def prune_resolved_candidates_from_queue() -> dict[str, Any]:
     result = {
         "queue_candidates_scanned": len(candidates),
         "already_resolved_pruned": len(to_delete_ids),
-        "real_match_keys_known": len(real_keys),
+        "real_rows_indexed": len(all_rows),
     }
     print(f"[dedupe_triplicated_match_history] prune_queue {result}", flush=True)
     return result
 
 
 if __name__ == "__main__":
+    dedupe_unvalidated_queue()
     run_dedup()
     prune_resolved_candidates_from_queue()
