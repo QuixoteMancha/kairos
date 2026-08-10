@@ -121,6 +121,21 @@ def test_skips_parenthetical_birth_year_suffix_fail_closed():
     assert candidates == []
 
 
+def test_skips_player_with_both_name_order_variants_in_raw_text_fail_closed():
+    # Regresión real encontrada en producción (2026-08-10): tras
+    # fusionar 2 Player duplicados, el sobreviviente hereda partidos
+    # de AMBAS variantes de orden. Reordenar a ciegas revierte un
+    # nombre YA correcto de vuelta a TE-nativo (32 casos reales,
+    # ej. "Naomi Osaka" -> "Osaka Naomi"). Debe saltarse.
+    p = Player.create(canonical_name="Naomi Osaka", created_at=_now())
+    _row("1", "Opponent X", "Naomi Osaka", player_b_id=p.id, source="tennisexplorer")
+    _row("2", "Opponent Y", "Osaka Naomi", player_b_id=p.id, source="tennisexplorer")
+
+    candidates = find_reorder_candidates()
+
+    assert candidates == []
+
+
 def test_run_dry_run_does_not_mutate():
     p = Player.create(canonical_name="Vanta Valentin", created_at=_now())
     _row("1", "Rodesch Chris", "Vanta Valentin", player_b_id=p.id, source="tennisexplorer")

@@ -127,6 +127,21 @@ def find_reorder_candidates() -> list[tuple[Player, str]]:
         if _is_abbreviated_or_malformed_raw_name(player.canonical_name):
             continue
         proposed = _te_native_to_nombre_apellido(player.canonical_name)
+        # Regresión real encontrada en producción (2026-08-10):
+        # corriendo este script justo DESPUÉS de fusionar 2 `Player`
+        # duplicados (`merge_duplicate_players.py`), el sobreviviente
+        # queda con partidos de AMBAS variantes de orden en su texto
+        # crudo (heredado del duplicado recién absorbido) -- el
+        # nombre YA CORRECTO también "coincide con algún texto crudo
+        # visto" y terminaba reordenándose DE VUELTA a la forma
+        # TE-nativa incorrecta (32 casos reales: Naomi Osaka -> Osaka
+        # Naomi, Karolina Pliskova -> Pliskova Karolina, etc., tuvieron
+        # que revertirse a mano). Fail-closed: si el texto crudo
+        # contiene AMBAS variantes de orden para este jugador, es
+        # ambiguo (síntoma de fusión reciente) -- se salta, no se
+        # reordena a ciegas.
+        if proposed in raw_names:
+            continue
         if proposed == player.canonical_name:
             continue
         candidates.append((player, proposed))
