@@ -256,6 +256,7 @@ def init_db_historical() -> None:
         TournamentLocationCache,
         WtaPlayerRankingHistory, WtaTournamentLevel, AtpTournamentLevel, TennisExplorerPlayerSlug,
         MatchHistory, Player, TennisMatchHistoryUnvalidated, TennisPlayerSyncStatus,
+        TennisPlayerWikidataReference,
     )
     # `TennisMatchStatsSet` (2026-08-09, pedido explícito del usuario --
     # match.set_stats): estaba definida en models.py pero NUNCA se había
@@ -310,6 +311,10 @@ def init_db_historical() -> None:
         # 2026-08-06, pedido explícito del usuario -- cache de slugs
         # reales de TennisExplorer cosechados de hrefs, tabla nueva.
         TennisExplorerPlayerSlug,
+        # 2026-08-10, pedido explícito del usuario -- base de verdad
+        # nombre/apellido de jugadores de tenis vía Wikidata, tabla
+        # nueva (ver TennisPlayerWikidataReference).
+        TennisPlayerWikidataReference,
     ], safe=True)
 
     # ALTER TABLE idempotente (2026-08-01, pedido explícito del usuario):

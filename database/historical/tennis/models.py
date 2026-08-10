@@ -721,3 +721,37 @@ class AtpTournamentLevel(HistoricalBaseModel):
     tournament_name = CharField()  # normalizado (mayúsculas, sin sufijo tour/nivel, sin dígitos sueltos)
     level = CharField(null=True)
     fetched_at = DateTimeField()
+
+
+class TennisPlayerWikidataReference(HistoricalBaseModel):
+    """Base de verdad REAL para resolver definitivamente el orden
+    nombre/apellido de jugadores de tenis -- 2026-08-10, pedido
+    explícito del usuario tras la saga de duplicados/reordenes de
+    `Player.canonical_name` ("busca una lista en wikipedia con nombres
+    de tenistas de atp y wta... eso dejalo como base para que después
+    no se armen enredos").
+
+    Poblado vía SPARQL contra Wikidata (`build_tennis_player_wikidata_
+    reference.py`) -- NO scraping de HTML de listas de Wikipedia
+    (fràgil, mal estructurado); Wikidata YA tiene `P735` (nombre de
+    pila) y `P734` (apellido) como propiedades ESTRUCTURADAS separadas
+    para cada persona con ocupación "tennis player" (`Q10833314`) --
+    elimina la ambigüedad de raíz en vez de heurística de reordenar
+    texto libre (`_te_native_to_nombre_apellido`, que SOLO puede
+    adivinar, nunca confirmar).
+
+    `canonical_name` = f"{given_name} {family_name}" (SIEMPRE
+    "Nombre Apellido", nunca ambiguo -- viene de 2 campos separados,
+    no de un string a reordenar). Nombres sin AMBOS `P735`/`P734`
+    presentes en Wikidata se excluyen (fail-closed, mejor no tener
+    entrada que tener una a medias)."""
+
+    class Meta:
+        table_name = "tennis_player_wikidata_reference"
+        indexes = ((("wikidata_id",), True),)
+
+    wikidata_id = CharField()  # ej. "Q38129" (URI corto, sin el prefijo)
+    canonical_name = CharField()  # "Nombre Apellido", SIEMPRE, ver docstring
+    given_name = CharField()
+    family_name = CharField()
+    fetched_at = DateTimeField()
