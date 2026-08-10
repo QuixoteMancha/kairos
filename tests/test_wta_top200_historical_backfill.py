@@ -378,3 +378,113 @@ def test_run_backfill_for_names_with_thread_pool():
     assert mock_bp.call_count == 4
     assert len(summary) == 4
     assert sum(r["odds_inserted"] for r in summary) == 4
+
+
+def test_backfill_player_resolves_match_detail_via_shared_writer_helper():
+    # 2026-08-10, pedido explícito del usuario: "con todo lo que
+    # tenemos actualmente, dedup y fill" -- backfill_player debe usar
+    # _resolve_and_save_via_match_detail (writer.py), NO get_match_detail/
+    # save_match_detail sueltos, para heredar gratis el fix de causa raíz
+    # de la triplicación + el fill de level/tour.
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": 2.36, "odds_opponent": 1.58, "match_id": "999",
+    }
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch",
+        side_effect=lambda slug, year=None: fake_match and (f"year={year}" if year == 2026 else None),
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html",
+        side_effect=lambda html, name: [fake_match] if html == "year=2026" else [],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._resolve_and_save_via_match_detail", return_value=True,
+    ) as mock_resolve, patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        result = backfill_player("Test Player")
+
+    mock_resolve.assert_called_once_with("Test Player", "999")
+    assert result["match_details_resolved"] == 1
+    assert result["match_details_error"] == 0
+
+
+def test_backfill_player_skips_match_detail_already_in_match_history():
+    from datetime import datetime, timezone
+
+    MatchHistory.delete().execute()
+    MatchHistory.create(
+        match_id="999", player_a_name="A", player_b_name="B", match_date="2026-08-03",
+        source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
+    )
+    fake_match = {
+        "date": "03.08.", "tournament": "Washington", "surface": "hard",
+        "opponent": "Pegula J.", "round": "F", "round_full": "final",
+        "score": "4-6, 6-4, 6-0", "odds_self": None, "odds_opponent": None, "match_id": "999",
+    }
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.resolve_player_slug", return_value="testplayer",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._fetch",
+        side_effect=lambda slug, year=None: "year=2026" if year == 2026 else None,
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._parse_year_html",
+        side_effect=lambda html, name: [fake_match] if html == "year=2026" else [],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill._resolve_and_save_via_match_detail",
+    ) as mock_resolve, patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        backfill_player("Test Player")
+
+    mock_resolve.assert_not_called()
+
+
+def test_cli_top_n_reads_explicit_flag():
+    import sys
+    from scripts.tennis.wta_top200_historical_backfill import _cli_top_n
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["prog", "--top-n", "2000"]
+        assert _cli_top_n() == 2000
+    finally:
+        sys.argv = old_argv
+
+
+def test_cli_top_n_falls_back_to_positional_int():
+    import sys
+    from scripts.tennis.wta_top200_historical_backfill import _cli_top_n
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["prog", "500"]
+        assert _cli_top_n() == 500
+    finally:
+        sys.argv = old_argv
+
+
+def test_cli_top_n_default_when_nothing_passed():
+    import sys
+    from scripts.tennis.wta_top200_historical_backfill import _cli_top_n
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["prog"]
+        assert _cli_top_n() == 200
+    finally:
+        sys.argv = old_argv
+
+
+def test_cli_top_n_ignores_subcommand_keywords():
+    import sys
+    from scripts.tennis.wta_top200_historical_backfill import _cli_top_n
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["prog", "full_roster"]
+        assert _cli_top_n() == 200
+    finally:
+        sys.argv = old_argv

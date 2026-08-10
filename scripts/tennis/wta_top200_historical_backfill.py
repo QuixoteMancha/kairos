@@ -1,9 +1,18 @@
 """Backfill masivo del historial real de partidos + cuotas históricas
-del top-200 WTA actual, vía TennisExplorer -- 2026-08-03, pedido
+del top-N WTA/ATP actual, vía TennisExplorer -- 2026-08-03, pedido
 explícito del usuario: "toma las top 200 actuales de tennis wta y haz
 un fetch histórico, toma pausas entre los requests y entre cada
 jugadora. completemos la base con más matches de WTA... añadir tabla
 donde se pongan las odds históricas".
+
+2026-08-10, pedido explícito del usuario: "modificalo para que acepte
+argumento del ranking" -- `run_backfill(n_players=N, ...)` YA aceptaba
+un `N` arbitrario (el nombre del archivo quedó desactualizado, el
+comportamiento no); ahora además soporta `--top-n` explícito por CLI
+(ej. `python3 -m scripts.tennis.wta_top200_historical_backfill --top-n 2000`
+para correr contra el top-2000 real de la API oficial WTA en vez del
+default de 200, ver `get_top_rankings`/`wta_scraper.get_top_rankings`,
+que ya pagina sin límite real más allá del propio ranking oficial).
 
 FUENTES:
 - Ranking real: `outer_apis.sports.tennis.rankings.get_top_rankings`
@@ -38,10 +47,22 @@ from datetime import date as dt_date, datetime, timezone
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisHistoricalOdds
 from database.historical.tennis import TennisExplorerPlayerSlug
-from database.historical.tennis import MatchHistory, save_match_detail
+from database.historical.tennis import MatchHistory
+# 2026-08-10, pedido explícito del usuario ("modificalo... con todo lo
+# que tenemos actualmente, dedup y fill de lo que había quedado
+# faltante") -- reusa `_resolve_and_save_via_match_detail` (writer.py,
+# el mismo mecanismo ya deployado en el worker de backfill masivo y en
+# el hilo de enriquecimiento del tick worker) en vez de llamar
+# `get_match_detail`/`save_match_detail` sueltos acá: gana GRATIS (a)
+# el fix de causa raíz de la triplicación (`_find_existing_match_history_row`
+# ya no compara por string exacto) y (b) el fill de `level`/`tour` bonus
+# vía `resolve_level_for_tournament` -- este script antes NO completaba
+# `level` para los partidos que resolvía, a diferencia del worker
+# unificado.
+from database.historical.tennis.writer import _resolve_and_save_via_match_detail
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
-    guess_player_slug, resolve_player_slug, _fetch, _parse_year_html, get_match_detail,
+    guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
 )
 
 _YEARS = list(range(2016, 2027))
@@ -169,26 +190,25 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
     # página de LOS 2 jugadores (mismo match_id), así que el backfill del
     # segundo jugador no vuelve a pedir la página de detalle, solo lee de
     # `MatchHistory` (ya existe) y sigue de largo.
+    #
+    # 2026-08-10: la resolución ahora pasa por `_resolve_and_save_via_
+    # match_detail` (fetch + identidad + save + fill de level/tour bonus,
+    # todo en 1 llamada, ver import arriba) en vez de `get_match_detail`+
+    # `save_match_detail` sueltos -- ya no distingue created/updated/
+    # unchanged (esa función solo devuelve bool), se reporta como
+    # resolved/error.
     unique_match_ids = {m["match_id"] for _year, m in matches_by_year if m.get("match_id")}
-    details_created = details_updated = details_unchanged = details_error = 0
+    details_resolved = details_error = 0
     with db_historical.connection_context():
         already_have = {
             r.match_id for r in MatchHistory.select(MatchHistory.match_id)
             .where(MatchHistory.match_id.in_(list(unique_match_ids)))
         }
     for match_id in unique_match_ids - already_have:
-        detail = get_match_detail(match_id)
+        ok = _resolve_and_save_via_match_detail(player_name, match_id)
         time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
-        if detail is None:
-            details_error += 1
-            continue
-        status = save_match_detail(detail)
-        if status == "created":
-            details_created += 1
-        elif status == "updated":
-            details_updated += 1
-        elif status == "unchanged":
-            details_unchanged += 1
+        if ok:
+            details_resolved += 1
         else:
             details_error += 1
 
@@ -196,8 +216,7 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
         "player": player_name, "status": "ok", "slug": slug,
         "matches_found": len(matches_by_year),
         "odds_inserted": inserted_odds,
-        "match_details_created": details_created, "match_details_updated": details_updated,
-        "match_details_unchanged": details_unchanged, "match_details_error": details_error,
+        "match_details_resolved": details_resolved, "match_details_error": details_error,
     }
 
 
@@ -245,7 +264,7 @@ def _run_backfill_for_names(names: list[str], tag: str, max_workers: int = 1) ->
             done += 1
             print(
                 f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
-                f"-> {r['status']}, match_history+{r.get('match_details_created', 0)}, "
+                f"-> {r['status']}, match_history+{r.get('match_details_resolved', 0)}, "
                 f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
                 flush=True,
             )
@@ -260,14 +279,14 @@ def _run_backfill_for_names(names: list[str], tag: str, max_workers: int = 1) ->
                 done += 1
                 print(
                     f"[{tag}_backfill] ({done}/{len(names)}) {r['_name']} "
-                    f"-> {r['status']}, match_history+{r.get('match_details_created', 0)}, "
+                    f"-> {r['status']}, match_history+{r.get('match_details_resolved', 0)}, "
                     f"odds+{r.get('odds_inserted', 0)} ({r['_elapsed']:.1f}s)",
                     flush=True,
                 )
 
     ok = sum(1 for r in summary if r["status"] == "ok")
     skipped = sum(1 for r in summary if r["status"] != "ok")
-    total_match_history = sum(r.get("match_details_created", 0) for r in summary)
+    total_match_history = sum(r.get("match_details_resolved", 0) for r in summary)
     total_odds = sum(r.get("odds_inserted", 0) for r in summary)
     print(
         f"[{tag}_backfill] TERMINADO: {ok} ok, {skipped} sin slug/skip, "
@@ -399,6 +418,22 @@ def _cli_max_workers(default: int = 1) -> int:
     return default
 
 
+def _cli_top_n(default: int = 200) -> int:
+    """2026-08-10, pedido explícito del usuario ("que acepte argumento
+    del ranking"): `--top-n N` explícito (ej. `--top-n 2000`) tiene
+    prioridad; si no viene, cae al positional plano ya soportado
+    (`python3 -m ... 2000`), y si tampoco viene, `default`."""
+    if "--top-n" in sys.argv:
+        idx = sys.argv.index("--top-n")
+        if idx + 1 < len(sys.argv):
+            return int(sys.argv[idx + 1])
+    if len(sys.argv) > 1 and sys.argv[1] not in (
+        "full_roster", "atp_full_roster", "missing_odds_opponents", "--top-n",
+    ):
+        return int(sys.argv[1])
+    return default
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "full_roster":
         run_backfill_from_wta_roster(max_workers=_cli_max_workers())
@@ -407,5 +442,4 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "missing_odds_opponents":
         run_backfill_for_missing_odds_opponents(max_workers=_cli_max_workers())
     else:
-        n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
-        run_backfill(n_players=n, tour="WTA")
+        run_backfill(n_players=_cli_top_n(), tour="WTA")
