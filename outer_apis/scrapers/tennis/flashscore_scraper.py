@@ -37,6 +37,14 @@ from outer_apis.scrapers.tennis._request_throttle import flashscore_throttle
 
 _SEARCH_URL = "https://s.flashscore.com/search/?q={name}&l=1&s=2&f=1%3B1&pid=2&sid=2"
 _RESULTS_URL = "https://www.flashscore.com/player/{slug}/{pid}/results/"
+# 2026-08-10, pedido explícito del usuario: "aplicar la verificación de
+# nombre tanto cuando el scraper usa proxy como cuando no" -- la página
+# BASE de perfil (sin el sufijo `/results/`) SÍ es accesible sin proxy
+# (verificado en vivo: Flashscore bloquea `/results/`, no la ficha base),
+# a diferencia de `_RESULTS_URL` (esa sí requiere BrightData). Se usa
+# ÚNICAMENTE para confirmar identidad real (`heading__name`), nunca
+# para traer partidos/stats -- eso sigue exclusivo de `_RESULTS_URL`.
+_PROFILE_URL = "https://www.flashscore.com/player/{slug}/{pid}/"
 
 # 2026-08-04, pedido explícito del usuario: "el proxy ya no se usará
 # hasta nuevo aviso para fetchs" -- migramos historial/H2H a
@@ -57,12 +65,73 @@ _player_id_cache: dict[str, tuple[str, str] | None] = {}
 
 # ── Búsqueda de jugador (sin proxy) ────────────────────────────────────────
 
+def _verify_flashscore_player(pid: str, slug: str, expected_name: str) -> bool:
+    """Confirma que `(pid, slug)` es REALMENTE `expected_name` -- 2026-08-10,
+    pedido explícito del usuario ("aplicar la verificación de nombre
+    tanto cuando el scraper usa proxy como cuando no") tras encontrar en
+    vivo que `search_player` confiaba ciegamente en el PRIMER resultado
+    de la búsqueda (Flashscore devolvió 7 candidatos "Elina ___" reales
+    para "Elina Svitolina": monfils-elina, avanesyan-elina, nepliy-elina,
+    elina-zakharova, popescu-elina, kamyabsharifi-elina,
+    lopez-pappalardo-elina-maria -- tomaba el primero sin chequear,
+    acertó por casualidad esa vez).
+
+    Fetchea `_PROFILE_URL` (la ficha BASE, sin `/results/` -- esa sí
+    requiere proxy BrightData; la base NO, confirmado en vivo) y compara
+    el nombre real mostrado (`heading__name`) contra `expected_name` por
+    solapamiento de tokens (`_significant_tokens`, mismo criterio que
+    `_name_score`) -- funciona SIN proxy (fetch directo) y también
+    cuando el proxy está activo (mismo mecanismo, no depende de
+    `PROXY_FETCH_ENABLED`). Fail-closed: `False` ante cualquier fallo de
+    red/parseo, o si el nombre mostrado no comparte ningún token
+    significativo real con `expected_name`."""
+    try:
+        import requests
+
+        flashscore_throttle.wait()
+        url = _PROFILE_URL.format(slug=slug, pid=pid)
+        resp = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.flashscore.com/",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return False
+        m = re.search(r'heading__name[^>]*>([^<]+)<', resp.text)
+        if not m:
+            return False
+        page_name = m.group(1).strip()
+        # 2026-08-10, bug real encontrado en vivo: comparar por
+        # solapamiento de CUALQUIER token es insuficiente -- "Elina
+        # Svitolina" vs "Elina Zakharova" comparten el nombre de pila
+        # ("Elina") y esto los confundía como la misma persona. Exige
+        # coincidencia del APELLIDO (heurística ya probada en
+        # `database/historical/tennis/writer.py::_names_confirm_identity`:
+        # el token MÁS LARGO de cada nombre, agnóstico al orden).
+        expected_tokens = _significant_tokens(expected_name)
+        page_tokens = _significant_tokens(page_name)
+        if not expected_tokens or not page_tokens:
+            return False
+        expected_surname = max(expected_tokens, key=len)
+        page_surname = max(page_tokens, key=len)
+        return expected_surname == page_surname
+    except Exception:
+        return False
+
+
 def search_player(name: str) -> tuple[str, str] | None:
     """Busca un jugador de tenis por nombre en la API pública de
-    Flashscore (endpoint público JSON/JSONP, sin proxy).
+    Flashscore (endpoint público JSON/JSONP, sin proxy) -- 2026-08-10,
+    verifica identidad real contra CADA candidato en orden (nunca
+    confía en la posición del primer resultado, ver
+    `_verify_flashscore_player`) antes de devolverlo.
 
     Returns:
-        (participant_id, url_slug) o None si no se encuentra / falla.
+        (participant_id, url_slug) o None si no se encuentra / falla /
+        ningún candidato verifica.
     """
     cache_key = name.lower().strip()
     if cache_key in _player_id_cache:
@@ -92,8 +161,10 @@ def search_player(name: str) -> tuple[str, str] | None:
             data = json.loads(m.group(1))
             for item in data.get("results", []):
                 if item.get("sport_id") == 2 and item.get("type") == "participants":
-                    result = (item["id"], item.get("url", ""))
-                    break
+                    candidate = (item["id"], item.get("url", ""))
+                    if _verify_flashscore_player(candidate[0], candidate[1], name):
+                        result = candidate
+                        break
     except Exception:
         result = None
 
