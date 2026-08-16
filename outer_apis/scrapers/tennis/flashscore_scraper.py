@@ -47,15 +47,28 @@ _RESULTS_URL = "https://www.flashscore.com/player/{slug}/{pid}/results/"
 _PROFILE_URL = "https://www.flashscore.com/player/{slug}/{pid}/"
 
 # 2026-08-04, pedido explícito del usuario: "el proxy ya no se usará
-# hasta nuevo aviso para fetchs" -- migramos historial/H2H a
-# TennisExplorer (sin proxy, ver match_history.py), pero
-# find_match_id/get_match_statistics (estadísticas detalladas de
-# partido) SIGUEN sin reemplazo real y requieren proxy BrightData
-# (Flashscore bloquea esas 2 páginas sin proxy). En vez de borrar esa
-# estructura (el worker sigue revisando partidos nuevos sin stats,
-# `has_match_stats`/`_fetch_and_save_match_stats` intactos), se pausa
-# el fetch en el punto más bajo posible -- reversible con una env var,
-# sin tocar código, cuando el usuario avise que se puede retomar.
+# hasta nuevo aviso para fetchs" -- se pausó el fetch por env var en vez
+# de borrar la estructura.
+#
+# 2026-08-16: la premisa de arriba resultó FALSA y el gate ya NO gatea
+# nada. Se creía que `find_match_id`/`get_match_statistics` requerían
+# proxy sí o sí ("Flashscore bloquea esas 2 páginas sin proxy"); medido
+# en vivo, ambas responden HTTP 200 con datos reales SIN proxy. El gate
+# se fue removiendo por partes a pedido explícito del usuario:
+#   - `_fetch_results_page` (2026-08-12)
+#   - `get_match_statistics` (2026-08-16) -- tenía `tennis_match_stats`
+#     en 0 filas en producción pese a estar el pipeline entero wireado,
+#     porque la función cortaba en su primera línea.
+# Todas usan ahora `fetch_with_ip_block_fallback`: directo primero,
+# proxy SOLO ante señal real de bloqueo (403/429/503 o error de red).
+#
+# Tras remover el gate de `get_match_statistics` NO queda ninguna función
+# gateada por esta constante (verificado por grep 2026-08-16: cero
+# ocurrencias de `if not PROXY_FETCH_ENABLED` en el módulo). Se CONSERVA
+# igual, no como código muerto sino como el interruptor documentado del
+# módulo: `fetch_with_ip_block_fallback` decide solo cuándo usar proxy,
+# y esta env var queda como referencia de esa decisión histórica.
+# Eliminarla es una limpieza aparte, no parte de este cambio.
 PROXY_FETCH_ENABLED = os.getenv("FLASHSCORE_PROXY_FETCH_ENABLED", "false").strip().lower() == "true"
 
 _SET_FIELDS = [("BA", "BB"), ("BC", "BD"), ("BE", "BF"), ("BG", "BH"), ("BI", "BJ")]
@@ -721,11 +734,26 @@ def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None,
         son porcentajes tipo "58% (31/53)", no siempre numéricos puros,
         se guardan crudos a propósito). Fail-closed: None si falla la
         request o el partido no tiene estadísticas trackeadas (común en
-        challenger/ITF de bajo nivel), o si `PROXY_FETCH_ENABLED` está en
-        False (pausado, ver docstring del módulo -- 2026-08-04) -- nunca
-        fabrica valores."""
-    if not PROXY_FETCH_ENABLED:
-        return None
+        challenger/ITF de bajo nivel) -- nunca fabrica valores.
+
+    2026-08-16, pedido explícito del usuario ("sí, el gate de
+    estadísticas sin proxy"): se REMUEVE el gate duro
+    `if not PROXY_FETCH_ENABLED: return None` que existía acá desde la
+    pausa del proxy del 2026-08-04, y se alinea al mismo mecanismo que
+    ya usan `search_player`/`get_match_duration`/`_fetch_results_page`:
+    `fetch_with_ip_block_fallback` (directo primero, proxy SOLO ante una
+    señal real de bloqueo -- 403/429/503 o error de conexión).
+
+    POR QUÉ: el gate no estaba protegiendo nada. Medido en producción
+    2026-08-16, `tennis_match_stats` tenía 0 filas pese a que el
+    pipeline completo (`tennis_match_history_sync_worker` ->
+    `get_match_statistics` -> `save_match_stats_for_history`) ya estaba
+    wireado y corriendo: esta función cortaba en la primera línea.
+    Verificado en vivo contra 3 `match_id` reales de la base
+    (`hAvW0ePG`, `fg9MFEGD`, `hQjR703N`): el endpoint responde HTTP 200
+    con datos reales SIN proxy. El gate estaba bloqueando datos gratis
+    y disponibles, y con ellos toda la estadística de saque que alimenta
+    los modelos (`models/volatility/sports/tennis/tennis_markov.py`)."""
     flashscore_throttle.wait()
     url = _STATS_URL.format(match_id=match_id)
     headers = {
@@ -734,12 +762,7 @@ def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None,
         "Accept": "*/*",
     }
 
-    def _do_request(session):
-        return session.get(url, headers=headers, timeout=25, verify=False)
-
-    resp = brightdata_proxy.request_via_proxy_with_ip_retry(
-        brightdata_proxy.make_proxy_session, _do_request,
-    )
+    resp = brightdata_proxy.fetch_with_ip_block_fallback(url, headers=headers, timeout=25)
     if resp is None or resp.status_code != 200:
         return None
     text = (resp.text or "").strip()

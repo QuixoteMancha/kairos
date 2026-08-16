@@ -90,9 +90,7 @@ def _make_response(text, status=200):
 
 def test_get_match_statistics_parses_sections_and_values():
     with patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
-    ), patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.fetch_with_ip_block_fallback",
         return_value=_make_response(_REAL_STATS_FEED),
     ):
         stats = get_match_statistics("fNdO7zfc")
@@ -106,9 +104,7 @@ def test_get_match_statistics_parses_sections_and_values():
 
 def test_get_match_statistics_fail_closed_on_empty_response():
     with patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
-    ), patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.fetch_with_ip_block_fallback",
         return_value=_make_response("0"),
     ):
         assert get_match_statistics("nostats") is None
@@ -116,9 +112,7 @@ def test_get_match_statistics_fail_closed_on_empty_response():
 
 def test_get_match_statistics_fail_closed_on_request_failure():
     with patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
-    ), patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.fetch_with_ip_block_fallback",
         return_value=None,
     ):
         assert get_match_statistics("whatever") is None
@@ -126,9 +120,7 @@ def test_get_match_statistics_fail_closed_on_request_failure():
 
 def test_get_match_statistics_fail_closed_on_http_error():
     with patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", True,
-    ), patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.fetch_with_ip_block_fallback",
         return_value=_make_response("", status=500),
     ):
         assert get_match_statistics("whatever") is None
@@ -399,15 +391,30 @@ def test_proxy_fetch_disabled_by_default():
     assert PROXY_FETCH_ENABLED is False
 
 
-def test_get_match_statistics_never_calls_proxy_when_disabled():
+def test_get_match_statistics_goes_direct_and_does_not_force_proxy():
+    """2026-08-16, pedido explícito del usuario ("el gate de estadísticas
+    sin proxy"): el gate duro `PROXY_FETCH_ENABLED` se removió de
+    `get_match_statistics`. Ahora usa el mismo mecanismo que el resto del
+    módulo -- request DIRECTA primero, y el proxy solo entra si hay una
+    señal real de bloqueo (eso lo cubre `fetch_with_ip_block_fallback`,
+    testeado aparte). Este test verifica que ya NO corta en seco y que no
+    fuerza el proxy: con el gate viejo, esto devolvía None sin pedir nada.
+
+    Motivo real: `tennis_match_stats` tenía 0 filas en producción pese a
+    tener el pipeline completo ya wireado -- esta función cortaba en la
+    primera línea, y el endpoint responde 200 sin proxy (verificado en
+    vivo contra match_id reales)."""
     with patch(
-        "outer_apis.scrapers.tennis.flashscore_scraper.PROXY_FETCH_ENABLED", False,
-    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.fetch_with_ip_block_fallback",
+        return_value=_make_response(_REAL_STATS_FEED),
+    ) as direct, patch(
         "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy.request_via_proxy_with_ip_retry",
-    ) as mock_proxy:
+    ) as forced_proxy:
         result = get_match_statistics("whatever")
-    mock_proxy.assert_not_called()
-    assert result is None
+
+    direct.assert_called_once()
+    forced_proxy.assert_not_called()
+    assert result is not None and result["match"]["Aces"] == ("3", "0")
 
 
 # ── `_fetch_results_page`: fetch directo + fallback a proxy (2026-08-12) ──
