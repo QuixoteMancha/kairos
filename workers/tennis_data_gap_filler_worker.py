@@ -50,6 +50,7 @@ Env vars:
   `TENNIS_GAP_FILLER_BIO_LIMIT`        (default 40)
   `TENNIS_GAP_FILLER_DURATIONS_LIMIT`  (default 40)
   `TENNIS_GAP_FILLER_STATS_LIMIT`      (default 40, ~2 req/partido)
+  `TENNIS_GAP_FILLER_TYPED_STATS_LIMIT` (default 500, SIN red)
   `TENNIS_GAP_FILLER_GEOCODE_LIMIT`    (default 25, Nominatim = 1 req/s)
   `TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES` (default 6, 0 = nunca)
 """
@@ -69,6 +70,7 @@ _SELF_ELO_EVERY_N = int(os.getenv("TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES", "
 _GEOCODE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_GEOCODE_LIMIT", "25"))
 _REFINE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_REFINE_LIMIT", "30"))
 _STATS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_STATS_LIMIT", "40"))
+_TYPED_STATS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_TYPED_STATS_LIMIT", "500"))
 
 
 def _step(name: str, fn, *args, **kwargs) -> dict:
@@ -129,6 +131,16 @@ def _run_once(cycle: int = 0) -> dict:
         return enrich_match_stats(limit=_STATS_LIMIT)
 
     result["match_stats"] = _step("match_stats", _stats)
+
+    # 4c. Columnas TIPADAS de estadísticas (2026-08-16) -- SIN RED: las
+    # filas ya guardadas tienen el `raw_stats_json` completo, esto solo
+    # lo re-parsea. Repara las escritas por el código viejo (que solo
+    # guardaba JSON) y las filas por set que nunca se creaban.
+    def _typed_stats():
+        from scripts.tennis.backfill_typed_match_stats import backfill_typed_match_stats
+        return backfill_typed_match_stats(limit=_TYPED_STATS_LIMIT)
+
+    result["match_stats_typed"] = _step("match_stats_typed", _typed_stats)
 
     # 5. Elo propio -- pase completo, solo cada N ciclos.
     if _SELF_ELO_EVERY_N > 0 and cycle % _SELF_ELO_EVERY_N == 0:

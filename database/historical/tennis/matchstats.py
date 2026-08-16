@@ -17,6 +17,10 @@ from typing import Any
 
 from database.db import init_db_historical
 from database.historical.tennis.models import MatchStats as TennisMatchStats
+from database.historical.tennis.models import MatchStatsSet as TennisMatchStatsSet
+from database.historical.tennis.matchstats_parser import (
+    set_number_from_key, typed_columns_from_stats,
+)
 
 
 def _now():
@@ -34,6 +38,44 @@ def has_match_stats(market_id: str) -> bool:
         return False
 
 
+def _save_set_rows(
+    stats: dict[str, Any], *,
+    match_history_id: int | None = None,
+    match_stats_row=None,
+) -> int:
+    """Crea las filas por SET (`MatchStatsSet`) de un partido.
+
+    2026-08-16: esta tabla estaba en 0 filas pese a que el feed de
+    Flashscore SÍ trae `set_1`/`set_2`/`set_3` -- simplemente nadie las
+    escribía. Se vincula por `match_history` (el vínculo nuevo) o por
+    `match` (el viejo, vía la fila de `MatchStats` ya creada), según de
+    dónde venga el guardado.
+
+    Fail-closed: cada set se guarda por separado, un set que falle no
+    impide los demás, y nunca se relanza hacia el caller."""
+    saved = 0
+    for key, section in (stats or {}).items():
+        set_number = set_number_from_key(key)
+        if set_number is None:
+            continue
+        try:
+            fields: dict[str, Any] = {
+                "set_number": set_number,
+                "raw_stats_json": json.dumps(section),
+                "fetched_at": _now(),
+                **typed_columns_from_stats(section),
+            }
+            if match_history_id is not None:
+                fields["match_history"] = match_history_id
+            elif match_stats_row is not None:
+                fields["match"] = match_stats_row.match_id
+            TennisMatchStatsSet.create(**fields)
+            saved += 1
+        except Exception:
+            continue
+    return saved
+
+
 def save_match_stats(market_id: str, flashscore_match_id: str, stats: dict[str, Any]) -> None:
     """Fail-closed: no hace nada si `stats` está vacío (nunca guarda una
     fila con estadísticas fantasma) o si falla la escritura."""
@@ -41,10 +83,12 @@ def save_match_stats(market_id: str, flashscore_match_id: str, stats: dict[str, 
         return
     try:
         init_db_historical()
-        TennisMatchStats.create(
+        row = TennisMatchStats.create(
             market_id=market_id, flashscore_match_id=flashscore_match_id,
             raw_stats_json=json.dumps(stats), fetched_at=_now(),
+            **typed_columns_from_stats(stats.get("match") or {}),
         )
+        _save_set_rows(stats, match_stats_row=row)
     except Exception:
         pass
 
@@ -83,7 +127,12 @@ def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str
             match_history=match_history_id, source="flashscore",
             market_id=f"history:{match_history_id}", flashscore_match_id=flashscore_match_id,
             raw_stats_json=json.dumps(stats), fetched_at=_now(),
+            # 2026-08-16: columnas TIPADAS pobladas de verdad -- antes
+            # solo se guardaba el JSON crudo y las ~40 columnas del
+            # modelo quedaban NULL en el 100% de las filas.
+            **typed_columns_from_stats(stats.get("match") or {}),
         )
+        _save_set_rows(stats, match_history_id=match_history_id)
         return True
     except Exception:
         return False

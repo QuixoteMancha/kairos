@@ -189,6 +189,8 @@ services:
       # (~2 requests a Flashscore por partido). Solo procesa partidos ya
       # TERMINADOS -- los en curso devuelven un feed incompleto.
       TENNIS_GAP_FILLER_STATS_LIMIT: "40"
+      # Columnas tipadas: sin red (re-parsea el JSON ya guardado), tope alto.
+      TENNIS_GAP_FILLER_TYPED_STATS_LIMIT: "500"
       # Elo: pase cronológico COMPLETO (no incremental por diseño), no
       # tiene sentido cada hora -- cada 6 ciclos = ~6h.
       TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES: "6"
