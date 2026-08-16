@@ -35,13 +35,14 @@ vivo de Kalshi, Categoría B, fuera de la consolidación)."""
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import peewee
 
 from database.db import init_db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import MatchHistory
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.models import MatchWeather as TennisMatchWeather
 from outer_apis.scrapers.tennis.tournament_location import get_location
@@ -187,4 +188,157 @@ def populate_weather_for_all_resolved_matches() -> dict[str, Any]:
             processed += 1
 
     return {"total": len(matches), "processed": processed, "skipped": skipped, "errors": errors, "skip_reasons": reasons}
+
+
+# --- Clima de `MatchHistory` (backfill histórico de TennisExplorer) ---
+# 2026-08-16, pedido explícito del usuario: "agregar un worker que haga
+# fetch de los datos climáticos, que revise cada 1 hora y haga fetch de
+# los datos climáticos de los matches".
+#
+# GAP REAL que esto cierra: `MatchWeather.match_history` (FK, existe
+# desde 2026-08-09) NO tenía ningún productor -- todo lo de arriba
+# puebla `MatchWeather.match` (`TennisScannedMatch`, tracker vivo de
+# Kalshi). El backfill masivo del catálogo llena `MatchHistory`, que
+# quedaba sin clima.
+#
+# DIFERENCIA DE DISEÑO, deliberada y documentada: `MatchHistory` tiene
+# `match_date` pero NO hora de inicio (TennisExplorer no la expone en el
+# historial por jugador), así que acá NO se pueden calcular las 3 fases
+# reales (before/during/end) -- esas dependen de `detected_at`/ticks/
+# `settled_at`, que solo existen para partidos vivos de Kalshi. En vez
+# de fabricar una hora arbitraria, se guarda UNA fila con el AGREGADO
+# REAL DEL DÍA (`open_meteo.get_daily_weather`) bajo la fase explícita
+# `match_day` -- nunca se confunde con las fases horarias reales.
+
+_MATCH_HISTORY_WEATHER_PHASE = "match_day"
+
+
+def _match_history_location(match) -> tuple[float, float] | None:
+    """(lat, lon) para un partido de `MatchHistory`. Prioridad:
+    `Tournament.lat`/`lon` reales (FK ya poblada, más cobertura y más
+    preciso) y, si no están, la tabla estática por nombre de torneo
+    (`get_location`, 73 sedes). Fail-closed: None si no hay ninguna de
+    las dos -- nunca se adivina una sede."""
+    tournament = match.tournament
+    if tournament is not None:
+        if tournament.lat is not None and tournament.lon is not None:
+            return (tournament.lat, tournament.lon)
+        located = get_location(tournament.tournament_name)
+        if located is not None:
+            return located
+    return None
+
+
+def populate_weather_for_match_history_row(match) -> dict[str, Any]:
+    """Puebla la fila de clima del día para UN partido de
+    `MatchHistory`, si no existe todavía (idempotente vía el índice
+    único real `(match_history, phase)` + chequeo previo).
+
+    Fail-closed en cada paso: sin fecha parseable, sin sede resoluble, o
+    sin dato real de Open-Meteo, no escribe nada y reporta el motivo --
+    nunca guarda una fila de clima fabricada."""
+    if not match.match_date:
+        return {"skipped": True, "reason": "sin match_date"}
+    try:
+        day = date.fromisoformat(str(match.match_date)[:10])
+    except ValueError:
+        return {"skipped": True, "reason": f"match_date no parseable: {match.match_date!r}"}
+
+    location = _match_history_location(match)
+    if location is None:
+        return {"skipped": True, "reason": "sede del torneo no resoluble"}
+
+    init_db_historical()
+    exists = TennisMatchWeather.select().where(
+        (TennisMatchWeather.match_history == match)
+        & (TennisMatchWeather.phase == _MATCH_HISTORY_WEATHER_PHASE)
+    ).exists()
+    if exists:
+        return {"skipped": True, "reason": "ya tiene clima"}
+
+    lat, lon = location
+    open_meteo.throttle_sleep()
+    weather = open_meteo.get_daily_weather(lat, lon, day)
+    if weather is None:
+        return {"skipped": True, "reason": "Open-Meteo sin dato real para esa fecha/sede"}
+
+    _create_weather_row_with_retry(
+        match_history=match,
+        phase=_MATCH_HISTORY_WEATHER_PHASE,
+        observed_at=datetime(day.year, day.month, day.day, tzinfo=timezone.utc),
+        temperature_c=weather["temperature_c"],
+        humidity_pct=weather["humidity_pct"],
+        wind_kmh=weather["wind_kmh"],
+        fetched_at=_now(),
+    )
+    return {"skipped": False, "populated": True}
+
+
+def populate_weather_for_match_history(limit: int | None = None) -> dict[str, Any]:
+    """Recorre los partidos de `MatchHistory` que TODAVÍA no tienen
+    clima y se los puebla -- pensado para correr como worker periódico
+    (ver `workers/tennis_weather_worker.py`).
+
+    Solo considera partidos con `match_date` y `tournament` no nulos (los
+    únicos que pueden resolver fecha+sede real) y los procesa de los MÁS
+    RECIENTES hacia atrás -- son los más relevantes para backtests y los
+    que más probablemente tengan la sede ya poblada.
+
+    `limit`: tope de partidos POR CORRIDA (default 500) -- el catálogo
+    completo son decenas de miles de partidos y Open-Meteo tiene cupo
+    real por hora/día (ver `open_meteo.throttle_sleep`); el worker corre
+    cada hora, así que va completando de a tandas en vez de intentar
+    todo de una y agotar el cupo.
+
+    Corta limpio si se agota el cupo diario real de Open-Meteo
+    (`DailyBudgetExhausted`) en vez de seguir pegándole a la API."""
+    init_db_historical()
+    batch_limit = 500 if limit is None else limit
+
+    already = {
+        w.match_history_id
+        for w in TennisMatchWeather
+        .select(TennisMatchWeather.match_history)
+        .where(TennisMatchWeather.match_history.is_null(False))
+    }
+
+    query = (
+        MatchHistory
+        .select()
+        .where(
+            MatchHistory.match_date.is_null(False)
+            & MatchHistory.tournament.is_null(False)
+        )
+        .order_by(MatchHistory.match_date.desc())
+    )
+
+    processed = skipped = errors = 0
+    reasons: dict[str, int] = {}
+    budget_exhausted = False
+    for match in query:
+        if processed + skipped >= batch_limit:
+            break
+        if match.id in already:
+            continue
+        try:
+            result = populate_weather_for_match_history_row(match)
+        except open_meteo.DailyBudgetExhausted:
+            budget_exhausted = True
+            break
+        except Exception as e:
+            errors += 1
+            key = f"error: {type(e).__name__}"
+            reasons[key] = reasons.get(key, 0) + 1
+            continue
+        if result.get("skipped"):
+            skipped += 1
+            reason = result.get("reason", "desconocido")
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            processed += 1
+
+    return {
+        "processed": processed, "skipped": skipped, "errors": errors,
+        "budget_exhausted": budget_exhausted, "skip_reasons": reasons,
+    }
 

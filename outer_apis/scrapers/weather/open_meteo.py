@@ -71,6 +71,63 @@ def get_weather_at(lat: float, lon: float, when: datetime) -> dict[str, Any] | N
     return {"temperature_c": temp, "humidity_pct": humidity, "wind_kmh": wind}
 
 
+def get_daily_weather(lat: float, lon: float, day) -> dict[str, Any] | None:
+    """Clima AGREGADO DEL DÍA en (lat, lon) -- 2026-08-16, pedido
+    explícito del usuario ("un worker que haga fetch de los datos
+    climáticos de los matches").
+
+    POR QUÉ AGREGADO DIARIO Y NO HORARIO (`get_weather_at`): los
+    partidos de `MatchHistory` (backfill histórico de TennisExplorer)
+    tienen `match_date` pero NO hora de inicio -- TennisExplorer no la
+    expone en el historial por jugador. Elegir una hora arbitraria
+    ("las 14:00") sería fabricar un dato que no tenemos; el agregado
+    real del día SÍ es un dato honesto y verificable. El path horario
+    de 3 fases (`get_weather_at` + before/during/end) se mantiene sin
+    cambios para los partidos VIVOS de Kalshi, donde sí hay timestamps
+    reales (`detected_at`/ticks/`settled_at`).
+
+    `day`: `datetime.date` (o cualquier objeto con `.isoformat()`).
+
+    Returns:
+        {"temperature_c": media del día, "humidity_pct": media del día,
+         "wind_kmh": máxima del día}. Fail-closed: None si la request
+        falla, la fecha está fuera del archivo de Open-Meteo, o algún
+        campo viene nulo -- nunca fabrica un valor de clima."""
+    date_str = day.isoformat()
+    try:
+        resp = requests.get(
+            _BASE_URL,
+            params={
+                "latitude": lat, "longitude": lon,
+                "start_date": date_str, "end_date": date_str,
+                "daily": "temperature_2m_mean,relative_humidity_2m_mean,wind_speed_10m_max",
+                "timezone": "UTC",
+            },
+            timeout=_REQUEST_TIMEOUT_S,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    daily = data.get("daily")
+    if not daily:
+        return None
+
+    try:
+        temp = daily["temperature_2m_mean"][0]
+        humidity = daily["relative_humidity_2m_mean"][0]
+        wind = daily["wind_speed_10m_max"][0]
+    except (KeyError, IndexError):
+        return None
+
+    if temp is None or humidity is None or wind is None:
+        return None
+
+    return {"temperature_c": temp, "humidity_pct": humidity, "wind_kmh": wind}
+
+
 # --- Rate limiter compartido para backfills masivos (2026-08-04,
 # hallazgo real: free tier de Open-Meteo es 600/min, 5000/hora,
 # 10000/día -- un jitter simple por request no alcanza para respetar

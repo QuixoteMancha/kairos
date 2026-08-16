@@ -139,6 +139,30 @@ services:
     networks:
       - kairos_net
 
+  tennis_weather_worker:
+    image: kairos:latest
+    container_name: kairos_tennis_weather_worker
+    build: .
+    # 2026-08-16, pedido explícito del usuario: "un worker que haga
+    # fetch de los datos climáticos, que revise cada 1 hora" -- ver
+    # workers/tennis_weather_worker.py. Cierra un gap real:
+    # MatchWeather.match_history existía como FK sin ningún productor.
+    command: ["python", "-m", "workers.tennis_weather_worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+      # 1h -- pedido explícito del usuario.
+      TENNIS_WEATHER_INTERVAL_SECONDS: "3600"
+      # Partidos de MatchHistory por corrida: el histórico completo son
+      # decenas de miles y Open-Meteo tiene cupo real por hora/día (ver
+      # open_meteo.throttle_sleep) -- se completa de a tandas horarias.
+      TENNIS_WEATHER_BATCH_LIMIT: "500"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks:
+      - kairos_net
+
   brightdata_ip_watcher_worker:
     image: kairos:latest
     container_name: kairos_brightdata_ip_watcher_worker
