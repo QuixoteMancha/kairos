@@ -15,10 +15,16 @@ orden de COSTO CRECIENTE, cada uno acotado y fail-closed por separado
      re-resolviendo un partido que YA tenemos (`get_match_detail` trae
      el bio de ambos lados y `_resolve_player_id` rellena solo los
      campos NULL). Tanda chica.
-  3. `match_durations` -- `enrich_match_durations`, ya reactivo de por
+  3. `tournament_levels` / `tournament_locations` (2026-08-16) --
+     nivel derivado del nombre real del torneo (SIN red: TennisExplorer
+     ya codifica "challenger"/"ITF" como sufijo) + tabla estática de
+     niveles altos; después ubicación vía Nominatim (1 req/s por
+     política del servicio, por eso la tanda es chica). Ver
+     `scripts/tennis/fill_tournament_metadata.py`.
+  4. `match_durations` -- `enrich_match_durations`, ya reactivo de por
      sí (busca los partidos sin duración). Cuesta 2 requests a
      Flashscore por partido (resolver id + fetch), tanda chica.
-  4. `self_elo` -- `run_elo_backfill`, SIN RED pero es un pase
+  5. `self_elo` -- `run_elo_backfill`, SIN RED pero es un pase
      cronológico sobre TODO el historial (no es incremental por
      diseño: el Elo de un partido depende de todos los anteriores).
      Por eso NO corre cada ciclo: solo cada `SELF_ELO_EVERY_N_CYCLES`
@@ -26,17 +32,19 @@ orden de COSTO CRECIENTE, cada uno acotado y fail-closed por separado
      razonable para un dato que solo cambia cuando entran partidos
      nuevos.
 
-Los huecos que este worker NO puede llenar (fuente inexistente hoy,
-NO se inventan) están documentados en
-`scripts/tennis/fill_data_gaps.py`: `Tournament.lat/lon/city`
-(geocoder Nominatim purgado -- limita al worker de clima),
-`Tournament.level` para ATP, y `MatchHistory.best_of`/`minutes`.
+Los huecos que este worker sigue SIN poder llenar (fuente inexistente,
+NO se inventan): el nivel EXACTO 500 vs 250 del circuito principal
+(rota entre temporadas y la API oficial de ATP está bloqueada -- se
+marca "ATP Tour"/"WTA Tour", suficiente para el filtro 250+), y
+`MatchHistory.best_of`/`minutes`. Ver
+`scripts/tennis/fill_data_gaps.py` y `fill_tournament_metadata.py`.
 
 Env vars:
   `TENNIS_GAP_FILLER_INTERVAL_SECONDS` (default 3600 = 1h)
   `TENNIS_GAP_FILLER_AGES_LIMIT`       (default 2000, sin red)
   `TENNIS_GAP_FILLER_BIO_LIMIT`        (default 40)
   `TENNIS_GAP_FILLER_DURATIONS_LIMIT`  (default 40)
+  `TENNIS_GAP_FILLER_GEOCODE_LIMIT`    (default 25, Nominatim = 1 req/s)
   `TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES` (default 6, 0 = nunca)
 """
 
@@ -52,6 +60,7 @@ _AGES_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_AGES_LIMIT", "2000"))
 _BIO_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_BIO_LIMIT", "40"))
 _DURATIONS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_DURATIONS_LIMIT", "40"))
 _SELF_ELO_EVERY_N = int(os.getenv("TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES", "6"))
+_GEOCODE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_GEOCODE_LIMIT", "25"))
 
 
 def _step(name: str, fn, *args, **kwargs) -> dict:
@@ -73,7 +82,22 @@ def _run_once(cycle: int = 0) -> dict:
     # 2. Bio de jugadores -- 1 request por jugador.
     result["player_bio"] = _step("player_bio", fill_player_bio, limit=_BIO_LIMIT)
 
-    # 3. Duraciones -- import perezoso: arrastra los scrapers de
+    # 3. Metadata de torneos (2026-08-16) -- nivel primero (sin red,
+    # derivado del nombre real) y después ubicación (Nominatim, 1 req/s
+    # por política del servicio, tanda chica). Desbloquea el filtro
+    # "250+" de los backtests y la cobertura del worker de clima.
+    def _levels():
+        from scripts.tennis.fill_tournament_metadata import fill_tournament_levels
+        return fill_tournament_levels()
+
+    def _locations():
+        from scripts.tennis.fill_tournament_metadata import fill_tournament_locations
+        return fill_tournament_locations(limit=_GEOCODE_LIMIT)
+
+    result["tournament_levels"] = _step("tournament_levels", _levels)
+    result["tournament_locations"] = _step("tournament_locations", _locations)
+
+    # 4. Duraciones -- import perezoso: arrastra los scrapers de
     # Flashscore, no hace falta cargarlos si el paso no corre.
     def _durations():
         from scripts.tennis.enrich_match_durations import enrich_match_durations
@@ -81,7 +105,7 @@ def _run_once(cycle: int = 0) -> dict:
 
     result["match_durations"] = _step("match_durations", _durations)
 
-    # 4. Elo propio -- pase completo, solo cada N ciclos.
+    # 5. Elo propio -- pase completo, solo cada N ciclos.
     if _SELF_ELO_EVERY_N > 0 and cycle % _SELF_ELO_EVERY_N == 0:
         def _elo():
             from scripts.tennis.compute_self_elo import run_elo_backfill
