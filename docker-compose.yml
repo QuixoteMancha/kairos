@@ -163,6 +163,36 @@ services:
     networks:
       - kairos_net
 
+  tennis_data_gap_filler_worker:
+    image: kairos:latest
+    container_name: kairos_tennis_data_gap_filler_worker
+    build: .
+    # 2026-08-16, pedido explícito del usuario: "que sea reactivo ese
+    # worker, que escanee qué datos faltan y en base a los fetch que
+    # tenemos vaya llenando los datos que faltan" -- ver
+    # workers/tennis_data_gap_filler_worker.py. Incremental, nunca
+    # rehace el backfill (restricción explícita: "no podemos reiniciar").
+    command: ["python", "-m", "workers.tennis_data_gap_filler_worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+      TENNIS_GAP_FILLER_INTERVAL_SECONDS: "3600"
+      # Edades: sin red (puro cálculo), por eso el tope es alto.
+      TENNIS_GAP_FILLER_AGES_LIMIT: "2000"
+      # Bio y duraciones: cuestan requests reales (TennisExplorer /
+      # Flashscore, throttle global compartido con los otros workers),
+      # tandas chicas que van completando de a poco cada hora.
+      TENNIS_GAP_FILLER_BIO_LIMIT: "40"
+      TENNIS_GAP_FILLER_DURATIONS_LIMIT: "40"
+      # Elo: pase cronológico COMPLETO (no incremental por diseño), no
+      # tiene sentido cada hora -- cada 6 ciclos = ~6h.
+      TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES: "6"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks:
+      - kairos_net
+
   brightdata_ip_watcher_worker:
     image: kairos:latest
     container_name: kairos_brightdata_ip_watcher_worker
