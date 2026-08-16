@@ -89,3 +89,56 @@ def test_resolve_player_id_fail_closed_on_empty_name():
     assert _resolve_player_id("") is None
     assert _resolve_player_id("   ") is None
     assert Player.select().count() == 0
+
+
+def test_resolve_player_id_recovers_from_create_race_condition(monkeypatch):
+    """2026-08-16, pedido explícito del usuario (revisión de modelos
+    previa a construir el worker de backfill con threads): antes de este
+    fix, si `Player.get_or_none` no veía todavía una fila creada por
+    OTRO thread una fracción de segundo antes (carrera real: 2 threads
+    resolviendo el mismo jugador porque aparece en la página de ambos
+    rivales), el `.create()` posterior chocaba con el índice único real
+    de `canonical_name` y el `except Exception` genérico devolvía
+    `None` -- el jugador real existía en la DB pero el caller perdía el
+    FK. Este test fuerza esa ventana exacta: la fila ya existe (creada
+    "por otro thread"), pero se parchea `get_or_none` para que la
+    PRIMERA llamada no la vea (simula la carrera), forzando el choque
+    real de `IntegrityError` en el `.create()`."""
+    Player.create(canonical_name="Forced Race Player", tour="ATP", created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+
+    calls = {"n": 0}
+    orig_get_or_none = Player.get_or_none
+
+    def fake_get_or_none(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return orig_get_or_none(*a, **kw)
+
+    monkeypatch.setattr(Player, "get_or_none", staticmethod(fake_get_or_none))
+
+    pid = _resolve_player_id("Forced Race Player", tour="ATP")
+    assert pid is not None, "BUG: se perdió el id por la carrera entre threads"
+    assert Player.select().where(Player.canonical_name == "Forced Race Player").count() == 1
+
+
+def test_resolve_player_id_fuzzy_fallback_scoped_by_surname(monkeypatch):
+    """2026-08-16: el fallback fuzzy (`_fuzzy_find_player`) debe seguir
+    encontrando al jugador con formato de nombre distinto (mismo
+    comportamiento de siempre), pero ahora vía una consulta SQL acotada
+    por apellido en vez de traer TODA la tabla `Player` a Python. Este
+    test verifica que la consulta real a la DB nunca trae más filas de
+    las que contienen el apellido buscado -- confirma que el fix de
+    escala no rompió la lógica de matching."""
+    from database.historical.tennis.writer import _fuzzy_find_player
+
+    _resolve_player_id("Elina Svitolina")
+    _resolve_player_id("Alexandrova Ekaterina")
+    _resolve_player_id("Christian Ruud")
+
+    found = _fuzzy_find_player("Svitolina Elina")
+    assert found is not None
+    assert found.canonical_name == "Elina Svitolina"
+
+    # No debe matchear apellidos distintos aunque estén en la tabla.
+    assert _fuzzy_find_player("Nonexistent Playerx") is None

@@ -252,6 +252,7 @@ def run_country_catalog_backfill(
     *,
     years: list[int] | None = None,
     max_players: int | None = None,
+    max_workers: int = 1,
 ) -> dict:
     """Backfill masivo desde el catálogo completo de TennisExplorer.
 
@@ -260,7 +261,25 @@ def run_country_catalog_backfill(
     por el catálogo se reutiliza en :func:`backfill_player`; los demás años
     se obtienen con los parsers existentes. ``max_players`` solo sirve para
     pruebas/corridas controladas; ``None`` procesa el catálogo completo.
-    """
+
+    `max_workers` (2026-08-16, pedido explícito del usuario: "un worker
+    que tenga threads para backfillear los players que corra
+    constantemente" -- dimensionado en la revisión previa: el catálogo
+    completo son decenas de miles de jugadores, secuencial (`max_workers=1`,
+    comportamiento de siempre) tomaría semanas). El DESCUBRIMIENTO
+    (`iter_all_player_pages`, fetch de países/paginación) sigue siendo
+    secuencial a propósito -- es un generador con estado BFS compartido
+    (`pending`/`seen_*`), no thread-safe tal cual está escrito, y es
+    barato comparado al costo real (11 años de historial + resolución de
+    partidos por jugador). Lo que SÍ se paralleliza es `backfill_player`
+    por jugador YA descubierto, en lotes de tamaño `max_workers` (mismo
+    patrón que `_run_backfill_for_names`, seguro por el mismo motivo:
+    throttle global compartido + DB con `busy_timeout` + los fixes de
+    carrera en `writer.py` de esta misma sesión -- `_resolve_player_id`/
+    `_resolve_tournament_id`/`save_match_detail` ya recuperan
+    correctamente si 2 threads chocan sobre el mismo jugador/torneo/
+    partido compartido, que es EXACTAMENTE lo que pasa acá: el mismo
+    partido aparece en la página de los 2 jugadores)."""
     init_db_historical()
     year_list = years if years is not None else _YEARS
     country_links = get_all_player_country_links()
@@ -274,7 +293,8 @@ def run_country_catalog_backfill(
         # Aplicar el límite al iterador evita descargar un jugador extra
         # antes de comprobar que una corrida de prueba ya terminó.
         discovered_players = islice(discovered_players, max_players)
-    for discovered in discovered_players:
+
+    def _process_one(discovered: dict) -> tuple[str, str, dict]:
         player_name = _catalog_display_name(discovered["player_name"])
         try:
             result = backfill_player(
@@ -285,7 +305,10 @@ def run_country_catalog_backfill(
             )
         except Exception as exc:
             result = {"player": player_name, "status": "error", "error": str(exc)}
+        return player_name, discovered["slug"], result
 
+    def _report(player_name: str, slug: str, result: dict) -> None:
+        nonlocal processed, ok, skipped, matches_found, details_resolved, odds_inserted
         processed += 1
         if result.get("status") == "ok":
             ok += 1
@@ -296,10 +319,28 @@ def run_country_catalog_backfill(
         odds_inserted += result.get("odds_inserted", 0)
         print(
             f"[country_catalog_backfill] {processed} {player_name} "
-            f"({discovered['slug']}) -> {result.get('status')}",
+            f"({slug}) -> {result.get('status')}",
             flush=True,
         )
-        time.sleep(_PAUSE_BETWEEN_PLAYERS_S)
+
+    if max_workers <= 1:
+        for discovered in discovered_players:
+            _report(*_process_one(discovered))
+            time.sleep(_PAUSE_BETWEEN_PLAYERS_S)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Lotes de tamaño `max_workers`: el generador de descubrimiento
+        # se sigue consumiendo en el thread principal (no thread-safe,
+        # ver docstring), pero el trabajo pesado de cada jugador ya
+        # descubierto corre en paralelo dentro de cada lote.
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            batch = list(islice(discovered_players, max_workers))
+            while batch:
+                for player_name, slug, result in pool.map(_process_one, batch):
+                    _report(player_name, slug, result)
+                time.sleep(_PAUSE_BETWEEN_PLAYERS_S)
+                batch = list(islice(discovered_players, max_workers))
 
     return {
         "countries": len(country_links),

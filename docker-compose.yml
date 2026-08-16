@@ -107,6 +107,38 @@ services:
       # externo -- todo lo demás lo monta read-only.
       - /mnt/storage2/kairos_archive:/archive
 
+  tennis_player_catalog_backfill_worker:
+    image: kairos:latest
+    container_name: kairos_tennis_player_catalog_backfill_worker
+    build: .
+    # 2026-08-16, pedido explícito del usuario: "un worker que tenga
+    # threads para backfillear los players que corra constantemente" --
+    # ver workers/tennis_player_catalog_backfill_worker.py. Recorre el
+    # catálogo COMPLETO de TennisExplorer (todos los países), no solo un
+    # roster top-N -- una pasada completa toma del orden de días, corre
+    # indefinidamente en background (idempotente, cada pasada solo
+    # completa lo que falte).
+    command: ["python", "-m", "workers.tennis_player_catalog_backfill_worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+      # Threads en paralelo por jugador YA descubierto (el descubrimiento
+      # del catálogo -- países/paginación -- sigue siendo secuencial a
+      # propósito, ver docstring del worker). 4 = conservador para no
+      # saturar el throttle real de TennisExplorer entre TODOS los
+      # workers que ya lo comparten (tennis_match_history_sync_worker,
+      # tennis_match_tick_worker).
+      TENNIS_CATALOG_BACKFILL_MAX_WORKERS: "4"
+      # 1h entre pasadas COMPLETAS del catálogo -- en la práctica casi
+      # nunca se alcanza a disparar (una pasada real tarda mucho más),
+      # solo importa si el catálogo ya está casi completo.
+      TENNIS_CATALOG_BACKFILL_INTERVAL_SECONDS: "3600"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks:
+      - kairos_net
+
   brightdata_ip_watcher_worker:
     image: kairos:latest
     container_name: kairos_brightdata_ip_watcher_worker

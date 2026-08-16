@@ -564,3 +564,45 @@ def test_country_catalog_backfill_uses_country_pages_and_prefetched_player_html(
         "players_skipped": 0, "matches_found": 12,
         "match_details_resolved": 4, "odds_inserted": 3,
     }
+
+
+def test_country_catalog_backfill_threaded_processes_all_discovered_players():
+    """2026-08-16, pedido explícito del usuario ("un worker que tenga
+    threads para backfillear los players que corra constantemente") --
+    `max_workers>1` debe procesar TODOS los jugadores descubiertos (en
+    lotes de tamaño `max_workers`, ver docstring de la función), no solo
+    el primer lote, y reportar el mismo resumen agregado que el modo
+    secuencial."""
+    discovered_players = [
+        {
+            "country_url": "https://www.tennisexplorer.com/list-players/?country=chile",
+            "player_url": f"https://www.tennisexplorer.com/player/p{i}/",
+            "slug": f"p{i}",
+            "player_name": f"Player{i}, Test",
+            "html": f"<html>{i}</html>",
+        }
+        for i in range(5)
+    ]
+    with patch(
+        "scripts.tennis.wta_top200_historical_backfill.init_db_historical",
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.get_all_player_country_links",
+        return_value=["https://www.tennisexplorer.com/list-players/?country=chile"],
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.iter_all_player_pages",
+        return_value=iter(discovered_players),
+    ), patch(
+        "scripts.tennis.wta_top200_historical_backfill.backfill_player",
+        return_value={
+            "status": "ok", "matches_found": 1,
+            "match_details_resolved": 1, "odds_inserted": 1,
+        },
+    ) as backfill, patch(
+        "scripts.tennis.wta_top200_historical_backfill.time.sleep",
+    ):
+        result = run_country_catalog_backfill(years=[2026], max_workers=2)
+
+    assert backfill.call_count == 5
+    assert result["players_processed"] == 5
+    assert result["players_ok"] == 5
+    assert result["matches_found"] == 5

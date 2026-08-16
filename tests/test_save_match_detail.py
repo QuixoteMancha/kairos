@@ -214,3 +214,31 @@ def test_reuses_same_player_across_2_different_matches():
     save_match_detail(_detail(match_id="1", match_date="2024-08-10"))
     save_match_detail(_detail(match_id="2", match_date="2024-08-12"))
     assert Player.select().where(Player.canonical_name == "Anisimova Amanda").count() == 1
+
+
+def test_recovers_from_match_history_create_race_condition(monkeypatch):
+    """2026-08-16, pedido explícito del usuario (revisión de modelos
+    previa al worker de backfill con threads): cada partido real aparece
+    en la página de LOS 2 jugadores -- 2 threads distintos pueden
+    resolver el MISMO `match_id` casi simultáneamente. Antes de este
+    fix, el segundo `MatchHistory.create()` chocaba con el índice único
+    real de `match_id` y el `except Exception` genérico devolvía
+    "error", perdiendo el reporte del partido aunque el OTRO thread ya
+    lo hubiera guardado bien un instante antes. Este test fuerza esa
+    ventana exacta."""
+    MatchHistory.create(match_id="2692781", fetched_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+
+    calls = {"n": 0}
+    orig_get_or_none = MatchHistory.get_or_none
+
+    def fake_get_or_none(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return orig_get_or_none(*a, **kw)
+
+    monkeypatch.setattr(MatchHistory, "get_or_none", staticmethod(fake_get_or_none))
+
+    status = save_match_detail(_detail())
+    assert status != "error", "BUG: se perdió el partido por la carrera entre threads"
+    assert MatchHistory.select().where(MatchHistory.match_id == "2692781").count() == 1

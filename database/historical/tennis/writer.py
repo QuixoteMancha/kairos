@@ -14,6 +14,8 @@ writing the historical record failed).
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from peewee import IntegrityError
+
 # Ventana por default para get_all_surface_matches -- más amplia que los
 # 6 meses de surface_form.py (LOOKBACK_DAYS=183) a propósito: el stat de
 # "winrate vs grupo de rivales similares" (style_peer_group.py) necesita
@@ -126,6 +128,33 @@ def _synthetic_recentform_match_id(name_a: str, name_b: str, match_date: str) ->
     return f"recentform:{pair}|{match_date}"
 
 
+def _fuzzy_find_player(name: str) -> "Player | None":
+    """Fallback fuzzy compartido por `_resolve_player_id`/`_lookup_player_id`/
+    `harvest_slug_into_player` -- 2026-08-16, pedido explícito del usuario
+    ("revisar si los modelos y diseños de las tablas están correctos")
+    tras auditar el worker de backfill masivo con threads: la versión
+    anterior hacía `for candidate in Player.select(): ...` SIN filtro,
+    trayendo la tabla ENTERA a Python en cada resolución de jugador --
+    con el catálogo completo de TennisExplorer (decenas de miles de
+    `Player`), esto es el cuello de botella #1 de un worker continuo.
+
+    Fix: acota la consulta por SQL usando el mismo apellido (token más
+    largo, ver `_names_confirm_identity`) vía `.contains()` (ILIKE
+    case-insensitive en Postgres, LIKE+LOWER en SQLite -- ambos backends
+    soportados) ANTES de comparar en Python -- reduce el resultset de
+    "toda la tabla" a "solo candidatos con ese apellido", manteniendo
+    exactamente la misma lógica de confirmación final
+    (`_names_confirm_identity`), solo más barato."""
+    tokens = _tokens(name)
+    if not tokens:
+        return None
+    surname = max(tokens, key=len)
+    for candidate in Player.select().where(Player.canonical_name.contains(surname)):
+        if _names_confirm_identity(name, candidate.canonical_name):
+            return candidate
+    return None
+
+
 def _resolve_player_id(
     name: str, tour: str | None = None, slug: str | None = None, birthdate=None,
     height_cm: int | None = None, weight_kg: int | None = None, plays: str | None = None,
@@ -145,6 +174,18 @@ def _resolve_player_id(
     tarea de `fix_tour_sex_mismatches`, no de este resolver silencioso
     en el hot path de escritura).
 
+    2026-08-16, pedido explícito del usuario (worker de backfill con
+    threads real, corriendo constantemente): antes, un `.create()` que
+    colisionaba con `canonical_name` (índice único real) bajo carrera
+    entre threads -- ej. 2 jugadores distintos referencian al MISMO
+    rival, ambos threads lo resuelven casi simultáneamente -- quedaba
+    atrapado por el `except Exception` genérico y devolvía `None`,
+    perdiendo silenciosamente el FK aunque el `Player` real ya existiera
+    (creado por el otro thread un instante antes). Fix: `IntegrityError`
+    se atrapa aparte y re-busca por `canonical_name` -- la fila SIEMPRE
+    existe en ese punto (la excepción es la prueba de que el otro thread
+    ya la creó), nunca se pierde el ID por la carrera.
+
     Fail-closed: `None` si `name` viene vacío -- nunca crea un `Player`
     fantasma. Nunca excepciona hacia el caller (mismo criterio del
     resto de este archivo) -- un fallo acá no debe romper el guardado
@@ -155,18 +196,23 @@ def _resolve_player_id(
         init_db_historical()
         existing = Player.get_or_none(Player.canonical_name == name)
         if existing is None:
-            for candidate in Player.select():
-                if _names_confirm_identity(name, candidate.canonical_name):
-                    existing = candidate
-                    break
+            existing = _fuzzy_find_player(name)
 
         now = _now()
         if existing is None:
-            player = Player.create(
-                canonical_name=name, tour=tour, slug=slug, birthdate=birthdate,
-                height_cm=height_cm, weight_kg=weight_kg, plays=plays, created_at=now,
-            )
-            return player.id
+            try:
+                player = Player.create(
+                    canonical_name=name, tour=tour, slug=slug, birthdate=birthdate,
+                    height_cm=height_cm, weight_kg=weight_kg, plays=plays, created_at=now,
+                )
+                return player.id
+            except IntegrityError:
+                # Otro thread ganó la carrera por el mismo canonical_name
+                # entre el get_or_none() de arriba y este create() --
+                # la fila real ya existe, se re-busca en vez de perderla.
+                existing = Player.get_or_none(Player.canonical_name == name)
+                if existing is None:
+                    return None
 
         changed = False
         for field_name, value in (
@@ -200,10 +246,8 @@ def _lookup_player_id(name: str) -> int | None:
         existing = Player.get_or_none(Player.canonical_name == name)
         if existing is not None:
             return existing.id
-        for candidate in Player.select():
-            if _names_confirm_identity(name, candidate.canonical_name):
-                return candidate.id
-        return None
+        fuzzy = _fuzzy_find_player(name)
+        return fuzzy.id if fuzzy is not None else None
     except Exception:
         return None
 
@@ -248,10 +292,20 @@ def _resolve_tournament_id(name: str | None, match_date: str | None, tour: str |
                 break
         if existing is not None:
             return existing.id
-        row = Tournament.create(
-            year=year, tournament_name=name, tour=tour, city="", fetched_at=_now(),
-        )
-        return row.id
+        try:
+            row = Tournament.create(
+                year=year, tournament_name=name, tour=tour, city="", fetched_at=_now(),
+            )
+            return row.id
+        except IntegrityError:
+            # 2026-08-16: carrera entre threads sobre el mismo (year,
+            # tournament_name) -- índice único real, el otro thread ya
+            # creó la fila; se re-busca en vez de perder el FK (mismo
+            # criterio que `_resolve_player_id`).
+            existing = Tournament.get_or_none(
+                (Tournament.year == year) & (Tournament.tournament_name == name)
+            )
+            return existing.id if existing is not None else None
     except Exception:
         return None
 
@@ -304,10 +358,23 @@ def harvest_slug_into_player(name: str, slug: str | None) -> None:
     tiene el contexto completo del partido)."""
     if not slug or not name or not name.strip():
         return
+    tokens = _tokens(name)
+    if not tokens:
+        return
+    surname = max(tokens, key=len)
     try:
         init_db_historical()
-        for p in Player.select():
-            if p.slug is None and _names_confirm_identity(name, p.canonical_name):
+        # 2026-08-16: acotado por apellido + `slug IS NULL` en SQL (antes
+        # traía la tabla `Player` COMPLETA a Python en cada llamada, ver
+        # `_fuzzy_find_player` para el mismo fix en los otros resolvers)
+        # -- con el catálogo completo de TennisExplorer, esta función se
+        # llama por cada rival visto en cada partido de cada jugador
+        # backfilleado, así que es de las más calientes del hot path.
+        candidates = Player.select().where(
+            Player.slug.is_null(True) & Player.canonical_name.contains(surname)
+        )
+        for p in candidates:
+            if _names_confirm_identity(name, p.canonical_name):
                 p.slug = slug
                 p.updated_at = _now()
                 p.save()
@@ -702,8 +769,24 @@ def save_match_detail(detail: dict[str, Any]) -> str:
         fields["player_b_id"] = player_b_id
 
         if existing is None:
-            MatchHistory.create(match_id=match_id, fetched_at=now, **fields)
-            return "created"
+            try:
+                MatchHistory.create(match_id=match_id, fetched_at=now, **fields)
+                return "created"
+            except IntegrityError:
+                # 2026-08-16, pedido explícito del usuario (worker de
+                # backfill con threads real): cada partido real aparece
+                # en la página de LOS 2 jugadores -- 2 threads distintos
+                # pueden resolver el MISMO match_id casi simultáneamente,
+                # ambos ven existing=None, y el segundo create() choca
+                # con el índice único real de `match_id`. Antes esto caía
+                # en el `except Exception: return "error"` genérico de
+                # abajo y perdía el partido silenciosamente aunque el
+                # OTRO thread ya lo hubiera guardado bien -- se re-busca
+                # y sigue por la rama normal de comparación/update en vez
+                # de reportar un falso error.
+                existing = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
+                if existing is None:
+                    return "error"
 
         changed = upgraded_identity
         for f in _MATCH_DETAIL_COMPARABLE_FIELDS:
