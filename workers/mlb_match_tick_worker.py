@@ -34,6 +34,8 @@ from database.historical.team_sports.mlbmatchtracking import (
     get_open_scanned_mlb_matches, save_mlb_probability_tick, mark_mlb_match_settled,
 )
 from models.fairprice.sports.baseball.baseballfmodel import BaseballFModel
+from database.db import init_db, init_db_historical
+from database.accounting.systemhaltstate import is_halted
 
 _REFRESH_INTERVAL_S = os.getenv("MLB_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # mismo criterio que tenis -- "minuto a minuto"
@@ -75,6 +77,16 @@ def _settlement_result(market: dict | None) -> str | None:
 
 
 def run_once() -> dict:
+    # 2026-08-11, pedido explícito del usuario ("interrumpir todas las
+    # operaciones" si se confirma falta de fondos) -- mismo criterio que
+    # tennis_match_tick_worker.py.
+    init_db()
+    init_db_historical()
+    halted, reason = is_halted()
+    if halted:
+        print(f"[mlb_match_tick_worker] OPERACIONES DETENIDAS (motivo: {reason}) -- ciclo omitido")
+        return {"halted": True, "reason": reason}
+
     registered = 0
     try:
         registered = _register_new_mlb_matches()

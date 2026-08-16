@@ -42,12 +42,16 @@ from __future__ import annotations
 
 import sys
 import time
+import re
 from datetime import date as dt_date, datetime, timezone
+from itertools import islice
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisHistoricalOdds
-from database.historical.tennis import TennisExplorerPlayerSlug
 from database.historical.tennis import MatchHistory
+from database.historical.tennis.writer import (
+    get_candidate_slugs_from_player, harvest_slug_into_player,
+)
 # 2026-08-10, pedido explícito del usuario ("modificalo... con todo lo
 # que tenemos actualmente, dedup y fill de lo que había quedado
 # faltante") -- reusa `_resolve_and_save_via_match_detail` (writer.py,
@@ -65,8 +69,11 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
     _te_native_to_nombre_apellido,
 )
+from outer_apis.scrapers.tennis.tennisexplorer_scraper import (
+    get_all_player_country_links, iter_all_player_pages,
+)
 
-_YEARS = list(range(2016, 2027))
+_YEARS = list(range(2016, datetime.now(timezone.utc).year + 1))
 _PAUSE_BETWEEN_REQUESTS_S = 1.5
 _PAUSE_BETWEEN_PLAYERS_S = 3.0
 
@@ -85,76 +92,51 @@ def _to_iso_date(raw_date: str, reference_year: int) -> str | None:
         return None
 
 
-def _surname_key_from_full_name(name: str) -> str:
-    """Nombre COMPLETO, convención "Nombre Apellido" (ej. "Casper Ruud",
-    "Pablo Carreno Busta") -- el apellido es TODO menos el primer
-    token. Mismo criterio de normalización que `_norm_surname`
-    (wta_favorite_surface_winrate_filter_backtest.py): minúsculas,
-    guion->espacio."""
-    tokens = name.strip().split(" ")
-    if len(tokens) < 2:
-        return ""
-    surname = " ".join(tokens[1:])
-    return surname.replace("-", " ").strip().lower()
-
-
-def _surname_key_from_abbrev(abbrev: str) -> str:
-    """Nombre ABREVIADO tal cual lo guarda TennisExplorer, convención
-    "Apellido Inicial." (ej. "Osaka N.", "Carreno-Busta P.") -- el
-    apellido es TODO menos el ÚLTIMO token (el orden es el INVERSO del
-    nombre completo). Bug real encontrado en vivo al escribir esta
-    función: usar el mismo criterio que el nombre completo tomaba la
-    inicial como si fuera el apellido."""
-    parts = abbrev.strip().rstrip(".").rsplit(" ", 1)
-    if len(parts) != 2:
-        return ""
-    surname = parts[0]
-    return surname.replace("-", " ").strip().lower()
-
-
 def _get_candidate_slugs(player_name: str) -> list[str]:
-    """Slugs REALES ya cosechados (de `hrefs` de partidos previamente
-    fetcheados) para el apellido de `player_name` (nombre COMPLETO) --
-    ver `TennisExplorerPlayerSlug`/`resolve_player_slug`."""
-    key = _surname_key_from_full_name(player_name)
-    if not key:
-        return []
-    init_db_historical()
-    with db_historical.connection_context():
-        return [r.slug for r in TennisExplorerPlayerSlug.select().where(TennisExplorerPlayerSlug.surname_key == key)]
+    """Slugs REALES ya conocidos (vía `Player.slug`, ver
+    `get_candidate_slugs_from_player`) para el apellido de `player_name`
+    (nombre COMPLETO) -- ver `resolve_player_slug`. 2026-08-10,
+    `TennisExplorerPlayerSlug` eliminada (pedido explícito del usuario:
+    "se puede ver el nombre en el match-detail"), reemplazada por la
+    entidad canónica `Player`."""
+    return get_candidate_slugs_from_player(player_name)
 
 
 def _harvest_opponent_slug(opponent_abbrev: str, opponent_slug: str | None, now: datetime) -> None:
-    """Persiste (apellido normalizado del rival, slug real visto en el
-    `href`) -- `opponent_abbrev` viene en convención ABREVIADA
-    ("Apellido Inicial.") -- 2026-08-06, pedido explícito del usuario.
-    Idempotente (índice único (surname_key, slug))."""
-    if not opponent_slug:
-        return
-    key = _surname_key_from_abbrev(opponent_abbrev)
-    if not key:
-        return
-    TennisExplorerPlayerSlug.get_or_create(
-        surname_key=key, slug=opponent_slug, defaults={"discovered_at": now},
-    )
+    """Enriquece un `Player` YA existente que matchee `opponent_abbrev`
+    (convención ABREVIADA "Apellido Inicial.") con el slug real visto en
+    el `href` -- ver `harvest_slug_into_player`. 2026-08-10,
+    `TennisExplorerPlayerSlug` eliminada, reemplazada por la entidad
+    canónica `Player`."""
+    harvest_slug_into_player(opponent_abbrev, opponent_slug)
 
 
 
-def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
+def backfill_player(
+    player_name: str,
+    years: list[int] | None = None,
+    *,
+    known_slug: str | None = None,
+    prefetched_pages: dict[int, str] | None = None,
+) -> dict:
     """`years`: default `_YEARS` (2016-2026, backfill histórico
     completo). 2026-08-08, pedido explícito del usuario -- el worker de
     sync en vivo (`workers/tennis_match_history_sync_worker.py`) pasa
     solo el año actual +/- 1 para no re-fetchear una década completa
     cada vez que aparece un partido nuevo en Kalshi."""
-    slug = resolve_player_slug(player_name, candidate_slugs=_get_candidate_slugs(player_name))
+    slug = known_slug or resolve_player_slug(
+        player_name, candidate_slugs=_get_candidate_slugs(player_name),
+    )
     if slug is None:
         return {"player": player_name, "status": "skipped_no_slug", "odds_inserted": 0}
 
     year_list = years if years is not None else _YEARS
     matches_by_year: list[tuple[int, dict]] = []
     for year in year_list:
-        html = _fetch(slug, year=year)
-        time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
+        html = (prefetched_pages or {}).get(year)
+        if html is None:
+            html = _fetch(slug, year=year)
+            time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
         if html is None:
             continue
         for m in _parse_year_html(html, player_name):
@@ -214,15 +196,19 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
     # no incorrecto).
     resolved_opponent_names: dict[str, str] = {}
     if unique_match_ids:
-        with db_historical.connection_context():
-            for row in MatchHistory.select().where(MatchHistory.match_id.in_(list(unique_match_ids))):
-                if _names_confirm_identity(player_name, row.player_a_name):
-                    opponent_full = row.player_b_name
-                elif _names_confirm_identity(player_name, row.player_b_name):
-                    opponent_full = row.player_a_name
-                else:
-                    continue
-                resolved_opponent_names[row.match_id] = _te_native_to_nombre_apellido(opponent_full)
+        from database.historical.tennis.writer import _lookup_player_id
+
+        this_player_id = _lookup_player_id(player_name)
+        if this_player_id is not None:
+            with db_historical.connection_context():
+                for row in MatchHistory.select().where(MatchHistory.match_id.in_(list(unique_match_ids))):
+                    if row.player_a_id == this_player_id:
+                        opponent_full = row.player_b.canonical_name
+                    elif row.player_b_id == this_player_id:
+                        opponent_full = row.player_a.canonical_name
+                    else:
+                        continue
+                    resolved_opponent_names[row.match_id] = opponent_full
 
     inserted_odds = 0
     with db_historical.connection_context():
@@ -250,6 +236,79 @@ def backfill_player(player_name: str, years: list[int] | None = None) -> dict:
         "matches_found": len(matches_by_year),
         "odds_inserted": inserted_odds,
         "match_details_resolved": details_resolved, "match_details_error": details_error,
+    }
+
+
+def _catalog_display_name(display_name: str) -> str:
+    """Convierte ``Apellido, Nombre`` del catálogo a ``Nombre Apellido``."""
+    clean = re.sub(r"\s*\(\d{4}\)\s*$", "", display_name).strip()
+    if "," not in clean:
+        return clean
+    surname, given = (part.strip() for part in clean.split(",", 1))
+    return f"{given} {surname}"
+
+
+def run_country_catalog_backfill(
+    *,
+    years: list[int] | None = None,
+    max_players: int | None = None,
+) -> dict:
+    """Backfill masivo desde el catálogo completo de TennisExplorer.
+
+    Recorre ``/list-players/``, todos sus países, la paginación de cada
+    país y cada enlace de jugador. La página del año actual ya descargada
+    por el catálogo se reutiliza en :func:`backfill_player`; los demás años
+    se obtienen con los parsers existentes. ``max_players`` solo sirve para
+    pruebas/corridas controladas; ``None`` procesa el catálogo completo.
+    """
+    init_db_historical()
+    year_list = years if years is not None else _YEARS
+    country_links = get_all_player_country_links()
+    if not country_links:
+        raise RuntimeError("TennisExplorer no devolvió enlaces de países")
+
+    catalog_year = datetime.now(timezone.utc).year
+    processed = ok = skipped = matches_found = details_resolved = odds_inserted = 0
+    discovered_players = iter_all_player_pages(country_links, catalog_year)
+    if max_players is not None:
+        # Aplicar el límite al iterador evita descargar un jugador extra
+        # antes de comprobar que una corrida de prueba ya terminó.
+        discovered_players = islice(discovered_players, max_players)
+    for discovered in discovered_players:
+        player_name = _catalog_display_name(discovered["player_name"])
+        try:
+            result = backfill_player(
+                player_name,
+                years=year_list,
+                known_slug=discovered["slug"],
+                prefetched_pages={catalog_year: discovered["html"]},
+            )
+        except Exception as exc:
+            result = {"player": player_name, "status": "error", "error": str(exc)}
+
+        processed += 1
+        if result.get("status") == "ok":
+            ok += 1
+        else:
+            skipped += 1
+        matches_found += result.get("matches_found", 0)
+        details_resolved += result.get("match_details_resolved", 0)
+        odds_inserted += result.get("odds_inserted", 0)
+        print(
+            f"[country_catalog_backfill] {processed} {player_name} "
+            f"({discovered['slug']}) -> {result.get('status')}",
+            flush=True,
+        )
+        time.sleep(_PAUSE_BETWEEN_PLAYERS_S)
+
+    return {
+        "countries": len(country_links),
+        "players_processed": processed,
+        "players_ok": ok,
+        "players_skipped": skipped,
+        "matches_found": matches_found,
+        "match_details_resolved": details_resolved,
+        "odds_inserted": odds_inserted,
     }
 
 
@@ -355,11 +414,16 @@ def run_backfill_from_wta_roster(max_workers: int = 1) -> list[dict]:
     contra el roster AMPLIO ya construido en
     `wta_player_ranking_backfill.py` (666 jugadoras reales, unión de
     snapshots históricos 2016-2026, no solo el top-N de hoy) -- lee
-    directamente de `WtaPlayerRankingHistory`, ya poblada."""
-    from database.historical.tennis import WtaPlayerRankingHistory
+    directamente de `PlayerRankingHistory` (2026-08-10, `WtaPlayerRankingHistory`
+    reemplazada por el catálogo unificado -- FK real a `Player`, ya no
+    texto libre), ya poblada."""
+    from database.historical.tennis import PlayerRankingHistory, Player
 
     init_db_historical()
-    names = sorted({r.player_name for r in WtaPlayerRankingHistory.select(WtaPlayerRankingHistory.player_name).distinct()})
+    names = sorted({
+        r.player.canonical_name
+        for r in PlayerRankingHistory.select(PlayerRankingHistory.player).join(Player).distinct()
+    })
     return _run_backfill_for_names(names, tag="wta_full_roster", max_workers=max_workers)
 
 
@@ -390,13 +454,20 @@ def run_backfill_from_atp_roster(max_workers: int = 1) -> list[dict]:
     250+" -- es el universo COMPLETO de jugadores ATP conocidos
     (más amplio que antes, nunca más angosto -- prioriza correctitud
     sobre la optimización de acotar el volumen de la corrida)."""
-    from database.historical.tennis import MatchHistory
+    from database.historical.tennis import MatchHistory, Player
 
     init_db_historical()
     names: set[str] = set()
-    for r in MatchHistory.select(MatchHistory.player_a_name, MatchHistory.player_b_name).where(MatchHistory.tour == "ATP"):
-        names.add(r.player_a_name)
-        names.add(r.player_b_name)
+    query = (
+        MatchHistory
+        .select(MatchHistory.player_a, MatchHistory.player_b)
+        .where(MatchHistory.tour == "ATP")
+    )
+    for r in query:
+        if r.player_a_id is not None:
+            names.add(r.player_a.canonical_name)
+        if r.player_b_id is not None:
+            names.add(r.player_b.canonical_name)
     return _run_backfill_for_names(sorted(names), tag="atp_full_roster", max_workers=max_workers)
 
 
@@ -434,8 +505,12 @@ def run_backfill_for_missing_odds_opponents(max_workers: int = 1) -> list[dict]:
     }
 
     missing_opponents: set[str] = set()
-    for r in MatchHistory.select(MatchHistory.player_a_name, MatchHistory.player_b_name):
-        for name in (r.player_a_name, r.player_b_name):
+    query = MatchHistory.select(MatchHistory.player_a, MatchHistory.player_b)
+    for r in query:
+        for pid, side in ((r.player_a_id, "player_a"), (r.player_b_id, "player_b")):
+            if pid is None:
+                continue
+            name = (r.player_a if side == "player_a" else r.player_b).canonical_name
             if name not in already_self:
                 missing_opponents.add(name)
 

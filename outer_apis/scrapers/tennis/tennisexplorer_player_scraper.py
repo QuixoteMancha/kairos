@@ -41,6 +41,7 @@ from typing import Any
 
 import requests
 
+from outer_apis.scrapers.brightdata_proxy import fetch_with_ip_block_fallback
 from outer_apis.scrapers.tennis._request_throttle import tennisexplorer_throttle
 
 _PLAYER_URL = "https://www.tennisexplorer.com/player/{slug}/"
@@ -55,16 +56,21 @@ def _fetch(slug: str, year: int | None = None) -> str | None:
     (2026-08-04, pedido explícito -- "no overhittear los servers")
     ANTES de la request, thread-safe, compartido con cualquier otro
     caller de este módulo (backfills offline Y `prefetch_player_histories`
-    en vivo, que usa un thread pool de hasta 16 workers)."""
+    en vivo, que usa un thread pool de hasta 16 workers).
+
+    2026-08-11, pedido explícito del usuario ("los scrapers deben tener
+    la característica de detectar cuando los sitios bloquean posiblemente
+    por IP y en ese caso entrar al fallback de lanzar el request
+    proxeado") -- request directa primero (como siempre), pero ahora vía
+    `fetch_with_ip_block_fallback`: si TennisExplorer devuelve 403/429/503
+    o la conexión falla, reintenta automático vía proxy BrightData (y esa
+    capa, a su vez, whitelistea la IP del proxy si BrightData la rechaza)."""
     tennisexplorer_throttle.wait()
     url = _PLAYER_URL.format(slug=slug)
     if year is not None:
         url = f"{url}?annual={year}"
-    try:
-        resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
-    except requests.RequestException:
-        return None
-    if resp.status_code != 200:
+    resp = fetch_with_ip_block_fallback(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
+    if resp is None or resp.status_code != 200:
         return None
     return resp.text
 
@@ -154,15 +160,38 @@ def expected_opponent_abbreviation(full_name: str) -> str | None:
 def guess_player_slug(player_name: str) -> str | None:
     """Ver LIMITACIÓN CONOCIDA en el docstring del módulo -- heurística
     verificada, no búsqueda real. Fail-closed: None si no hay match
-    real confirmado."""
-    last_name = player_name.strip().split()[-1].lower() if player_name.strip() else ""
-    last_name = re.sub(r"[^a-z\-]", "", last_name)
-    if not last_name:
+    real confirmado.
+
+    2026-08-12, bug real encontrado en vivo corriendo el backfill top-20
+    ATP: "Felix Auger Aliassime" (rank 4) y "Alex De Minaur" (rank 7)
+    fallaban -- el apellido real de ambos es COMPUESTO ("Auger
+    Aliassime"/"De Minaur"), pero la heurística tomaba solo el ÚLTIMO
+    token ("aliassime"/"minaur"), que ni siquiera existe como slug real
+    en TennisExplorer (redirige al home, no a un jugador). Verificado en
+    vivo: el slug real de un apellido compuesto es los ÚLTIMOS 2 tokens
+    unidos con guion ("auger-aliassime", "de-minaur"). Se prueba primero
+    el candidato de 1 token (comportamiento previo intacto, cubre la
+    mayoría de apellidos simples), y si ese falla, el de 2 tokens como
+    fallback -- nunca al revés, para no romper apellidos simples que ya
+    funcionaban."""
+    tokens = [t for t in player_name.strip().split() if t]
+    if not tokens:
         return None
-    html = _fetch(last_name)
-    if html is None or not _verify_player_page(html, player_name):
-        return None
-    return last_name
+
+    candidates: list[str] = []
+    last_token = re.sub(r"[^a-z\-]", "", tokens[-1].lower())
+    if last_token:
+        candidates.append(last_token)
+    if len(tokens) >= 2:
+        compound = re.sub(r"[^a-z\-]", "", "-".join(t.lower() for t in tokens[-2:]))
+        if compound and compound not in candidates:
+            candidates.append(compound)
+
+    for candidate in candidates:
+        html = _fetch(candidate)
+        if html is not None and _verify_player_page(html, player_name):
+            return candidate
+    return None
 
 
 def resolve_player_slug(player_name: str, candidate_slugs: list[str] = ()) -> str | None:
@@ -549,14 +578,13 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict[str, A
 
 def _fetch_match_detail(match_id: str) -> str | None:
     """Fail-closed: None ante cualquier fallo de red/status, mismo
-    throttle compartido que `_fetch` (misma fuente, mismo servidor)."""
+    throttle compartido que `_fetch` (misma fuente, mismo servidor).
+    2026-08-11: mismo fallback a proxy ante posible bloqueo por IP, ver
+    docstring de `_fetch`."""
     tennisexplorer_throttle.wait()
     url = _MATCH_DETAIL_URL.format(match_id=match_id)
-    try:
-        resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
-    except requests.RequestException:
-        return None
-    if resp.status_code != 200:
+    resp = fetch_with_ip_block_fallback(url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S)
+    if resp is None or resp.status_code != 200:
         return None
     return resp.text
 
@@ -693,10 +721,24 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
 
     Returns: dict con match_date/tournament/round/surface/score +
     player_a_*/player_b_* (name, slug, ranking, birthdate ISO, height_cm,
-    weight_kg, plays) + winner_side ("a"|"b"|None). Fail-closed: None si
-    el fetch falla o el header de jugadores no parsea (nunca se fabrica
-    un partido a medias) -- los campos de bio individuales SÍ pueden
-    venir None por separado (fail-closed por campo, ver `_bio_row`)."""
+    weight_kg, plays) + winner_side ("a"|"b"|None) + retired (bool) +
+    retired_side ("a"|"b"|None, el PERDEDOR cuando `retired=True`).
+    Fail-closed: None si el fetch falla o el header de jugadores no
+    parsea (nunca se fabrica un partido a medias) -- los campos de bio
+    individuales SÍ pueden venir None por separado (fail-closed por
+    campo, ver `_bio_row`).
+
+    2026-08-11, pedido explícito del usuario ("hay que agregar los
+    retiros de los players") -- `retired`/`retired_side` se detectan por
+    el marcador "ret."/"w.o." dentro del texto de score (convención
+    ESTÁNDAR de tenis, no específica de TE). Honesto: NO se pudo
+    confirmar en vivo un ejemplo real de retiro en TennisExplorer
+    (revisados 60+ partidos reales de agosto 2026, ninguno tenía el
+    marcador -- retiros son raros, ~1-2% de los partidos, ventana
+    chica) -- el parseo sigue la convención documentada/universal, pero
+    su formato EXACTO en TE queda sin verificar 100% hasta encontrar un
+    caso real. Fail-closed por diseño: si el marcador no aparece,
+    `retired=False` siempre, nunca se asume."""
     html = _fetch_match_detail(match_id)
     if html is None:
         return None
@@ -714,6 +756,18 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
             winner_side = "a"
         elif b_sets > a_sets:
             winner_side = "b"
+
+    # 2026-08-11, pedido explícito del usuario ("hay que agregar los
+    # retiros de los players") -- convención estándar de tenis, el texto
+    # de score trae "ret."/"w.o." al final cuando el partido terminó por
+    # retiro/walkover (ej. "7-5, 2-6, 6-4 ret."). El jugador retirado es
+    # SIEMPRE el que perdió el partido (`winner_side` ya identifica al
+    # ganador por sets, el lado contrario es quien se retiró) -- nunca
+    # se adivina si el marcador no aparece en el texto (fail-closed).
+    retired = bool(sets_score) and re.search(r"\bret\.?\b|\bw\.?o\.?\b", sets_score, re.IGNORECASE) is not None
+    retired_side = None
+    if retired and winner_side is not None:
+        retired_side = "b" if winner_side == "a" else "a"
 
     info = _MATCH_DETAIL_MATCH_INFO_RE.search(html)
     match_date = tournament = round_ = surface = tour = None
@@ -742,6 +796,8 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
         "surface": surface,
         "score": sets_score.strip() if sets_score else None,
         "winner_side": winner_side,
+        "retired": retired,
+        "retired_side": retired_side,
         "player_a_name": _te_native_to_nombre_apellido(a_name.strip()),
         "player_a_slug": a_slug,
         "player_a_ranking": _parse_int_prefix(a_rank_raw),
@@ -767,7 +823,7 @@ def get_tour_by_sex(player_name: str, candidate_slugs: list[str] = ()) -> str | 
     woman" de la página de perfil de TennisExplorer -- 2026-08-09,
     pedido explícito del usuario: "usar el scraper de tennisexplorer
     para obtener el sexo de los players" para resolver `tour` en
-    `MatchHistory` donde ni Sackmann ni el roster WTA lo confirmaron.
+    `MatchHistory` donde ni otra fuente ni el roster WTA lo confirmaron.
 
     Verificado en vivo: "Sabalenka Aryna" -> "Sex: woman", "Djokovic
     Novak" -> "Sex: man". Fail-closed: None si no se resuelve el slug,

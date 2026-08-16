@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import MatchHistory, has_real_match_detail_between
+from database.historical.tennis import MatchHistory, Player, has_real_match_detail_between
 
 
 @pytest.fixture(autouse=True)
@@ -20,15 +20,24 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         MatchHistory.delete().execute()
+        Player.delete().execute()
     yield
     with db_historical.connection_context():
         MatchHistory.delete().execute()
+        Player.delete().execute()
+
+
+def _make_player(name):
+    existing = Player.get_or_none(Player.canonical_name == name)
+    if existing is not None:
+        return existing
+    return Player.create(canonical_name=name, created_at=datetime.now(timezone.utc))
 
 
 def _row(match_id, player_a, player_b):
     return MatchHistory.create(
-        match_id=match_id, player_a_name=player_a, player_b_name=player_b, match_date="2026-08-11",
-        winner_side=None, source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
+        match_id=match_id, player_a=_make_player(player_a), player_b=_make_player(player_b),
+        match_date="2026-08-11", winner=None, source="tennisexplorer", fetched_at=datetime.now(timezone.utc),
     )
 
 

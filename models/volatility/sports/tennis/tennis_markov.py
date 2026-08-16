@@ -11,8 +11,7 @@ Methodology
    look up a `p_serve` (probability of winning a point on own serve) for
    that bucket. This is currently a HARDCODED placeholder table (see
    `_BUCKET_P_SERVE` below) — not calibrated against real data, since the
-   old scraper-based calibration pipeline (`SackmannScraper`) no longer
-   exists in this repo.
+   old scraper-based calibration pipeline no longer exists in this repo.
 
 2. Standard tennis scoring is a Markov chain: game -> set -> match win
    probability is a deterministic function of (p_serve_a, p_serve_b) and the
@@ -69,13 +68,16 @@ def _bucket_for_rank(rank: int) -> tuple[int, int]:
     return _RANK_BUCKETS[-1] if rank > _RANK_BUCKETS[-1][1] else _RANK_BUCKETS[0]
 
 
-# ── Real calibration (Match Charting Project x live rankings) ─────────────
+# ── Real calibration ────────────────────────────────────────────────────
 #
-# `outer_apis/tennis_serve_stats.py` calibrates real p_serve-by-bucket from Jeff
-# Sackmann's Match Charting Project (per-match serve stats, both tours)
-# cross-referenced against current ATP/WTA rankings (`outer_apis/tennis_rankings.py`).
-# Cached at module level here since it's an expensive multi-request live
-# calibration (~10s), not something to redo on every model call.
+# 2026-08-10, pedido explícito del usuario ("usaremos sólo
+# tennisexplorer") -- `outer_apis/sports/tennis/serve_stats.py`
+# (calibraba p_serve-by-bucket real desde una fuente externa) fue
+# ELIMINADO. El `try/except Exception` de abajo ya atrapaba cualquier
+# fallo de red/parseo cayendo a la tabla estática -- ModuleNotFoundError
+# también es un Exception, así que esto sigue funcionando SIN cambios
+# de código, simplemente usa siempre el placeholder estático hasta que
+# exista un reemplazo real basado en TennisExplorer.
 
 _CALIBRATED_CACHE: dict[str, dict[tuple[int, int], float]] = {}
 

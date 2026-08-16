@@ -1,6 +1,6 @@
 """
 Operational/accounting data — LimitArb signals today, future orders/
-fills/PnL. Lives in `db`/`DB_PATH` (the "definitive" volume), separate
+fills/PnL. Lives in PostgreSQL `DB_NAME`, separate
 from `database/historical/` (reference/calibration data, `db_historical`)
 — see database/db.py docstring for the two-database split rationale.
 """

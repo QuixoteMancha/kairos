@@ -46,10 +46,10 @@ from bisect import bisect_right
 from typing import Any
 
 from database.db import init_db_historical
-from database.historical.tennis import MatchHistory, WtaPlayerRankingHistory, WtaTournamentLevel
+from database.historical.tennis import MatchHistory, PlayerRankingHistory, Tournament, Player
 from outer_apis.kalshi.fees import leg_fee_fraction
 from models.volatility.sports.tennis.tennis_markov import pre_match_win_prob, p_serve_for_rank, _p_win_game, _p_win_set
-from scripts.tennis.favorite_by_historical_rank_backtest import _p_win_match_given_set_score
+from scripts.tennis.pricing_and_risk_utils import _p_win_match_given_set_score
 from scripts.reports import risk_metrics
 
 _EVAL_START_YEAR = 2016
@@ -137,7 +137,7 @@ def _load_tournament_level_index() -> dict[tuple[int, str], str | None]:
 
     init_db_historical()
     index: dict[tuple[int, str], str | None] = {}
-    for r in WtaTournamentLevel.select():
+    for r in Tournament.select().where(Tournament.tour == "WTA"):
         norm = _normalize_tournament_name(r.tournament_name)
         if norm is None:
             continue
@@ -284,8 +284,17 @@ def _load_ranking_index() -> dict[frozenset[str], list[tuple[str, int]]]:
     (no el string crudo) para no depender del orden Nombre/Apellido."""
     init_db_historical()
     index: dict[frozenset[str], list[tuple[str, int]]] = {}
-    for r in WtaPlayerRankingHistory.select().order_by(WtaPlayerRankingHistory.ranked_at):
-        index.setdefault(_name_token_key(r.player_name), []).append((r.ranked_at, r.singles_ranking))
+    # 2026-08-10, `WtaPlayerRankingHistory.player_name` (texto libre)
+    # reemplazado por `PlayerRankingHistory.player` (FK real a Player) --
+    # join explícito para seguir teniendo el nombre.
+    query = (
+        PlayerRankingHistory
+        .select(PlayerRankingHistory.ranked_at, PlayerRankingHistory.singles_ranking, Player.canonical_name)
+        .join(Player)
+        .order_by(PlayerRankingHistory.ranked_at)
+    )
+    for r in query:
+        index.setdefault(_name_token_key(r.player.canonical_name), []).append((r.ranked_at, r.singles_ranking))
     return index
 
 
@@ -343,12 +352,14 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
         .where(
             (MatchHistory.surface.is_null(False))
             & (MatchHistory.match_date >= eval_cutoff)
-            & (MatchHistory.winner_side.is_null(False))
+            & (MatchHistory.winner_id.is_null(False))
         )
         .order_by(MatchHistory.match_date, MatchHistory.id)
     )
     for r in rows:
-        player_name, opponent_full_name = r.player_a_name, r.player_b_name
+        if r.player_a_id is None or r.player_b_id is None:
+            continue
+        player_name, opponent_full_name = r.player_a.canonical_name, r.player_b.canonical_name
 
         # 2026-08-05, pedido explícito del usuario: "me faltó agregar
         # que solo tomen matches de torneos 250 para arriba en nivel
@@ -356,7 +367,14 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
         # de ATP. Fail-closed: torneo sin match real en el catálogo
         # oficial (`WtaTournamentLevel`) para ese año se EXCLUYE, nunca
         # se asume main-tour por default.
-        if not _is_main_tour_level(r.tournament, r.match_date, level_index, allowed_levels=allowed_levels):
+        # 2026-08-11: `MatchHistory.tournament` es FK real ahora (ver
+        # writer.py::_resolve_tournament_id) -- se pasa el NOMBRE
+        # (texto) a `_is_main_tour_level`, que sigue matcheando por
+        # nombre normalizado contra `level_index` (comportamiento sin
+        # cambios, solo la fuente del string cambió de CharField a
+        # `.tournament.tournament_name`).
+        tournament_name = r.tournament.tournament_name if r.tournament else None
+        if not _is_main_tour_level(tournament_name, r.match_date, level_index, allowed_levels=allowed_levels):
             skipped_below_250_level += 1
             continue
 
@@ -382,7 +400,9 @@ def collect_wta_cases(allowed_levels: frozenset[str] = _WTA_MAIN_TOUR_LEVELS) ->
             skipped_no_rank_data += 1
             continue
 
-        winner_name = player_name if r.winner_side == "a" else opponent_full_name
+        # 2026-08-10, `winner_side` (texto "a"/"b") reemplazado por
+        # `winner_id` (FK real al Player ganador).
+        winner_name = player_name if r.winner_id == r.player_a_id else opponent_full_name
         favorite_is_self = rank_self < rank_opp
         favorite_name = player_name if favorite_is_self else opponent_full_name
         underdog_name = opponent_full_name if favorite_is_self else player_name
@@ -725,7 +745,7 @@ def run_all_variants_backtest(
     ]
     filtered_prioritized = sorted(filtered_cases, key=lambda c: (c["date"], c["favorite_rank"]))
 
-    from scripts.tennis.favorite_by_historical_rank_backtest import _simulate_realistic_all_strategies
+    from scripts.tennis.pricing_and_risk_utils import _simulate_realistic_all_strategies
 
     result = _simulate_realistic_all_strategies(
         filtered_prioritized, initial_capital=initial_capital, max_stake_usd=max_stake_usd, tour="WTA",

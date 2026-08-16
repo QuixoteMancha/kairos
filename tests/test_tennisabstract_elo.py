@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisAbstractElo, TennisAbstractYelo
+from database.historical.tennis import TennisAbstractElo
 from outer_apis.scrapers.tennis.tennisabstract_scraper import _parse_float, _parse_int
 from outer_apis.sports.tennis.tennisabstract_elo import get_elo, get_season_form, elo_implied_win_prob
 
@@ -20,11 +20,9 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         TennisAbstractElo.delete().execute()
-        TennisAbstractYelo.delete().execute()
     yield
     with db_historical.connection_context():
         TennisAbstractElo.delete().execute()
-        TennisAbstractYelo.delete().execute()
 
 
 def test_parse_float_and_int_fail_closed():

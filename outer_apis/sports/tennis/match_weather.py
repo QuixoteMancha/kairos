@@ -44,7 +44,7 @@ from database.db import init_db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.models import MatchWeather as TennisMatchWeather
-from outer_apis.scrapers.tennis.tournament_location import get_location, extract_city_candidate
+from outer_apis.scrapers.tennis.tournament_location import get_location
 from outer_apis.scrapers.weather import open_meteo
 
 
@@ -57,30 +57,20 @@ def _now():
 
 
 def _get_location_with_geocode_cache(tournament_name: str | None) -> tuple[float, float] | None:
-    """Igual que `get_location`, pero con un segundo nivel de fallback:
-    la caché geocodeada vía Nominatim (`TournamentLocationCache`, ver
-    `scripts/geocode_missing_tournament_locations.py`) para la cola
-    larga de torneos challenger/ITF sin sede conocida a mano -- 2026-08-04,
-    pedido explícito del usuario. Fail-closed en cascada: tabla
-    estática -> caché geocodeada (si existe fila, sea resuelta o no) ->
-    None. Nunca inventa una ubicación."""
-    location = get_location(tournament_name)
-    if location is not None:
-        return location
-    if not tournament_name:
-        return None
-
-    from database.historical.tennis import TournamentLocationCache
-
-    candidate = extract_city_candidate(tournament_name)
-    if candidate is None:
-        return None  # evento de equipo/liga -- nunca se geocodifica, ver extract_city_candidate
-
-    init_db_historical()
-    cached = TournamentLocationCache.get_or_none(TournamentLocationCache.city_candidate == candidate)
-    if cached is None or cached.lat is None or cached.lon is None:
-        return None
-    return cached.lat, cached.lon
+    """Igual que `get_location` -- 2026-08-10, pedido explícito del
+    usuario ("borra la base y reconstruyamos de cero"): el segundo nivel
+    de fallback que existía acá (`TournamentLocation`, caché geocodeada
+    vía Nominatim keyed por `city_candidate` de texto libre) quedó SIN
+    equivalente real tras consolidar `WtaTournamentLevel`/
+    `AtpTournamentLevel`/`TournamentLocation` en el modelo único
+    `Tournament` (keyed por año+nombre de torneo, `city` NO-nulo) --
+    granularidad distinta, no mapea 1:1. El script que poblaba esa
+    caché (`scripts/tennis/geocode_missing_tournament_locations.py`) ya
+    no existe en el repo (solo quedaba el .pyc). Degradado fail-closed:
+    solo la tabla estática (`get_location`), sin caché geocodeada de
+    cola larga -- deuda técnica documentada, no silenciosamente
+    reinventada."""
+    return get_location(tournament_name)
 
 
 def _create_weather_row_with_retry(**kwargs) -> None:

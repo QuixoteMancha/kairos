@@ -21,203 +21,28 @@ usa. Contradice la regla de "solo modelos base reales" en `models.py`
 concretos hasta que exista un segundo deporte que de verdad comparta
 esta estructura (en ese momento, decidir explícitamente si conviene
 renombrar las tablas reales a algo sport-agnostic -- ESO SÍ requeriría
-una migración real de datos, no se hace a ciegas)."""
+una migración real de datos, no se hace a ciegas).
+
+2026-08-11, pedido explícito del usuario ("reordenaremos la estructura
+de los modelos de base") -- las clases de este archivo están ordenadas
+por DEPENDENCIA real (quien no depende de nadie primero: `Player`,
+`Tournament`, `Match`; recién después lo que los referencia por FK).
+Motivo real, no solo prolijidad: un `ForeignKeyField` necesita la
+clase Python YA definida al momento en que Peewee bindea el field --
+production tuvo un crash real (`AttributeError: 'str' object has no
+attribute '_meta'`) por un `ForeignKeyField("Tournament", ...)` con la
+clase pasada como STRING crudo (no `DeferredForeignKey`, que sí
+resuelve forward-references) definida 300 líneas más abajo. Con el
+orden correcto, CERO forward-references hacen falta en todo el
+archivo -- si se agrega un modelo nuevo, agregarlo DESPUÉS de todo lo
+que referencia por FK, nunca antes."""
 
 from peewee import (
-    BooleanField, CharField, DateField, DateTimeField, DeferredForeignKey, FloatField,
+    BooleanField, CharField, DateField, DateTimeField, FloatField,
     ForeignKeyField, IntegerField, TextField,
 )
 
 from database.base_models import HistoricalBaseModel
-
-
-class Match(HistoricalBaseModel):
-    """Un registro por CADA partido detectado en un scan real.
-    `market_id`/`ticker_a`/`ticker_b` para el tracking de Kalshi,
-    `player_a/b_rank_at_match` con el ranking REAL al momento del
-    partido (no el actual), `tournament`/`round` agregados después vía
-    ALTER TABLE (ver `_add_column_if_missing` en `database/db.py`),
-    `winner`/`settled_at` NULL hasta que el mercado resuelva."""
-
-    class Meta:
-        table_name = "tennis_scanned_match"
-        indexes = ((("market_id",), True),)
-
-    market_id = CharField(unique=True)
-    ticker_a = CharField()
-    ticker_b = CharField()
-    tour = CharField()
-    surface = CharField(null=True)
-    tournament = CharField(null=True)
-    round = CharField(null=True)
-    player_a_name = CharField()
-    player_b_name = CharField()
-    player_a_rank_at_match = IntegerField(null=True)
-    player_b_rank_at_match = IntegerField(null=True)
-    best_of = IntegerField()
-    close_time = CharField(null=True)
-    detected_at = DateTimeField()
-    winner = CharField(null=True)
-    settled_at = DateTimeField(null=True)
-    # 2026-08-08, pedido explícito del usuario -- worker nuevo
-    # (`workers/tennis_match_history_sync_worker.py`) que sincroniza
-    # MatchHistory/ranking/stats para los jugadores de cada partido
-    # nuevo detectado acá. NULL = todavía no procesado por ese worker.
-    history_synced_at = DateTimeField(null=True)
-
-
-class ProbabilityTick(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_match_probability_tick"
-        indexes = ((("match", "observed_at"), False),)
-
-    match = ForeignKeyField(Match, backref="ticks", on_delete="CASCADE")
-    observed_at = DateTimeField()
-    market_price_a = FloatField(null=True)
-    model_fair_a = FloatField(null=True)
-
-
-class MatchWeather(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_match_weather"
-        indexes = ((("match", "phase"), True), (("match_history", "phase"), True))
-
-    match = ForeignKeyField(Match, backref="weather", on_delete="CASCADE", null=True)
-    # 2026-08-09, pedido explícito del usuario -- "que esté la
-    # referencia a clima del match, ya que tenemos una tabla clima":
-    # mismo patrón que `MatchStats.match_history` (ver ese modelo) --
-    # `match` (arriba) sigue apuntando a `Match` (tracker vivo de
-    # Kalshi, Categoría B) por retrocompatibilidad de las 233 filas
-    # reales ya vinculadas así; `match_history` es el vínculo NUEVO
-    # para partidos con identidad ya cierta en `MatchHistory`. Ambos
-    # nullable -- una fila real usa uno u otro, nunca los 2 a la vez
-    # hoy (podría cambiar si a futuro se resuelve el vínculo Match<->
-    # MatchHistory para los partidos vivos de Kalshi).
-    match_history = DeferredForeignKey("MatchHistory", backref="weather", on_delete="CASCADE", null=True)
-    phase = CharField()  # before|during|end
-    observed_at = DateTimeField()
-    temperature_c = FloatField(null=True)
-    humidity_pct = FloatField(null=True)
-    wind_kmh = FloatField(null=True)
-    fetched_at = DateTimeField(null=True)
-
-
-class MatchStats(HistoricalBaseModel):
-    """Raw and normalized match-level stats, vía Flashscore.
-    `raw_stats_json` conserva el contenido original; los campos
-    tipificados abajo son las métricas más habituales."""
-
-    class Meta:
-        table_name = "tennis_match_stats"
-        indexes = ((("match",), True),)
-
-    match = ForeignKeyField(Match, backref="stats", on_delete="CASCADE", unique=True, null=True)
-    # 2026-08-08, pedido explícito del usuario -- fusión de `ChartedMatchStats`
-    # acá: `match` (arriba) sigue apuntando a `Match` (el tracker VIVO de
-    # Kalshi, Categoría B, fuera de la consolidación) por retrocompatibilidad
-    # de las 66 filas reales ya vinculadas así -- NO se re-apunta (no hay
-    # vínculo cierto entre esas 66 filas y `MatchHistory` sin el mismo
-    # matching fuzzy que se viene evitando toda la sesión). `match_history`
-    # es el vínculo NUEVO, para partidos con identidad ya cierta (Charting
-    # Project migrado, y a futuro el worker de Kalshi que cree la fila de
-    # `MatchHistory` en el momento con el nombre real del ticker -- ver
-    # docstring de ese worker cuando exista).
-    match_history = DeferredForeignKey("MatchHistory", backref="stats", on_delete="CASCADE", unique=True, null=True)
-    source = CharField(default="flashscore")  # "flashscore" | "sackmann_match_charting_project"
-    # Backwards-compatible identifier fields used by legacy code/tests
-    market_id = CharField(null=True, unique=True)
-    flashscore_match_id = CharField(null=True)
-    raw_stats_json = TextField()
-    fetched_at = DateTimeField()
-
-    # Match-level totals
-    aces_a = IntegerField(null=True)
-    aces_b = IntegerField(null=True)
-    double_faults_a = IntegerField(null=True)
-    double_faults_b = IntegerField(null=True)
-    winners_a = IntegerField(null=True)
-    winners_b = IntegerField(null=True)
-    unforced_errors_a = IntegerField(null=True)
-    unforced_errors_b = IntegerField(null=True)
-    total_points_won_a = IntegerField(null=True)
-    total_points_won_b = IntegerField(null=True)
-    service_games_won_a = IntegerField(null=True)
-    service_games_won_b = IntegerField(null=True)
-    return_games_won_a = IntegerField(null=True)
-    return_games_won_b = IntegerField(null=True)
-
-    # Percentage stats
-    first_serve_pct_a = FloatField(null=True)
-    first_serve_pct_b = FloatField(null=True)
-    second_serve_pct_a = FloatField(null=True)
-    second_serve_pct_b = FloatField(null=True)
-    first_serve_points_won_pct_a = FloatField(null=True)
-    first_serve_points_won_pct_b = FloatField(null=True)
-    second_serve_points_won_pct_a = FloatField(null=True)
-    second_serve_points_won_pct_b = FloatField(null=True)
-    break_points_won_a = IntegerField(null=True)
-    break_points_won_b = IntegerField(null=True)
-    break_points_faced_a = IntegerField(null=True)
-    break_points_faced_b = IntegerField(null=True)
-    break_points_saved_a = IntegerField(null=True)
-    break_points_saved_b = IntegerField(null=True)
-    serve_games_played_a = IntegerField(null=True)
-    serve_games_played_b = IntegerField(null=True)
-
-
-class MatchStatsSet(HistoricalBaseModel):
-    """Set-level stats -- una fila por set dentro de un `Match`, mismos
-    campos tipificados que `MatchStats` pero para ese set individual."""
-
-    class Meta:
-        table_name = "tennis_match_stats_set"
-        indexes = ((("match", "set_number"), True), (("match_history", "set_number"), True))
-
-    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE", null=True)
-    # 2026-08-09, pedido explícito del usuario -- mismo patrón que
-    # `MatchStats.match_history`/`MatchWeather.match_history`: `match`
-    # (arriba) sigue apuntando a `Match` (tracker vivo de Kalshi,
-    # retrocompatibilidad) por si alguna fila real ya está vinculada
-    # así; `match_history` es el vínculo NUEVO para partidos con
-    # identidad ya cierta en `MatchHistory` -- da `match.set_stats`
-    # (queryset de sets de ESE partido, ya filtrado por el FK, sin
-    # necesidad de re-filtrar por match del lado del caller).
-    match_history = DeferredForeignKey("MatchHistory", backref="set_stats", on_delete="CASCADE", null=True)
-    set_number = IntegerField()
-    raw_stats_json = TextField(null=True)
-    fetched_at = DateTimeField(null=True)
-
-    aces_a = IntegerField(null=True)
-    aces_b = IntegerField(null=True)
-    double_faults_a = IntegerField(null=True)
-    double_faults_b = IntegerField(null=True)
-    winners_a = IntegerField(null=True)
-    winners_b = IntegerField(null=True)
-    unforced_errors_a = IntegerField(null=True)
-    unforced_errors_b = IntegerField(null=True)
-    total_points_won_a = IntegerField(null=True)
-    total_points_won_b = IntegerField(null=True)
-    service_games_won_a = IntegerField(null=True)
-    service_games_won_b = IntegerField(null=True)
-    return_games_won_a = IntegerField(null=True)
-    return_games_won_b = IntegerField(null=True)
-
-    first_serve_pct_a = FloatField(null=True)
-    first_serve_pct_b = FloatField(null=True)
-    second_serve_pct_a = FloatField(null=True)
-    second_serve_pct_b = FloatField(null=True)
-    first_serve_points_won_pct_a = FloatField(null=True)
-    first_serve_points_won_pct_b = FloatField(null=True)
-    second_serve_points_won_pct_a = FloatField(null=True)
-    second_serve_points_won_pct_b = FloatField(null=True)
-    break_points_won_a = IntegerField(null=True)
-    break_points_won_b = IntegerField(null=True)
-    break_points_faced_a = IntegerField(null=True)
-    break_points_faced_b = IntegerField(null=True)
-    break_points_saved_a = IntegerField(null=True)
-    break_points_saved_b = IntegerField(null=True)
-    serve_games_played_a = IntegerField(null=True)
-    serve_games_played_b = IntegerField(null=True)
 
 
 class Player(HistoricalBaseModel):
@@ -283,6 +108,91 @@ class Player(HistoricalBaseModel):
     updated_at = DateTimeField(null=True)
 
 
+class Tournament(HistoricalBaseModel):
+    class Meta:
+        table_name = "tournament"
+        indexes = ((("year", "tournament_name"), True),)
+
+    year = IntegerField()
+    tournament_name = CharField()
+    level = CharField(null=True)
+    tour = CharField(null=True)  # "ATP" | "WTA" | "ATP/WTA"-- fuente de verdad REAL, 1 sola vez
+    city = CharField()
+    lat = FloatField(null=True)
+    lon = FloatField(null=True)
+    fetched_at = DateTimeField()
+
+
+class Match(HistoricalBaseModel):
+    """Un registro por CADA partido detectado en un scan real.
+    `market_id`/`ticker_a`/`ticker_b` para el tracking de Kalshi,
+    `player_a/b_rank_at_match` con el ranking REAL al momento del
+    partido (no el actual), `tournament`/`round` incluidos en el esquema,
+    `winner`/`settled_at` NULL hasta que el mercado resuelva."""
+
+    class Meta:
+        table_name = "tennis_scanned_match"
+        indexes = ((("market_id",), True),)
+
+    market_id = CharField(unique=True)
+    ticker_a = CharField()
+    ticker_b = CharField()
+    tour = CharField()
+    surface = CharField(null=True)
+    tournament = CharField(null=True)
+    round = CharField(null=True)
+    player_a_name = CharField()
+    player_b_name = CharField()
+    player_a_rank_at_match = IntegerField(null=True)
+    player_b_rank_at_match = IntegerField(null=True)
+    best_of = IntegerField()
+    close_time = CharField(null=True)
+    detected_at = DateTimeField()
+    winner = CharField(null=True)
+    settled_at = DateTimeField(null=True)
+    # 2026-08-08, pedido explícito del usuario -- worker nuevo
+    # (`workers/tennis_match_history_sync_worker.py`) que sincroniza
+    # MatchHistory/ranking/stats para los jugadores de cada partido
+    # nuevo detectado acá. NULL = todavía no procesado por ese worker.
+    history_synced_at = DateTimeField(null=True)
+
+
+class MatchDuration(HistoricalBaseModel):
+    """Duración REAL de un partido (total + por set) -- 2026-08-12,
+    pedido explícito del usuario: "necesitamos la duración de los
+    matches... añadir un modelo para esto MatchDuration y campo a la
+    tabla de matches con foreignkey a esta nueva tabla".
+
+    FUENTE: Flashscore, feed `df_su_1` (Summary) -- TennisExplorer NO
+    expone duración en ninguna parte (verificado exhaustivamente en vivo
+    2026-08-12 contra un partido real ya backfillado, Sinner-Alcaraz
+    Masters Cup 2025: sin campo "Duration", sin patrón H:MM oculto en
+    toda la página). Reverse-engineered 2026-08-10, re-verificado en
+    vivo 2026-08-12: `RB÷{total}` + `RC÷{set1}`/`RD÷{set2}`/`RE÷{set3}`/
+    `RF÷{set4}`/`RG÷{set5}`, formato "H:MM" -- confirmado con un partido
+    real que la suma de sets (0:59+0:53+1:03=175min) coincide EXACTO con
+    el total reportado (RB÷2:55=175min).
+
+    `flashscore_match_id`: identificador real para trazabilidad/
+    idempotencia -- NO se resuelve solo (requiere `find_match_id`,
+    matching por nombre+fecha+marcador, ver `flashscore_scraper.py`),
+    se guarda para poder re-verificar/depurar sin tener que re-resolver
+    el matching."""
+
+    class Meta:
+        table_name = "tennis_match_duration"
+        indexes = ((("flashscore_match_id",), True),)
+
+    flashscore_match_id = CharField(unique=True)
+    total_minutes = IntegerField(null=True)
+    set_1_minutes = IntegerField(null=True)
+    set_2_minutes = IntegerField(null=True)
+    set_3_minutes = IntegerField(null=True)
+    set_4_minutes = IntegerField(null=True)
+    set_5_minutes = IntegerField(null=True)
+    fetched_at = DateTimeField()
+
+
 class MatchHistory(HistoricalBaseModel):
     """Un registro por partido REAL (1 fila, NO duplicado por jugador
     como `TennisMatchHistory`) -- 2026-08-08, pedido explícito del
@@ -311,45 +221,27 @@ class MatchHistory(HistoricalBaseModel):
         indexes = ((("match_id",), True),)
 
     match_id = CharField(unique=True)
-    # 2026-08-08, pedido explícito del usuario -- "validaremos los
-    # matches de tennisexplorer con la data de sackmann histórica para
-    # validar la deduplicación": los partidos validados así NO tienen
-    # `match_id` real de TennisExplorer (no hubo fetch de match-detail,
-    # es validación contra `TmlDatabaseMatch`, sin red) -- usan un id
-    # sintético determinístico (`sackmann:{year}:{winner}:{loser}`).
-    # `source` distingue el origen real del dato para quien lo consuma.
-    source = CharField(default="tennisexplorer")  # "tennisexplorer" | "sackmann"
-    # 2026-08-09, pedido explícito del usuario -- "en MatchHistory está
-    # ATP y WTA, mezclados, verdad?": confirmado, y sin ninguna columna
-    # para distinguirlos (99% de la tabla es `source="sackmann"`, 100%
-    # ATP por diseño de TmlDatabaseMatch -- pero la porción
-    # `source="tennisexplorer"`, la que crece con el worker en vivo, SÍ
-    # mezcla ambos circuitos de verdad, verificado con nombres reales).
+    # 2026-08-10, pedido explícito del usuario ("usaremos sólo
+    # tennisexplorer") -- única fuente real ahora es TennisExplorer.
+    source = CharField(default="tennisexplorer")  # "tennisexplorer"
     # Nullable + fail-closed: None si no se pudo determinar con certeza
     # (nunca se adivina "ATP por default").
     tour = CharField(null=True)  # "ATP" | "WTA" | None
     match_date = CharField(null=True)
-    tournament = CharField(null=True)
+    # 2026-08-11, pedido explícito del usuario ("añade la key a
+    # tournament, para que quede relacional") -- FK real contra
+    # `Tournament` (ya definida ANTES en este archivo tras el
+    # reordenamiento por dependencia del mismo día, ver docstring del
+    # módulo). Revertido de un CharField anterior (2026-08-10) que se
+    # había elegido por miedo a romper decenas de archivos que lo usaban
+    # como string -- ese riesgo ya se resolvió acá mismo actualizando
+    # cada consumidor real (`writer.py::_resolve_tournament_id`,
+    # backtests). `null=True` -- filas viejas/sin torneo detectable
+    # quedan sin FK, nunca se fabrica un `Tournament` fantasma.
+    tournament = ForeignKeyField(Tournament, backref="matches", null=True, on_delete="SET NULL")
     round = CharField(null=True)
     surface = CharField(null=True)
     score = CharField(null=True)
-    winner_side = CharField(null=True)  # "a" | "b" | None si no determinable
-
-    player_a_name = CharField()  # nombre completo real, ej. "Anisimova Amanda"
-    player_a_slug = CharField(null=True)
-    player_a_ranking = IntegerField(null=True)  # ranking AL MOMENTO de este partido -- se queda acá, es del partido, no del jugador
-    player_a_birthdate = DateField(null=True)
-    player_a_height_cm = IntegerField(null=True)
-    player_a_weight_kg = IntegerField(null=True)
-    player_a_plays = CharField(null=True)
-
-    player_b_name = CharField()
-    player_b_slug = CharField(null=True)
-    player_b_ranking = IntegerField(null=True)
-    player_b_birthdate = DateField(null=True)
-    player_b_height_cm = IntegerField(null=True)
-    player_b_weight_kg = IntegerField(null=True)
-    player_b_plays = CharField(null=True)
 
     # 2026-08-10, pedido explícito del usuario ("los datos de player
     # deben ir en el modelo de player, y simplemente referenciar a los
@@ -367,44 +259,251 @@ class MatchHistory(HistoricalBaseModel):
     # `player_a_id_id`, confuso y no lo que se pidió.
     player_a = ForeignKeyField(Player, backref="matches_as_a", null=True, on_delete="SET NULL", column_name="player_a_id")
     player_b = ForeignKeyField(Player, backref="matches_as_b", null=True, on_delete="SET NULL", column_name="player_b_id")
+    player_a_ranking = IntegerField(null=True)  # ranking AL MOMENTO de este partido -- se queda acá, es del partido, no del jugador
+    player_b_ranking = IntegerField(null=True)
 
-    # 2026-08-09, pedido explícito del usuario ("TmlDatabaseMatch... debe
-    # ser eliminado, para sacar el winrate por superficie y variante...
-    # copilot creó funciones"): estos 4 campos son los únicos que
-    # `TmlDatabaseMatch` (fuente ATP real vía TML-Database, ver
-    # `tml_database_scraper.py`) traía y `MatchHistory` no tenía --
-    # `winner_age`/`loser_age`/`minutes` (edad real y duración del
-    # partido) van atados a GANADOR/PERDEDOR (no a player_a/player_b, a
-    # propósito: así es como los consume el código real de
-    # `favorite_comeback_pattern_analysis.py`/backtests, sin traducción
-    # adicional). `best_of` sí es simétrico (no depende de quién ganó).
+    # 2026-08-11, pedido explícito del usuario ("sigamos con el Elo
+    # propio en base al historial de matches") -- Elo de cada jugador
+    # ANTES de este partido (mismo criterio que player_a_ranking/
+    # player_b_ranking: snapshot AL MOMENTO, no el Elo actual del
+    # jugador). Se completa en un pase batch por
+    # `scripts/tennis/compute_self_elo.py` (recorre MatchHistory en
+    # orden cronológico por tour, ver ese script y
+    # `models/volatility/sports/tennis/tennis_elo.py` para la fórmula),
+    # NO en el momento de escritura del partido -- Elo point-in-time
+    # requiere procesar TODO el historial anterior del jugador en orden,
+    # no se puede calcular fila por fila de forma aislada.
+    player_a_elo = FloatField(null=True)
+    player_b_elo = FloatField(null=True)
+
+    # 2026-08-11, pedido explícito del usuario ("podríamos sacar ambas,
+    # Elo y ranking por el historial de matches") -- ranking PROPIO
+    # (posición 1/2/3/... ordenando por Elo descendente), no el ranking
+    # oficial ATP/WTA (sistema de puntos, no relacionado matemáticamente
+    # con Elo, ver docstring de player_a_elo/tennis_elo.py). Honesto:
+    # incluye a TODO jugador visto hasta ese momento en el historial del
+    # tour, no solo "activos" -- el ranking oficial descarta jugadores
+    # tras 52 semanas sin competir, esto no hace esa distinción.
+    player_a_elo_rank = IntegerField(null=True)
+    player_b_elo_rank = IntegerField(null=True)
+
+    # 2026-08-12, pedido explícito del usuario ("necesitamos la duración
+    # de los matches... añadir un modelo... y campo a la tabla de
+    # matches con foreignkey a esta nueva tabla") -- se completa vía un
+    # pipeline de ENRIQUECIMIENTO POSTERIOR (`scripts/tennis/
+    # enrich_match_durations.py`), NO en el momento de escritura del
+    # partido -- requiere resolver el `match_id` de Flashscore (fuente
+    # real de la duración, TennisExplorer no la expone) vía matching por
+    # nombre+fecha+marcador, un costo de red separado del backfill
+    # principal. `null=True` -- la inmensa mayoría de `MatchHistory`
+    # nunca tendrá esto completado (no bloqueante, ver docstring del
+    # script de enriquecimiento).
+    duration = ForeignKeyField(MatchDuration, backref="matches", null=True, on_delete="SET NULL")
+
+    # 2026-08-10, pedido explícito del usuario ("si winnerside pero
+    # referenciado a player") -- reemplaza al viejo `winner_side`
+    # ("a"|"b", texto libre contra player_a/player_b) por un FK real
+    # al `Player` ganador. `null=True` -- partidos sin resultado
+    # determinable (walkover sin datos, o todavía sin jugar) quedan sin
+    # ganador, nunca se adivina.
+    winner = ForeignKeyField(Player, backref="matches_won", null=True, on_delete="SET NULL", column_name="winner_id")
+
+    # 2026-08-09: `winner_age`/`loser_age`/`minutes`/`best_of` -- columnas
+    # históricas, sin productor activo desde la purga de la fuente externa
+    # que las traía (2026-08-10, "usaremos sólo tennisexplorer").
+    # `winner_age`/`loser_age`/`minutes` van atados a GANADOR/PERDEDOR
+    # (no a player_a/player_b). `best_of` es simétrico (no depende de
+    # quién ganó).
     winner_age = FloatField(null=True)
     loser_age = FloatField(null=True)
     minutes = IntegerField(null=True)
     best_of = IntegerField(null=True)
-    # Categoría de torneo real tal cual la trae TML-Database ('250'/'500'/
-    # 'M'=Masters1000/'G'=GrandSlam/'F'=ATPFinals/'D'=DavisCup/'A'=exhibición)
-    # -- `tournament` (arriba) es el nombre libre, esto es el nivel/categoría,
-    # ninguna otra fuente lo trae. Ver TOUR_LEVELS_250_PLUS en tml_database_scraper.py.
-    level = CharField(null=True)
+
+    # `player_retired` -- RESTAURADO 2026-08-11, pedido explícito del
+    # usuario ("hay que agregar los retiros de los players"). Se había
+    # eliminado antes ese mismo día asumiendo que ninguna fuente lo
+    # exponía -- eso fue un error, no verificado a fondo: TennisExplorer
+    # SÍ marca el retiro dentro del texto de score
+    # (`get_match_detail`'s `sets_score`, ej. "(7-5, 2-6, 6-4 ret.)"),
+    # convención estándar de tenis. `retired` = True cuando el score
+    # trae el marcador "ret."/"w.o." -- el jugador retirado es siempre
+    # el PERDEDOR (`loser`, ver abajo), nunca se adivina si el marcador
+    # no aparece (fail-closed, ver `_parse_retirement` en
+    # `tennisexplorer_player_scraper.py`).
+    retired = BooleanField(default=False)
+    player_retired = ForeignKeyField(Player, backref="matches_retired", null=True, on_delete="SET NULL", column_name="player_retired_id")
 
     fetched_at = DateTimeField()
     updated_at = DateTimeField(null=True)  # solo se setea si una re-verificación cambió algún campo
 
 
-class TennisMatchHistoryUnvalidated(HistoricalBaseModel):
-    """Candidatos de partido único (salidos de `dedupe_match_history_
-    candidates.py`) que NO se pudieron confirmar contra `TmlDatabaseMatch`
-    -- 2026-08-08, pedido explícito del usuario: "los que no se puedan
-    validar los dejamos en una tabla aparte" (nunca se descartan, nunca
-    se fuerza una identidad sin confirmar).
+class ProbabilityTick(HistoricalBaseModel):
+    class Meta:
+        table_name = "tennis_match_probability_tick"
+        indexes = ((("match", "observed_at"), False),)
 
-    `reason` explica por qué: "no_sackmann_match" (Sackmann no cubre
-    ese nivel/torneo -- esperable, ITF/challenger bajo no siempre está),
-    "ambiguous_sackmann_match" (2+ partidos candidatos el mismo año
-    entre las mismas 2 personas, el score no alcanzó para desambiguar),
-    "dedup_conflict" (ya venía ambiguo desde el dedup mismo, ver
-    `find_match_candidates`).
+    match = ForeignKeyField(Match, backref="ticks", on_delete="CASCADE")
+    observed_at = DateTimeField()
+    market_price_a = FloatField(null=True)
+    model_fair_a = FloatField(null=True)
+
+
+class MatchWeather(HistoricalBaseModel):
+    class Meta:
+        table_name = "tennis_match_weather"
+        indexes = ((("match", "phase"), True), (("match_history", "phase"), True))
+
+    match = ForeignKeyField(Match, backref="weather", on_delete="CASCADE", null=True)
+    # 2026-08-09, pedido explícito del usuario -- "que esté la
+    # referencia a clima del match, ya que tenemos una tabla clima":
+    # mismo patrón que `MatchStats.match_history` (ver ese modelo) --
+    # `match` (arriba) sigue apuntando a `Match` (tracker vivo de
+    # Kalshi, Categoría B) por retrocompatibilidad de las 233 filas
+    # reales ya vinculadas así; `match_history` es el vínculo NUEVO
+    # para partidos con identidad ya cierta en `MatchHistory`. Ambos
+    # nullable -- una fila real usa uno u otro, nunca los 2 a la vez
+    # hoy (podría cambiar si a futuro se resuelve el vínculo Match<->
+    # MatchHistory para los partidos vivos de Kalshi).
+    match_history = ForeignKeyField(MatchHistory, backref="weather", on_delete="CASCADE", null=True)
+    phase = CharField()  # before|during|end
+    observed_at = DateTimeField()
+    temperature_c = FloatField(null=True)
+    humidity_pct = FloatField(null=True)
+    wind_kmh = FloatField(null=True)
+    fetched_at = DateTimeField(null=True)
+
+
+class MatchStats(HistoricalBaseModel):
+    """Raw and normalized match-level stats, vía Flashscore.
+    `raw_stats_json` conserva el contenido original; los campos
+    tipificados abajo son las métricas más habituales."""
+
+    class Meta:
+        table_name = "tennis_match_stats"
+        indexes = ((("match",), True),)
+
+    match = ForeignKeyField(Match, backref="stats", on_delete="CASCADE", unique=True, null=True)
+    # 2026-08-08, pedido explícito del usuario -- fusión de `ChartedMatchStats`
+    # acá: `match` (arriba) sigue apuntando a `Match` (el tracker VIVO de
+    # Kalshi, Categoría B, fuera de la consolidación) por retrocompatibilidad
+    # de las 66 filas reales ya vinculadas así -- NO se re-apunta (no hay
+    # vínculo cierto entre esas 66 filas y `MatchHistory` sin el mismo
+    # matching fuzzy que se viene evitando toda la sesión). `match_history`
+    # es el vínculo NUEVO, para partidos con identidad ya cierta (Charting
+    # Project migrado, y a futuro el worker de Kalshi que cree la fila de
+    # `MatchHistory` en el momento con el nombre real del ticker -- ver
+    # docstring de ese worker cuando exista).
+    match_history = ForeignKeyField(MatchHistory, backref="stats", on_delete="CASCADE", unique=True, null=True)
+    source = CharField(default="flashscore")  # "flashscore"
+    # Backwards-compatible identifier fields used by legacy code/tests
+    market_id = CharField(null=True, unique=True)
+    flashscore_match_id = CharField(null=True)
+    raw_stats_json = TextField()
+    fetched_at = DateTimeField()
+
+    # Match-level totals
+    aces_a = IntegerField(null=True)
+    aces_b = IntegerField(null=True)
+    double_faults_a = IntegerField(null=True)
+    double_faults_b = IntegerField(null=True)
+    winners_a = IntegerField(null=True)
+    winners_b = IntegerField(null=True)
+    unforced_errors_a = IntegerField(null=True)
+    unforced_errors_b = IntegerField(null=True)
+    total_points_won_a = IntegerField(null=True)
+    total_points_won_b = IntegerField(null=True)
+    service_games_won_a = IntegerField(null=True)
+    service_games_won_b = IntegerField(null=True)
+    return_games_won_a = IntegerField(null=True)
+    return_games_won_b = IntegerField(null=True)
+
+    # Percentage stats
+    first_serve_pct_a = FloatField(null=True)
+    first_serve_pct_b = FloatField(null=True)
+    second_serve_pct_a = FloatField(null=True)
+    second_serve_pct_b = FloatField(null=True)
+    first_serve_points_won_pct_a = FloatField(null=True)
+    first_serve_points_won_pct_b = FloatField(null=True)
+    second_serve_points_won_pct_a = FloatField(null=True)
+    second_serve_points_won_pct_b = FloatField(null=True)
+    break_points_won_a = IntegerField(null=True)
+    break_points_won_b = IntegerField(null=True)
+    break_points_faced_a = IntegerField(null=True)
+    break_points_faced_b = IntegerField(null=True)
+    break_points_saved_a = IntegerField(null=True)
+    break_points_saved_b = IntegerField(null=True)
+    serve_games_played_a = IntegerField(null=True)
+    serve_games_played_b = IntegerField(null=True)
+
+
+class MatchStatsSet(HistoricalBaseModel):
+    """Set-level stats -- una fila por set dentro de un `Match`, mismos
+    campos tipificados que `MatchStats` pero para ese set individual."""
+
+    class Meta:
+        table_name = "tennis_match_stats_set"
+        indexes = ((("match", "set_number"), True), (("match_history", "set_number"), True))
+
+    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE", null=True)
+    # 2026-08-09, pedido explícito del usuario -- mismo patrón que
+    # `MatchStats.match_history`/`MatchWeather.match_history`: `match`
+    # (arriba) sigue apuntando a `Match` (tracker vivo de Kalshi,
+    # retrocompatibilidad) por si alguna fila real ya está vinculada
+    # así; `match_history` es el vínculo NUEVO para partidos con
+    # identidad ya cierta en `MatchHistory` -- da `match.set_stats`
+    # (queryset de sets de ESE partido, ya filtrado por el FK, sin
+    # necesidad de re-filtrar por match del lado del caller).
+    match_history = ForeignKeyField(MatchHistory, backref="set_stats", on_delete="CASCADE", null=True)
+    set_number = IntegerField()
+    raw_stats_json = TextField(null=True)
+    fetched_at = DateTimeField(null=True)
+
+    aces_a = IntegerField(null=True)
+    aces_b = IntegerField(null=True)
+    double_faults_a = IntegerField(null=True)
+    double_faults_b = IntegerField(null=True)
+    winners_a = IntegerField(null=True)
+    winners_b = IntegerField(null=True)
+    unforced_errors_a = IntegerField(null=True)
+    unforced_errors_b = IntegerField(null=True)
+    total_points_won_a = IntegerField(null=True)
+    total_points_won_b = IntegerField(null=True)
+    service_games_won_a = IntegerField(null=True)
+    service_games_won_b = IntegerField(null=True)
+    return_games_won_a = IntegerField(null=True)
+    return_games_won_b = IntegerField(null=True)
+
+    first_serve_pct_a = FloatField(null=True)
+    first_serve_pct_b = FloatField(null=True)
+    second_serve_pct_a = FloatField(null=True)
+    second_serve_pct_b = FloatField(null=True)
+    first_serve_points_won_pct_a = FloatField(null=True)
+    first_serve_points_won_pct_b = FloatField(null=True)
+    second_serve_points_won_pct_a = FloatField(null=True)
+    second_serve_points_won_pct_b = FloatField(null=True)
+    break_points_won_a = IntegerField(null=True)
+    break_points_won_b = IntegerField(null=True)
+    break_points_faced_a = IntegerField(null=True)
+    break_points_faced_b = IntegerField(null=True)
+    break_points_saved_a = IntegerField(null=True)
+    break_points_saved_b = IntegerField(null=True)
+    serve_games_played_a = IntegerField(null=True)
+    serve_games_played_b = IntegerField(null=True)
+
+
+class TennisMatchHistoryUnvalidated(HistoricalBaseModel):
+    """Candidatos de partido único que NO se pudieron confirmar contra
+    una fuente histórica externa -- 2026-08-08, pedido explícito del
+    usuario: "los que no se puedan validar los dejamos en una tabla
+    aparte" (nunca se descartan, nunca se fuerza una identidad sin
+    confirmar). 2026-08-10: la fuente externa de validación fue
+    eliminada del proyecto -- tabla/infra de validación ya sin
+    productor activo, queda documentada por si se retoma con
+    TennisExplorer como única fuente.
+
+    `reason` explica por qué (valores históricos, la infra que los
+    generaba ya no corre): "dedup_conflict" (ambiguo desde el dedup
+    mismo).
 
     Idempotente por (match_date, tournament, player_a_name,
     player_b_name_or_abbrev) -- re-correr la validación no duplica."""
@@ -466,18 +565,12 @@ class TennisHistoricalOdds(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
-# `TmlDatabaseMatch` -- ELIMINADA 2026-08-09, pedido explícito del
-# usuario ("TmlDatabaseMatch... debe ser eliminado"). 1 fila por
-# partido ATP real (winner/loser), redundante con `MatchHistory` (su
-# portion `source="sackmann"` ya cubría casi 1:1 los mismos partidos,
-# ver saga de validación de esta sesión). Los 4 campos que
-# `MatchHistory` no tenía (`winner_age`/`loser_age`/`minutes`/`best_of`/
-# `level`) se agregaron directo a `MatchHistory` y se backfillearon
-# desde el backup antes de borrar esta clase -- ver
-# `outer_apis/scrapers/tennis/tml_database_scraper.py` (save_matches_to_db/
-# has_cached_year/get_matches_range_from_db, migrados a MatchHistory
-# con la MISMA forma externa de retorno, para no romper a los 4
-# backtests que los consumen).
+# `TmlDatabaseMatch` -- ELIMINADA 2026-08-09. 2026-08-10: la fuente
+# externa que la alimentaba fue purgada por completo del proyecto
+# ("usaremos sólo tennisexplorer") -- `winner_age`/
+# `loser_age`/`minutes`/`best_of`/`level` quedan en `MatchHistory` como
+# columnas históricas, sin productor activo hasta que exista un
+# equivalente vía TennisExplorer.
 
 
 class TennisPlayerSyncStatus(HistoricalBaseModel):
@@ -526,18 +619,14 @@ class TennisPlayerRanking(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
-class TennisServeCalibration(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_serve_calibration"
-        indexes = ((("tour", "bucket_min", "bucket_max"), False),)
-
-    tour = CharField()
-    bucket_min = IntegerField()
-    bucket_max = IntegerField()
-    p_serve = FloatField()
-    n_matches = IntegerField()
-    n_players = IntegerField()
-    calibrated_at = DateTimeField()
+# `TennisServeCalibration` -- ELIMINADA 2026-08-10, pedido explícito del
+# usuario tras auditoría de writer.py. Sin producer real desde la purga
+# de Sackmann/Match Charting Project (su único consumidor histórico,
+# `outer_apis/tennis_serve_stats.py`, ya no existe); `save_serve_
+# calibration_snapshot` en writer.py tenía cero callers reales en todo
+# el proyecto. Reemplazo propuesto (agregados propios por jugador desde
+# stats reales de partido) sigue como decisión de diseño abierta, no
+# implementado.
 
 
 # `TennisSurfaceMatchHistory` -- ELIMINADA 2026-08-09, pedido explícito
@@ -549,37 +638,19 @@ class TennisServeCalibration(HistoricalBaseModel):
 # migradas a `MatchHistory` de una fase anterior de esta misma sesión).
 
 
-class TennisExplorerPlayerSlug(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennisexplorer_player_slug"
-        indexes = ((("surname_key", "slug"), True),)
-
-    surname_key = CharField()
-    slug = CharField()
-    discovered_at = DateTimeField()
-
-
-class TennisHeadToHead(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_head_to_head"
-        indexes = ((("player_a_name", "player_b_name"), False),)
-
-    player_a_name = CharField()
-    player_b_name = CharField()
-    a_wins = IntegerField()
-    b_wins = IntegerField()
-    n_matches = IntegerField()
-    computed_at = DateTimeField()
-
-
 class TennisRecentResult(HistoricalBaseModel):
     class Meta:
         table_name = "tennis_recent_result"
         indexes = ((("player_name", "match_date", "opponent_name"), True),)
 
     player_name = CharField()
-    match_date = CharField()
-    tournament = CharField(null=True)
+    # 2026-08-10, bug real encontrado corriendo tests: este campo
+    # faltaba (el índice de Meta lo referenciaba, `writer.py` lo sigue
+    # leyendo/escribiendo activamente) -- restaurado, omisión real, no
+    # decisión de diseño.
+    match_date = CharField(null=True)
+    match = ForeignKeyField(Match, backref="recent_results", on_delete="CASCADE", null=True)
+    tournament = ForeignKeyField(Tournament, backref="recent_results", on_delete="CASCADE", null=True)
     opponent_name = CharField()
     subject_won = BooleanField()
     retired_or_walkover = BooleanField()
@@ -590,34 +661,26 @@ class TennisRecentResult(HistoricalBaseModel):
 class TennisAbstractElo(HistoricalBaseModel):
     class Meta:
         table_name = "tennis_abstract_elo"
-        indexes = ((("player_name", "tour"), False),)
+        # 2026-08-10, bug real encontrado corriendo tests: el índice
+        # apuntaba a "player_name"/"tour", 2 campos que YA NO EXISTEN
+        # en este modelo (reemplazados por el FK `player` cuando se
+        # migró a la entidad canónica `Player`, sin actualizar el
+        # índice) -- rompía `create_tables` para TODA la DB (Peewee
+        # valida los índices de todas las tablas al crear el schema).
+        indexes = ((("player",), False),)
 
-    player_name = CharField()
-    tour = CharField()
+    player = ForeignKeyField(Player, backref="elo_history", on_delete="CASCADE")
     elo = FloatField()
     h_elo = FloatField(null=True)
     c_elo = FloatField(null=True)
     g_elo = FloatField(null=True)
-    atp_rank = IntegerField(null=True)
+    rank = IntegerField(null=True)
     fetched_at = DateTimeField()
 
 
-class TennisAbstractYelo(HistoricalBaseModel):
+class PlayerStats(HistoricalBaseModel):
     class Meta:
-        table_name = "tennis_abstract_yelo"
-        indexes = ((("player_name", "tour"), False),)
-
-    player_name = CharField()
-    tour = CharField()
-    yelo = FloatField()
-    wins = IntegerField(null=True)
-    losses = IntegerField(null=True)
-    fetched_at = DateTimeField()
-
-
-class TennisAbstractCareerSplit(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_abstract_career_split"
+        table_name = "PlayerStats"
         indexes = ((("player_name", "surface"), False),)
 
     player_name = CharField()
@@ -633,78 +696,14 @@ class TennisAbstractCareerSplit(HistoricalBaseModel):
     fetched_at = DateTimeField()
 
 
-class TennisAbstractH2H(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_abstract_h2h"
-        indexes = ((("player_name", "opponent_name"), False),)
-
-    player_name = CharField()
-    opponent_name = CharField()
-    meetings = IntegerField()
-    wins = IntegerField(null=True)
-    losses = IntegerField(null=True)
-    win_pct = FloatField(null=True)
-    fetched_at = DateTimeField()
-
-
-class TournamentLocationCache(HistoricalBaseModel):
-    class Meta:
-        table_name = "tournament_location_cache"
-        indexes = ((("city_candidate",), True),)
-
-    city_candidate = CharField()
-    lat = FloatField(null=True)
-    lon = FloatField(null=True)
-    source = CharField()
-    fetched_at = DateTimeField()
-
-
-class WtaPlayerRankingHistory(HistoricalBaseModel):
+class PlayerRankingHistory(HistoricalBaseModel):
     class Meta:
         table_name = "wta_player_ranking_history"
         indexes = ((("player_id", "ranked_at"), True),)
 
-    player_id = IntegerField()
-    player_name = CharField()
+    player = ForeignKeyField(Player, backref="ranking_history", on_delete="CASCADE")
     ranked_at = CharField()
     singles_ranking = IntegerField()
-    fetched_at = DateTimeField()
-
-
-class WtaTournamentLevel(HistoricalBaseModel):
-    class Meta:
-        table_name = "wta_tournament_level"
-        indexes = ((("year", "tournament_name"), True),)
-
-    year = IntegerField()
-    tournament_name = CharField()
-    level = CharField(null=True)
-    fetched_at = DateTimeField()
-
-
-class AtpTournamentLevel(HistoricalBaseModel):
-    """Catálogo persistente torneo ATP real -> nivel ('250'/'500'/'M'/
-    'G'/'F'/'D'/'A') -- 2026-08-09, pedido explícito del usuario: "hay
-    que tener un mapa de torneos, que indique el level" (mismo patrón
-    que `WtaTournamentLevel`, pero para ATP -- antes se recalculaba en
-    memoria en cada corrida del backfill leyendo `MatchHistory` crudo,
-    sin quedar nunca persistido/inspeccionable como tabla propia).
-
-    Poblado por `scripts/tennis/atp_tournament_level_backfill.py` desde
-    las filas `source="sackmann"` de `MatchHistory` (que ya traen
-    `level` real por partido) -- voto por MAYORÍA real por (año, torneo
-    normalizado), no prioridad máxima (bug real encontrado en vivo:
-    "Washington" 2025 tenía 43 filas reales '500' + 1 fila mal
-    etiquetada 'M' en la fuente TML-Database misma -- prioridad-máxima
-    elegía la fila mala; mayoría real elige correcto)."""
-
-    class Meta:
-        table_name = "atp_tournament_level"
-        indexes = ((("year", "tournament_name"), True),)
-
-    year = IntegerField()
-    tournament_name = CharField()  # normalizado (mayúsculas, sin sufijo tour/nivel, sin dígitos sueltos)
-    level = CharField(null=True)
     fetched_at = DateTimeField()
 
 

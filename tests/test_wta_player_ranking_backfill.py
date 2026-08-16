@@ -6,13 +6,14 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from database.db import init_db_historical
-from database.historical.tennis import WtaPlayerRankingHistory
+from database.historical.tennis import PlayerRankingHistory, Player
 from scripts.tennis.wta_player_ranking_backfill import build_roster, backfill_player_ranking, run_backfill
 
 
 def setup_function(_fn):
     init_db_historical()
-    WtaPlayerRankingHistory.delete().execute()
+    PlayerRankingHistory.delete().execute()
+    Player.delete().execute()
 
 
 def test_build_roster_unions_across_years():
@@ -35,14 +36,14 @@ def test_backfill_player_ranking_persists_and_replaces():
     ):
         n = backfill_player_ranking(999, "Test Player")
     assert n == 2
-    assert WtaPlayerRankingHistory.select().count() == 2
+    assert PlayerRankingHistory.select().count() == 2
 
     # re-correr reemplaza, no duplica
     with patch(
         "scripts.tennis.wta_player_ranking_backfill.wta_scraper.get_weekly_ranking_history", return_value=fake_history,
     ):
         backfill_player_ranking(999, "Test Player")
-    assert WtaPlayerRankingHistory.select().count() == 2
+    assert PlayerRankingHistory.select().count() == 2
 
 
 def test_run_backfill_covers_full_roster():

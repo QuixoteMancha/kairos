@@ -105,11 +105,10 @@ def get_match_stats(market_id: str) -> dict[str, Any] | None:
 def merge_match_stats(market_id: str, extra_stats: dict[str, Any], prefix: str) -> bool:
     """Enriquece la fila YA EXISTENTE de `market_id` con `extra_stats`
     (mismo shape {"match": {...}, "set_1": {...}}) bajo claves
-    prefijadas (ej. `prefix='sackmann'` -> "sackmann_match",
-    "sackmann_set_1") -- pedido explícito del usuario 2026-08-02:
-    complementar partidos que YA están trackeados (Kalshi/Flashscore) con
-    data del Match Charting Project, sin pisar ni duplicar lo que ya
-    había.
+    prefijadas (ej. `prefix='extra'` -> "extra_match", "extra_set_1")
+    -- pedido explícito del usuario 2026-08-02: complementar partidos
+    que YA están trackeados (Kalshi/Flashscore) con datos de una
+    segunda fuente, sin pisar ni duplicar lo que ya había.
 
     Returns: True si se actualizó, False si `market_id` no existe
     todavía (el caller debe entonces usar `save_match_stats` para

@@ -11,7 +11,9 @@ from unittest.mock import patch
 from outer_apis.scrapers.tennis.tournament_surface import (
     extract_tournament_name, get_surface, surface_from_rules_secondary,
 )
-from outer_apis.sports.tennis.set_sequence_stats import parse_set_scores, get_set_tendencies
+from outer_apis.sports.tennis.set_sequence_stats import (
+    get_set_tendencies, get_set_win_rates, parse_set_scores,
+)
 from models.volatility.sports.tennis import tennis_markov
 
 
@@ -40,27 +42,6 @@ def test_get_surface_known_and_unknown():
 def test_surface_from_rules_secondary_end_to_end():
     rules = "...match in the 2026 WTA Roland Garros Semifinal after a ball..."
     assert surface_from_rules_secondary(rules) == "Clay"
-
-
-def test_p_serve_for_rank_falls_back_to_tour_generic_when_surface_table_empty():
-    tennis_markov._SURFACE_CALIBRATED_CACHE.clear()
-    tennis_markov._CALIBRATED_CACHE.clear()
-    with patch("outer_apis.sports.tennis.serve_stats.calibrate_serve_pct_by_bucket_surface", return_value={}):
-        with patch("outer_apis.sports.tennis.serve_stats.calibrate_serve_pct_by_bucket", return_value={}):
-            p_with_surface = tennis_markov.p_serve_for_rank(5, tour="ATP", surface="Clay")
-            p_without_surface = tennis_markov.p_serve_for_rank(5, tour="ATP", surface=None)
-    # ambos caen al placeholder estático -- mismo resultado, ninguna excepción.
-    assert p_with_surface == p_without_surface
-
-
-def test_p_serve_for_rank_uses_surface_table_when_bucket_present():
-    tennis_markov._SURFACE_CALIBRATED_CACHE.clear()
-    tennis_markov._CALIBRATED_CACHE.clear()
-    fake_surface_table = {(1, 10): {"p_serve": 0.70, "n_matches": 10, "n_players": 3}}
-    with patch("outer_apis.sports.tennis.serve_stats.calibrate_serve_pct_by_bucket_surface",
-               return_value=fake_surface_table):
-        p = tennis_markov.p_serve_for_rank(5, tour="ATP", surface="Grass")
-    assert p == 0.70
 
 
 def test_parse_set_scores_valid_and_invalid():
@@ -111,3 +92,51 @@ def test_get_set_tendencies_fills_conditional_rates_with_enough_sub_sample():
     assert result["p_win_set2_after_winning_set1"] == 6 / 10
     assert result["n_after_losing_set1"] == 0
     assert result["p_win_set2_after_losing_set1"] is None
+
+
+def test_get_set_win_rates_by_set_and_surface():
+    matches = [
+        {"score": "6-4 6-3", "surface": "Clay"},
+        {"score": "6-4 3-6 6-2", "surface": "Clay"},
+        {"score": "3-6 6-4 6-2", "surface": "Hard"},
+        {"score": "6-4 6-3", "surface": "Hard"},
+    ]
+    with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
+        result_clay = get_set_win_rates("Jugadora S", n=10, surface="Clay")
+        result_hard = get_set_win_rates("Jugadora S", n=10, surface="Hard")
+
+    assert result_clay is not None
+    assert result_clay["p_win_set1"] == 1.0
+    assert result_clay["p_win_set2"] == 0.5
+    assert result_clay["n_matches"] == 2
+    assert result_clay["n_set3"] == 1
+
+    assert result_hard is not None
+    assert result_hard["p_win_set1"] == 0.5
+    assert result_hard["p_win_set2"] == 1.0
+    assert result_hard["p_win_set3"] == 1.0
+    assert result_hard["n_matches"] == 2
+
+
+def test_get_set_tendencies_all_set3_branches():
+    matches = [
+        {"score": "6-4 4-6 6-4"},  # W-L-W
+        {"score": "6-4 4-6 3-6"},  # W-L-L
+        {"score": "4-6 6-4 6-4"},  # L-W-W
+        {"score": "4-6 6-4 4-6"},  # L-W-L
+        {"score": "6-4 6-4 6-4"},  # W-W-W
+        {"score": "4-6 4-6"},      # L-L no set3
+    ]
+    with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
+        result = get_set_tendencies("Jugadora T", n=10)
+
+    assert result is not None
+    assert result["n_matches"] == 6
+    assert result["n_after_winning_set1_winning_set2"] == 1
+    assert result["p_win_set3_after_winning_set1_winning_set2"] == 1.0
+    assert result["n_after_winning_set1_losing_set2"] == 2
+    assert result["p_win_set3_after_winning_set1_losing_set2"] == 0.5
+    assert result["n_after_losing_set1_winning_set2"] == 2
+    assert result["p_win_set3_after_losing_set1_winning_set2"] == 0.5
+    assert result["n_after_losing_set1_losing_set2"] == 0
+    assert result["p_win_set3_after_losing_set1_losing_set2"] is None

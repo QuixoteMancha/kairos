@@ -99,7 +99,7 @@ def test_sync_match_one_player_error_does_not_block_the_other():
 def test_run_once_marks_matches_as_synced_and_skips_them_next_time():
     _scanned_match(market_id="MKT-1")
     with patch(
-        "workers.tennis_match_history_sync_worker.sync_match", return_value={},
+        "workers.tennis_match_history_sync_worker.sync_match", return_value={"synced": True},
     ) as mock_sync:
         summary = run_once()
     assert summary["matches_synced"] == 1
@@ -110,7 +110,7 @@ def test_run_once_marks_matches_as_synced_and_skips_them_next_time():
     assert row.history_synced_at is not None
 
     # segunda corrida -- ya sincronizado, no se vuelve a procesar
-    with patch("workers.tennis_match_history_sync_worker.sync_match", return_value={}) as mock_sync2:
+    with patch("workers.tennis_match_history_sync_worker.sync_match", return_value={"synced": True}) as mock_sync2:
         summary2 = run_once()
     assert summary2["matches_synced"] == 0
     assert mock_sync2.call_count == 0
@@ -119,7 +119,7 @@ def test_run_once_marks_matches_as_synced_and_skips_them_next_time():
 def test_run_once_only_processes_unsynced_matches():
     _scanned_match(market_id="MKT-OLD", history_synced_at=_now())
     _scanned_match(market_id="MKT-NEW")
-    with patch("workers.tennis_match_history_sync_worker.sync_match", return_value={}):
+    with patch("workers.tennis_match_history_sync_worker.sync_match", return_value={"synced": True}):
         summary = run_once()
     assert summary["matches_synced"] == 1
     assert summary["candidates_found"] == 1
@@ -127,7 +127,7 @@ def test_run_once_only_processes_unsynced_matches():
 
 def test_fill_missing_stats_skips_matches_without_score():
     MatchHistory.create(
-        match_id="sackmann:1", source="sackmann", match_date="2024-08-10",
+        match_id="test:1", source="tennisexplorer", match_date="2024-08-10",
         player_a_name="Novak Djokovic", player_b_name="Carlos Alcaraz",
         score=None, fetched_at=_now(),
     )
@@ -138,10 +138,13 @@ def test_fill_missing_stats_skips_matches_without_score():
 
 
 def test_fill_missing_stats_respects_limit():
+    from database.historical.tennis import Player
+    djokovic = Player.create(canonical_name="Novak Djokovic", created_at=_now())
     for i in range(10):
+        rival = Player.create(canonical_name=f"Rival {i}", created_at=_now())
         MatchHistory.create(
-            match_id=f"sackmann:{i}", source="sackmann", match_date="2024-08-10",
-            player_a_name="Novak Djokovic", player_b_name=f"Rival {i}",
+            match_id=f"test:{i}", source="tennisexplorer", match_date="2024-08-10",
+            player_a=djokovic, player_b=rival,
             score="6-4 6-2", fetched_at=_now(),
         )
     with patch("workers.tennis_match_history_sync_worker.find_match_id", return_value=None) as mock_find:
@@ -152,7 +155,7 @@ def test_fill_missing_stats_respects_limit():
 
 def test_fill_missing_stats_skips_already_covered_matches():
     mh = MatchHistory.create(
-        match_id="sackmann:1", source="sackmann", match_date="2024-08-10",
+        match_id="test:1", source="tennisexplorer", match_date="2024-08-10",
         player_a_name="Novak Djokovic", player_b_name="Carlos Alcaraz",
         score="6-4 6-2", fetched_at=_now(),
     )
@@ -189,7 +192,7 @@ def test_run_once_processes_priority_queue_before_regular_batch():
     request_priority_sync("Iga Swiatek")  # nunca apareció en ningún Match, pedido directo
 
     with patch(
-        "workers.tennis_match_history_sync_worker.sync_player", return_value={},
+        "workers.tennis_match_history_sync_worker.sync_player", return_value={"synced": True},
     ) as mock_sync_player, patch(
         "workers.tennis_match_history_sync_worker.get_top_rankings",
     ):
@@ -206,8 +209,39 @@ def test_run_once_priority_request_processed_only_once():
     # `sync_player` real es lo que marca `mark_player_synced` -- el mock
     # tiene que replicar ESE efecto para que la cola avance de verdad.
     with patch(
-        "workers.tennis_match_history_sync_worker.sync_player", side_effect=lambda n: mark_player_synced(n),
+        "workers.tennis_match_history_sync_worker.sync_player",
+        side_effect=lambda n: (mark_player_synced(n) or {"synced": True}),
     ), patch("workers.tennis_match_history_sync_worker.get_top_rankings"):
         run_once()
         summary2 = run_once()
     assert summary2["priority_synced"] == 0
+
+
+def test_sync_player_failed_history_stays_pending():
+    from database.historical.tennis import is_player_data_fresh
+    from workers.tennis_match_history_sync_worker import sync_player
+
+    with patch(
+        "workers.tennis_match_history_sync_worker.backfill_player",
+        return_value={"status": "skipped_no_slug"},
+    ), patch(
+        "workers.tennis_match_history_sync_worker.fill_missing_stats_for_player",
+        return_value={"attempted": 0, "filled": 0},
+    ):
+        result = sync_player("Unknown Player")
+
+    assert result["synced"] is False
+    assert is_player_data_fresh("Unknown Player") is False
+
+
+def test_run_once_does_not_mark_match_when_a_player_sync_fails():
+    _scanned_match(market_id="MKT-RETRY")
+    with patch(
+        "workers.tennis_match_history_sync_worker.sync_match",
+        return_value={"synced": False},
+    ):
+        summary = run_once()
+
+    row = TennisScannedMatch.get(TennisScannedMatch.market_id == "MKT-RETRY")
+    assert summary["matches_synced"] == 0
+    assert row.history_synced_at is None

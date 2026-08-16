@@ -18,15 +18,12 @@ partidos abiertos en el ciclo (mismo patrón que
 kairos-limitarb-monitor-worker-unthrottled-burst-risk-2026-07-26) -- con
 docenas de partidos abiertos simultáneos, evita 1 request por partido.
 
-FUSIONADO 2026-08-02 (pedido explícito del usuario -- evitar "nave
-espacial con tantos módulos separados en contenedores diferentes" para
-tareas livianas): este ciclo también llama a
-`workers.set1_favorite_reaction_worker.check_and_save_set1_signal` por
-cada partido abierto -- mismo dato (`get_open_scanned_matches`), misma
-cadencia de 60s, sin necesidad de un contenedor propio. Aislado en SU
-PROPIO try/except (ver más abajo) para que un fallo de TennisExplorer
-(scraping no oficial, sin SLA) nunca bloquee ni degrade el tick de
-precio real de Kalshi, que es más crítico."""
+2026-08-11, pedido explícito del usuario: la integración con
+`workers/set1_favorite_reaction_worker.py` (fusionada acá 2026-08-02) se
+QUITÓ -- "no lo usaremos de esa manera, más adelante habrá un worker con
+ejecución real de estrategias, pero por el momento no". `Set1EntrySignal`
+sigue existiendo como tabla histórica (filas ya escritas, no se borran),
+pero este ciclo ya no genera filas nuevas."""
 
 import os
 import random
@@ -39,8 +36,9 @@ from database.historical.tennis.matchtracking import (
 )
 from models.fairprice.sports.tennis.tennisfmodel import TennisFModel
 from outer_apis.sports.tennis.match_history import set_fetch_allowlist
-from workers.set1_favorite_reaction_worker import check_and_save_set1_signal
 from database.historical.tennis import save_next_match, has_real_match_detail_between
+from database.db import init_db, init_db_historical
+from database.accounting.systemhaltstate import is_halted
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
@@ -93,9 +91,22 @@ def _settlement_result(market: dict | None) -> str | None:
 
 
 def run_once() -> dict:
+    # 2026-08-11, pedido explícito del usuario ("si efectivamente se
+    # comprueba que no hay fondos, se deben interrumpir todas las
+    # operaciones") -- este worker calcula `fair_a` con datos
+    # potencialmente cada vez más viejos si el freno global está activo
+    # (engine.py dejó de refrescar MatchHistory/ranking), así que
+    # también se detiene.
+    init_db()
+    init_db_historical()
+    halted, reason = is_halted()
+    if halted:
+        print(f"[tennis_match_tick_worker] OPERACIONES DETENIDAS (motivo: {reason}) -- ciclo omitido")
+        return {"halted": True, "reason": reason}
+
     open_matches = get_open_scanned_matches()
     if not open_matches:
-        return {"open": 0, "ticked": 0, "settled": 0, "errors": 0, "set1_processed": 0, "set1_errors": 0}
+        return {"open": 0, "ticked": 0, "settled": 0, "errors": 0}
 
     api = KalshiAPI()
     api.initialize()
@@ -103,22 +114,8 @@ def run_once() -> dict:
     all_tickers = [t for m in open_matches for t in (m["ticker_a"], m["ticker_b"])]
     market_cache = api.get_markets_by_tickers(all_tickers)
 
-    # Compartidos entre TODOS los partidos del ciclo (ver
-    # check_and_save_set1_signal) -- evita pedir el ranking/score en
-    # vivo repetido por cada match del mismo tour.
-    set1_rank_cache: dict = {}
-    set1_live_cache: dict = {}
-    set1_processed = set1_errors_count = 0
-
     ticked = settled = errors = 0
     for scanned in open_matches:
-        try:
-            if check_and_save_set1_signal(scanned, set1_rank_cache, set1_live_cache) == "processed":
-                set1_processed += 1
-        except Exception as e:
-            set1_errors_count += 1
-            print(f"[tennis_match_tick_worker] error set1_reaction en {scanned.get('market_id')}: {e}")
-
         try:
             market_a = market_cache.get(scanned["ticker_a"])
             market_b = market_cache.get(scanned["ticker_b"])
@@ -163,10 +160,7 @@ def run_once() -> dict:
             errors += 1
             print(f"[tennis_match_tick_worker] error en {scanned.get('market_id')}: {e}")
 
-    result = {
-        "open": len(open_matches), "ticked": ticked, "settled": settled, "errors": errors,
-        "set1_processed": set1_processed, "set1_errors": set1_errors_count,
-    }
+    result = {"open": len(open_matches), "ticked": ticked, "settled": settled, "errors": errors}
     print(f"[tennis_match_tick_worker] {result}")
     return result
 

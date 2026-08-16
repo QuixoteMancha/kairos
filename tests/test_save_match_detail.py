@@ -57,11 +57,31 @@ def test_creates_new_row_on_first_save():
     status = save_match_detail(_detail())
     assert status == "created"
     row = MatchHistory.get(MatchHistory.match_id == "2692781")
-    assert row.player_a_name == "Anisimova Amanda"
-    assert row.player_b_name == "Sabalenka Aryna"
+    assert row.player_a.canonical_name == "Anisimova Amanda"
+    assert row.player_b.canonical_name == "Sabalenka Aryna"
     assert row.player_a_ranking == 10
-    assert row.player_a_birthdate.isoformat() == "2001-08-31"
+    assert row.player_a.birthdate.isoformat() == "2001-08-31"
     assert row.tour == "WTA"
+
+
+def test_retirement_persists_retired_flag_and_loser_as_player_retired():
+    # 2026-08-11, pedido explícito del usuario ("hay que agregar los
+    # retiros de los players"): "a" (Anisimova) gana, "b" (Sabalenka)
+    # se retiró -- el FK `player_retired` debe apuntar al PERDEDOR.
+    status = save_match_detail(_detail(retired=True, retired_side="b"))
+    assert status == "created"
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
+    assert row.retired is True
+    assert row.player_retired.canonical_name == "Sabalenka Aryna"
+    assert row.winner.canonical_name == "Anisimova Amanda"
+
+
+def test_no_retirement_marker_leaves_player_retired_null():
+    status = save_match_detail(_detail())
+    assert status == "created"
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
+    assert row.retired is False
+    assert row.player_retired is None
 
 
 def test_tour_persisted_from_get_match_detail_href_parsing():
@@ -110,10 +130,12 @@ def test_upgrades_synthetic_recentform_row_instead_of_duplicating():
     # jugadores + fecha), save_match_detail debe COMPLETARLA con la
     # identidad real (match_id real + bio), no crear una fila duplicada.
     from datetime import datetime, timezone
+    p_a = Player.create(canonical_name="Anisimova Amanda", created_at=datetime.now(timezone.utc))
+    p_b = Player.create(canonical_name="Sabalenka Aryna", created_at=datetime.now(timezone.utc))
     MatchHistory.create(
         match_id="recentform:anisimova amanda|sabalenka aryna|2024-08-10",
-        player_a_name="Anisimova Amanda", player_b_name="Sabalenka Aryna",
-        match_date="2024-08-10", winner_side="a", source="tennisexplorer",
+        player_a=p_a, player_b=p_b,
+        match_date="2024-08-10", winner=p_a, source="tennisexplorer",
         fetched_at=datetime.now(timezone.utc),
     )
     status = save_match_detail(_detail())
@@ -130,10 +152,12 @@ def test_upgrades_synthetic_row_with_sides_swapped():
     # player_a. Deben espejarse los campos, no mezclar bio de un lado
     # con winner_side del otro.
     from datetime import datetime, timezone
+    p_a = Player.create(canonical_name="Sabalenka Aryna", created_at=datetime.now(timezone.utc))
+    p_b = Player.create(canonical_name="Anisimova Amanda", created_at=datetime.now(timezone.utc))
     MatchHistory.create(
         match_id="recentform:x",
-        player_a_name="Sabalenka Aryna", player_b_name="Anisimova Amanda",
-        match_date="2024-08-10", winner_side="b", source="tennisexplorer",
+        player_a=p_a, player_b=p_b,
+        match_date="2024-08-10", winner=p_b, source="tennisexplorer",
         fetched_at=datetime.now(timezone.utc),
     )
     status = save_match_detail(_detail())  # detail: player_a=Anisimova, winner_side="a"
@@ -142,10 +166,10 @@ def test_upgrades_synthetic_row_with_sides_swapped():
     row = MatchHistory.get()
     assert row.match_id == "2692781"
     # espejado: ahora player_a=Sabalenka (para no romper la fila existente),
-    # winner_side invertido a "b" (Anisimova sigue siendo la ganadora real)
-    assert row.player_a_name == "Sabalenka Aryna"
-    assert row.player_b_name == "Anisimova Amanda"
-    assert row.winner_side == "b"
+    # winner sigue siendo Anisimova (la ganadora real, sea cual sea el lado)
+    assert row.player_a.canonical_name == "Sabalenka Aryna"
+    assert row.player_b.canonical_name == "Anisimova Amanda"
+    assert row.winner.canonical_name == "Anisimova Amanda"
     assert row.player_b_ranking == 10  # ranking de Anisimova (10) ahora del lado b
 
 
@@ -169,7 +193,7 @@ def test_tolerates_missing_optional_bio_fields():
     assert status == "created"
     row = MatchHistory.get(MatchHistory.match_id == "42")
     assert row.player_a_ranking is None
-    assert row.player_a_birthdate is None
+    assert row.player_a.birthdate is None
 
 
 def test_populates_canonical_player_fk_alongside_name_fields():

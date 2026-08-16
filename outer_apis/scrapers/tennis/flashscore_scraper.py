@@ -84,13 +84,17 @@ def _verify_flashscore_player(pid: str, slug: str, expected_name: str) -> bool:
     cuando el proxy está activo (mismo mecanismo, no depende de
     `PROXY_FETCH_ENABLED`). Fail-closed: `False` ante cualquier fallo de
     red/parseo, o si el nombre mostrado no comparte ningún token
-    significativo real con `expected_name`."""
-    try:
-        import requests
+    significativo real con `expected_name`.
 
+    2026-08-11, pedido explícito del usuario ("los scrapers deben tener
+    la característica de detectar cuando los sitios bloquean posiblemente
+    por IP") -- request directa primero como siempre, pero vía
+    `fetch_with_ip_block_fallback`: si Flashscore devuelve 403/429/503 o
+    la conexión falla, reintenta automático por proxy BrightData."""
+    try:
         flashscore_throttle.wait()
         url = _PROFILE_URL.format(slug=slug, pid=pid)
-        resp = requests.get(
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -98,7 +102,7 @@ def _verify_flashscore_player(pid: str, slug: str, expected_name: str) -> bool:
             },
             timeout=10,
         )
-        if resp.status_code != 200:
+        if resp is None or resp.status_code != 200:
             return False
         m = re.search(r'heading__name[^>]*>([^<]+)<', resp.text)
         if not m:
@@ -139,14 +143,14 @@ def search_player(name: str) -> tuple[str, str] | None:
 
     result = None
     try:
-        import requests
-
         # 2026-08-04, pedido explícito -- throttle real ANTES de la
         # request (no antes del cache-hit de arriba, para no penalizar
         # nombres ya conocidos), "no overhittear los servers".
+        # 2026-08-11: fallback a proxy ante posible bloqueo por IP, ver
+        # docstring de `_verify_flashscore_player`.
         flashscore_throttle.wait()
         url = _SEARCH_URL.format(name=name.replace(" ", "%20"))
-        resp = requests.get(
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -154,7 +158,7 @@ def search_player(name: str) -> tuple[str, str] | None:
             },
             timeout=10,
         )
-        m = re.search(r"\((.+)\)", resp.text, re.DOTALL)
+        m = re.search(r"\((.+)\)", resp.text, re.DOTALL) if resp is not None else None
         if m:
             import json
 
@@ -172,38 +176,105 @@ def search_player(name: str) -> tuple[str, str] | None:
     return result
 
 
-# ── Fetch de resultados (con proxy BrightData) ─────────────────────────────
+# ── Fetch de resultados (directo, con fallback a proxy BrightData) ─────────
 
-def _fetch_results_page(pid: str, slug: str) -> str | None:
-    """Obtiene la página de resultados del jugador vía proxy BrightData.
-    Fail-closed: None si BrightData no está configurado o falla la
-    request (nunca intenta sin proxy, Flashscore bloquea esta página),
-    o si `PROXY_FETCH_ENABLED` está en False (pausado, ver docstring del
-    módulo -- 2026-08-04)."""
-    if not PROXY_FETCH_ENABLED:
-        return None
-    flashscore_throttle.wait()
-    url = _RESULTS_URL.format(slug=slug, pid=pid)
+# 2026-08-12, pedido explícito del usuario ("Opción B para descubrir el
+# endpoint y qué parámetros necesita") -- el HTML estático `/results/`
+# (`_RESULTS_URL`, dejado de lado abajo) solo embebe una ventana ACOTADA
+# (~144 partidos/jugador, confirmado real, no un límite de nuestro
+# parser) porque la paginación real de Flashscore ocurre 100% client-side
+# (React SPA, botón "Show more matches"). Encontrado capturando tráfico
+# de red real con Playwright (headless Chromium) tras que el análisis
+# estático (grep del HTML por JSON/season-id embebido, sondeo a ciegas de
+# variantes del patrón de feed ya conocido, búsqueda pública de
+# documentación) no lo encontrara -- ver memoria de la sesión.
+#
+# Patrón real: `pr_2_167_{pid}_{page}_-4_en_1_s`. `page` es un contador
+# simple (0 = más reciente, incrementa retrocediendo en el tiempo, SIN
+# huecos ni superposición real de temporadas -- confirmado). TODO lo
+# demás es constante universal, verificado idéntico contra 3 jugadores
+# reales de tours/géneros distintos (Djokovic ATP, Alcaraz ATP, Świątek
+# WTA): `2`=sport_id tenis, `167`=id fijo interno de Flashscore (también
+# aparece embebido dentro de cada record individual, `CB÷167`), `-4`,
+# `en`=idioma, `1`, `s` -- ninguno depende del jugador. Cada página trae
+# ~40 registros reales, mismo formato pipe-delimited que el HTML viejo
+# (`~ZA÷` headers de torneo + `~AA÷` records), sin gaps cronológicos.
+# Verificado end-to-end con Djokovic: 37 páginas, ~1,490 partidos reales,
+# termina en 2004 (su debut junior) -- cobertura de carrera COMPLETA,
+# no solo los ~144 más recientes de antes.
+_PLAYER_RESULTS_FEED_URL = "https://global.flashscore.ninja/2/x/feed/pr_2_167_{pid}_{page}_-4_en_1_s"
+_MAX_RESULTS_PAGES = 45  # cap de seguridad -- Djokovic (carrera larguísima) usó 37
+
+
+def _fetch_results_page(
+    pid: str, slug: str | None = None, target_date: str | None = None,
+    max_pages: int = _MAX_RESULTS_PAGES,
+) -> str | None:
+    """Obtiene el historial de resultados del jugador, paginando el feed
+    real `_PLAYER_RESULTS_FEED_URL` (ver comentario arriba) hasta cubrir
+    lo necesario. `slug` ya no se usa (el feed real solo necesita
+    `pid`) -- se mantiene el parámetro por compatibilidad con callers/
+    tests existentes.
+
+    `target_date` (ISO string, opcional): permite CORTE TEMPRANO -- deja
+    de pedir páginas nuevas en cuanto la página más vieja ya fetcheada
+    cubre una fecha igual o anterior a `target_date` (no hace falta
+    traer la carrera completa para resolver un partido de hace 2 años).
+    Sin `target_date`, se detiene solo cuando Flashscore devuelve una
+    página vacía (fin real de la carrera) o al llegar a `max_pages`.
+
+    `max_pages`: cap explícito de páginas -- default `_MAX_RESULTS_PAGES`
+    (carrera completa), pero callers que solo quieren partidos RECIENTES
+    (ej. `get_player_recent_matches`) pasan `max_pages=1` para no pedir
+    la carrera entera cuando con la página más reciente alcanza.
+
+    Alineado al mismo mecanismo que YA usan `search_player`,
+    `_verify_flashscore_player` y `get_match_duration` en este módulo:
+    `fetch_with_ip_block_fallback` por página -- request directa primero,
+    reintento automático vía proxy BrightData SOLO si Flashscore
+    responde 403/429/503 o la conexión falla. `PROXY_FETCH_ENABLED` no
+    aplica acá (removido 2026-08-12, ver historial de este archivo).
+
+    Returns: el texto CONCATENADO de todas las páginas fetcheadas (mismo
+    shape pipe-delimited que consume `_parse_all_records_with_
+    tournament`, funciona igual sobre 1 o N páginas concatenadas --
+    `.split("~ZA÷")` no depende de dónde caen los límites de página).
+    Fail-closed: `None` si ni siquiera la página 0 responde con éxito."""
+    parsed_target = None
+    if target_date:
+        try:
+            parsed_target = (
+                datetime.fromisoformat(target_date).date()
+                if isinstance(target_date, str) else target_date
+            )
+        except ValueError:
+            parsed_target = None
+
     headers = {
         "X-Fsign": "SW9D1eZo",
         "Referer": "https://www.flashscore.com/",
-        "Accept": "text/html,application/xhtml+xml,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "*/*",
     }
+    chunks: list[str] = []
+    for page in range(max_pages):
+        flashscore_throttle.wait()
+        url = _PLAYER_RESULTS_FEED_URL.format(pid=pid, page=page)
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(url, headers=headers, timeout=25)
+        if resp is None or resp.status_code != 200:
+            break
+        text = (resp.text or "").strip()
+        if not text or "~AA÷" not in text:
+            break  # página vacía -- fin real de la carrera del jugador
+        chunks.append(text)
 
-    def _do_request(session):
-        # verify=False: BrightData's residential proxy does TLS
-        # interception, presenting a self-signed cert in the chain --
-        # confirmed necessary (CertificateVerifyError without it), same
-        # as the pre-makeover rescued code did.
-        return session.get(url, headers=headers, timeout=25, verify=False)
+        if parsed_target is not None:
+            timestamps = [int(m) for m in re.findall(r"AD÷(\d+)", text)]
+            if timestamps:
+                oldest_in_page = datetime.fromtimestamp(min(timestamps), tz=UTC).date()
+                if oldest_in_page <= parsed_target:
+                    break  # ya cubrimos la fecha buscada, no hace falta seguir
 
-    resp = brightdata_proxy.request_via_proxy_with_ip_retry(
-        brightdata_proxy.make_proxy_session, _do_request,
-    )
-    if resp is not None and resp.status_code == 200:
-        return resp.text
-    return None
+    return "".join(chunks) if chunks else None
 
 
 # ── Parser de registros ─────────────────────────────────────────────────────
@@ -277,6 +348,65 @@ def _parse_all_records_with_tournament(html: str) -> list[dict[str, Any]]:
     return records
 
 
+def _parse_score_sets(score: str | None) -> list[tuple[int, int]] | None:
+    """Parsea un score en formato TennisExplorer ("6-4, 6-2" o "7-5, 2-6,
+    6-4 ret.") a una lista de tuplas (games_a, games_b) por set --
+    2026-08-11, pedido explícito del usuario ("añade un filtro más para
+    validar el match") tras encontrar que `find_match_id` nunca cruzaba
+    el marcador real contra el candidato de Flashscore (solo nombres+
+    fecha), un gap real que podía elegir el partido equivocado en
+    colisiones de fecha cercana entre los mismos 2 jugadores.
+
+    Tolerante a sufijos no numéricos ("ret.", "w.o.") y a tie-breaks
+    entre paréntesis (ej. "7-6(4)" -> (7, 6), el tie-break en sí se
+    descarta, solo importa quién ganó el set).
+
+    2026-08-12, bug real encontrado en la auditoría de verificación
+    ("no pueden haber errores. Verifica nuevamente y resuelve
+    definitivamente"): `MatchHistory.score` viene de TennisExplorer con
+    el tie-break marcado como HTML `<sup>N</sup>`, y su posición varía
+    según qué lado perdió el tie-break -- a veces DESPUÉS del segundo
+    número ("7-6<sup>4</sup>", el regex viejo sí matcheaba, se quedaba
+    con el prefijo "7-6"), pero a veces ENTRE los dos números
+    ("6<sup>6</sup>-7", el ganador del set perdió el tie-break) -- ahí
+    el regex viejo (dígitos-guión-dígitos sin tolerar nada en el medio) fallaba
+    en seco, ese chunk se DESCARTABA SILENCIOSAMENTE, y `_score_sets_match`
+    terminaba comparando listas de distinta longitud (un set entero
+    perdido) -- rechazaba partidos REALES por "marcador no coincide".
+    Verificado en vivo: 1,061 de 15,753 filas de `MatchHistory` (6.7%)
+    tienen este patrón, todas quedaban fail-closed incorrectamente.
+
+    Fix de raíz: se eliminan TODOS los tags `<sup>...</sup>` (con su
+    contenido, el tie-break en sí nunca importó para esta comparación)
+    del string completo ANTES de partir por sets, sin importar en qué
+    posición del chunk caigan. Fail-closed: `None` si `score` viene
+    vacío o ningún set parsea con 2 números reales."""
+    if not score:
+        return None
+    score = re.sub(r"<sup>.*?</sup>", "", score, flags=re.DOTALL)
+    sets: list[tuple[int, int]] = []
+    for chunk in score.split(","):
+        m = re.match(r"\s*(\d+)\s*-\s*(\d+)", chunk.strip())
+        if m:
+            sets.append((int(m.group(1)), int(m.group(2))))
+    return sets or None
+
+
+def _score_sets_match(expected: list[tuple[int, int]], candidate_sets: list[tuple[int, int]]) -> bool:
+    """`True` si `candidate_sets` (de Flashscore, orientación p1/p2
+    desconocida) coincide con `expected` (de TennisExplorer, ya
+    orientado anchor/opponent) en CUALQUIERA de las 2 orientaciones
+    posibles (directa o espejada) -- Flashscore no garantiza que su
+    "p1" sea el mismo lado que nuestro "anchor". Exige mismo número de
+    sets Y mismo resultado de cada uno; no exige el mismo string exacto
+    (basta el resultado numérico real de cada set)."""
+    if len(expected) != len(candidate_sets):
+        return False
+    if expected == candidate_sets:
+        return True
+    return expected == [(b, a) for a, b in candidate_sets]
+
+
 # ── Matching de nombres ──────────────────────────────────────────────────────
 
 def _norm_name(name: str) -> str:
@@ -342,7 +472,14 @@ def get_player_recent_matches(player_name: str, n: int = 20) -> list[dict]:
         return []
 
     pid, slug = found
-    html = _fetch_results_page(pid, slug)
+    # 2026-08-12: esta función solo quiere `n` (default 20) partidos
+    # RECIENTES -- a diferencia de find_match_id/find_match_tournament
+    # (que necesitan poder llegar a cualquier fecha del historial
+    # completo), acá no tiene sentido paginar toda la carrera.
+    # `max_pages=1` (~40-45 partidos más recientes, verificado real)
+    # sobra para cualquier `n` razonable de este caller, y evita pedirle
+    # a Flashscore toda la carrera del jugador en cada llamada.
+    html = _fetch_results_page(pid, slug, max_pages=1)
     if not html:
         return []
 
@@ -425,16 +562,19 @@ def find_match_tournament(player_a_name: str, player_b_name: str, match_date: st
     if not found:
         return None
 
-    pid, slug = found
-    html = _fetch_results_page(pid, slug)
-    if not html:
-        return None
-
     try:
         target_date = datetime.fromisoformat(match_date).date() if isinstance(match_date, str) else None
     except ValueError:
         target_date = None
     if target_date is None:
+        return None
+
+    pid, slug = found
+    # 2026-08-12: `target_date` pasado a `_fetch_results_page` para
+    # corte temprano -- pagina hasta cubrir la fecha buscada, sin traer
+    # la carrera entera cuando el partido es reciente.
+    html = _fetch_results_page(pid, slug, target_date=match_date)
+    if not html:
         return None
 
     best_tournament = None
@@ -467,6 +607,7 @@ def find_match_tournament(player_a_name: str, player_b_name: str, match_date: st
 
 def find_match_id(
     player_a_name: str, player_b_name: str, match_date: str, tournament: str | None = None,
+    expected_score: str | None = None,
 ) -> str | None:
     """Busca el `match_id` real de Flashscore para un partido YA JUGADO,
     por coincidencia de AMBOS nombres + fecha (+ torneo como bonus,
@@ -483,9 +624,21 @@ def find_match_id(
     anclado en `player_b_name` -- cualquiera de los 2 tiene el mismo
     partido en su página de resultados.
 
+    `expected_score`: 2026-08-11, pedido explícito del usuario ("añade
+    un filtro más para validar el match") -- si el caller YA conoce el
+    marcador real (ej. `MatchHistory.score`, ya resuelto vía
+    TennisExplorer), se exige que el candidato de Flashscore tenga el
+    MISMO resultado de sets (ver `_score_sets_match`) -- cierra un gap
+    real: antes solo se validaba nombre+fecha (±1 día), lo que podía
+    elegir el partido equivocado si los mismos 2 jugadores se cruzaron
+    2 veces en fechas cercanas (ej. torneos round-robin). Opcional
+    (`None` por default) -- si no se pasa, o no parsea, el filtro se
+    omite (comportamiento previo intacto para callers sin el dato).
+
     Fail-closed: None si no se encuentra a ningún jugador, la request
-    falla, o ningún record matchea nombre+fecha con confianza suficiente
-    -- nunca adivina un match_id."""
+    falla, o ningún record matchea nombre+fecha (+marcador, si se pasa)
+    con confianza suficiente -- nunca adivina un match_id."""
+    expected_sets = _parse_score_sets(expected_score)
     found = search_player(player_a_name)
     anchor_name, opponent_name = player_a_name, player_b_name
     if not found:
@@ -494,16 +647,19 @@ def find_match_id(
     if not found:
         return None
 
-    pid, slug = found
-    html = _fetch_results_page(pid, slug)
-    if not html:
-        return None
-
     try:
         target_date = datetime.fromisoformat(match_date).date() if isinstance(match_date, str) else None
     except ValueError:
         target_date = None
     if target_date is None:
+        return None
+
+    pid, slug = found
+    # 2026-08-12: `target_date` pasado a `_fetch_results_page` para
+    # corte temprano -- pagina hasta cubrir la fecha buscada, sin traer
+    # la carrera entera cuando el partido es reciente.
+    html = _fetch_results_page(pid, slug, target_date=match_date)
+    if not html:
         return None
 
     best_match_id = None
@@ -525,6 +681,15 @@ def find_match_id(
         rec_date = datetime.fromtimestamp(rec["timestamp"], tz=UTC).date()
         if abs((rec_date - target_date).days) > 1:
             continue  # margen de +/-1 dia por husos horarios distintos
+
+        if expected_sets is not None:
+            candidate_sets = [
+                (rec[f"p1_s{i}"], rec[f"p2_s{i}"])
+                for i in range(1, 6)
+                if rec.get(f"p1_s{i}") is not None and rec.get(f"p2_s{i}") is not None
+            ]
+            if not candidate_sets or not _score_sets_match(expected_sets, candidate_sets):
+                continue  # marcador no coincide -- NO es el mismo partido, se descarta
 
         combined = score_anchor + score_opponent
         if tournament and rec.get("tournament"):
@@ -608,3 +773,207 @@ def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None,
             sections[current_key][name] = (p1_val, p2_val)
 
     return sections if sections else None
+
+
+# ── Punto a punto + quiebres (sin proxy) ───────────────────────────────────
+
+_POINT_BY_POINT_URL = "https://global.flashscore.ninja/2/x/feed/df_mh_1_{match_id}"
+
+
+def get_point_by_point(match_id: str) -> dict[str, Any] | None:
+    """Punto a punto real de un partido ya jugado, vía el feed `df_mh_1`
+    de Flashscore -- 2026-08-10, pedido explícito del usuario ("amplía
+    el scraper de flashscore para tener el punto a punto y los
+    quiebres"). Internamente Flashscore llama a esto "Match History"
+    (visible en el config de la página: `..._IDENT_MATCH_HISTORY_TENNIS`);
+    la UI de tenis lo relabela como "point-by-point", de ahí el nombre
+    de la función.
+
+    Confirmado en vivo SIN proxy (a diferencia de `get_match_statistics`
+    -- ver `PROXY_FETCH_ENABLED`): este endpoint respondió 200 con
+    `requests.get` directo, mismo patrón que `_verify_flashscore_player`
+    (fetch puntual, no bulk scraping de `/results/`). Se usa fetch
+    directo a propósito, no gateado por `PROXY_FETCH_ENABLED`.
+
+    Formato crudo (pipe-delimited, reverse-engineered 2026-08-10):
+    bloques separados por '¬~':
+      'HA÷{Set N}¬HB÷{Point by point - Set N}' -- header de set nuevo.
+      'HC÷..¬HE÷..¬HG÷..¬HH÷..¬HK÷{1|2}¬HL÷{secuencia}' -- un juego:
+        - HK: lado que GANÓ el juego (1 o 2). CONFIRMADO en vivo --
+          sumando HK por set contra el marcador real de sets
+          (Rybakina/Samsonova, match QivlICam) coincidió exacto
+          (4-6, 6-4, 4-6).
+        - HL: secuencia de tanteo punto a punto dentro del juego
+          (ej. "0:15, 15:15, 30:15, 40:15"), con marcadores inline
+          `|B1|`/`|B2|`/`|B3|` en el punto donde hubo BREAK POINT --
+          esto es lo que pidió el usuario explícitamente ("qué puntos
+          se dieron antes de un quiebre"), se preserva tal cual.
+        - HC/HE/HG/HH: NO completamente decodificados con certeza
+          (parecen algún tipo de contador de juegos/sets, pero su
+          semántica exacta no se pudo confirmar con los datos
+          disponibles -- se guardan crudos, sin inventar significado,
+          por si un análisis futuro los necesita).
+      'A1÷' -- marcador de fin de feed, ignorado.
+
+    Returns:
+        {"set_1": {"label": "Point by point - Set 1", "games": [
+            {"winner_side": 1, "points": ["0:15", "15:15", ...],
+             "break_points": [{"point_index": 3, "sequence_raw": "40:15"}],
+             "raw": {"HC": "1", "HE": "0", "HG": "2", "HH": "2"}},
+            ...
+        ]}, "set_2": {...}, ...} -- Fail-closed: None si falla la
+        request, el partido no tiene punto a punto trackeado, o el feed
+        viene vacío. Nunca fabrica valores.
+
+        2026-08-11, pedido explícito del usuario ("los scrapers deben
+        tener la característica de detectar cuando los sitios bloquean
+        posiblemente por IP") -- fallback a proxy ante 403/429/503 o
+        excepción de red, ver docstring de `_verify_flashscore_player`."""
+    try:
+        flashscore_throttle.wait()
+        url = _POINT_BY_POINT_URL.format(match_id=match_id)
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(
+            url,
+            headers={
+                "X-Fsign": "SW9D1eZo",
+                "Referer": "https://www.flashscore.com/",
+                "Accept": "*/*",
+            },
+            timeout=25,
+        )
+        if resp is None or resp.status_code != 200:
+            return None
+        text = (resp.text or "").strip()
+        if not text or text == "0":
+            return None
+    except Exception:
+        return None
+
+    sets: dict[str, Any] = {}
+    current_key: str | None = None
+    set_count = 0
+    for chunk in text.split("¬~"):
+        parts = chunk.split("¬")
+        head = parts[0]
+        if head.startswith("HA÷"):
+            set_count += 1
+            current_key = f"set_{set_count}"
+            label = None
+            for p in parts[1:]:
+                if p.startswith("HB÷"):
+                    label = p[len("HB÷"):].strip()
+            sets[current_key] = {"label": label, "games": []}
+        elif head.startswith("HC÷") and current_key is not None:
+            raw: dict[str, str] = {}
+            winner_side = None
+            sequence = None
+            for p in parts:
+                if p.startswith("HC÷"):
+                    raw["HC"] = p[len("HC÷"):]
+                elif p.startswith("HE÷"):
+                    raw["HE"] = p[len("HE÷"):]
+                elif p.startswith("HG÷"):
+                    raw["HG"] = p[len("HG÷"):]
+                elif p.startswith("HH÷"):
+                    raw["HH"] = p[len("HH÷"):]
+                elif p.startswith("HK÷"):
+                    winner_side = p[len("HK÷"):].strip()
+                elif p.startswith("HL÷"):
+                    sequence = p[len("HL÷"):].strip()
+            if sequence is None:
+                continue
+            points = [s.strip() for s in sequence.split(",") if s.strip()]
+            break_points = []
+            for idx, point in enumerate(points):
+                if "|B" in point:
+                    break_points.append({"point_index": idx, "sequence_raw": point})
+            sets[current_key]["games"].append({
+                "winner_side": int(winner_side) if winner_side and winner_side.isdigit() else None,
+                "points": points,
+                "break_points": break_points,
+                "raw": raw,
+            })
+
+    return sets if sets else None
+
+
+# ── Duración del partido + sets (sin proxy) ────────────────────────────────
+
+_SUMMARY_URL = "https://global.flashscore.ninja/2/x/feed/df_su_1_{match_id}"
+
+# 2026-08-12, pedido explícito del usuario ("necesitamos la duración de
+# los matches... está en tennis explorer[?]") -- TennisExplorer NO
+# expone duración (verificado exhaustivamente en vivo: sin campo
+# "Duration" ni patrón H:MM oculto en un partido real ya backfillado,
+# Sinner-Alcaraz Masters Cup 2025). Flashscore SÍ la trae, feed
+# `df_su_1` (Summary), reverse-engineered 2026-08-10, re-verificado en
+# vivo 2026-08-12 contra el mismo partido real usado para `get_point_by_
+# point` (Rybakina/Samsonova, match_id "QivlICam"): `RB÷{total}` +
+# `RC÷{set1}`/`RD÷{set2}`/`RE÷{set3}`/`RF÷{set4}`/`RG÷{set5}`, formato
+# "H:MM" -- confirmado que la suma de sets (0:59+0:53+1:03=175min)
+# coincide EXACTO con el total reportado (RB÷2:55=175min), no es una
+# coincidencia de formato.
+_DURATION_SET_CODES = ("RC", "RD", "RE", "RF", "RG")
+
+
+def _parse_hmm_to_minutes(raw: str | None) -> int | None:
+    """"2:55" -> 175 (horas*60 + minutos). Fail-closed: None si no
+    matchea exactamente el formato "H:MM" esperado."""
+    if not raw:
+        return None
+    m = re.match(r"^(\d+):(\d{2})$", raw.strip())
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def get_match_duration(match_id: str) -> dict[str, Any] | None:
+    """Duración real de un partido ya jugado (total + por set), vía el
+    feed `df_su_1` de Flashscore -- ver comentario arriba del módulo
+    para el reverse-engineering completo. Fetch directo con fallback a
+    proxy ante posible bloqueo por IP, mismo criterio que el resto de
+    este módulo (`fetch_with_ip_block_fallback`).
+
+    Returns: {"total_minutes": 175, "set_1_minutes": 59,
+    "set_2_minutes": 53, "set_3_minutes": 63, "set_4_minutes": None,
+    "set_5_minutes": None} -- sets sin jugar (partido de menos de 5
+    sets) quedan en `None`, nunca se fabrica un valor. Fail-closed:
+    `None` si falla la request, el partido no tiene duración trackeada,
+    o el feed viene vacío."""
+    try:
+        flashscore_throttle.wait()
+        url = _SUMMARY_URL.format(match_id=match_id)
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(
+            url,
+            headers={
+                "X-Fsign": "SW9D1eZo",
+                "Referer": "https://www.flashscore.com/",
+                "Accept": "*/*",
+            },
+            timeout=25,
+        )
+        if resp is None or resp.status_code != 200:
+            return None
+        text = (resp.text or "").strip()
+        if not text or text == "0":
+            return None
+    except Exception:
+        return None
+
+    result: dict[str, int | None] = {
+        "total_minutes": None,
+        "set_1_minutes": None, "set_2_minutes": None, "set_3_minutes": None,
+        "set_4_minutes": None, "set_5_minutes": None,
+    }
+    for chunk in text.split("¬~"):
+        for p in chunk.split("¬"):
+            if p.startswith("RB÷"):
+                result["total_minutes"] = _parse_hmm_to_minutes(p[len("RB÷"):])
+            else:
+                for i, code in enumerate(_DURATION_SET_CODES, start=1):
+                    if p.startswith(f"{code}÷"):
+                        result[f"set_{i}_minutes"] = _parse_hmm_to_minutes(p[len(code) + 1:])
+
+    if result["total_minutes"] is None and all(result[f"set_{i}_minutes"] is None for i in range(1, 6)):
+        return None
+    return result

@@ -29,9 +29,11 @@ proyecto sigue vigente."""
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from database.db import init_db
+from database.accounting.systemhaltstate import is_halted
 from database.accounting.marketarbwebsocketsignal import MarketArbWebsocketSignal
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import build_tennis_markets
@@ -47,6 +49,7 @@ _CRYPTO_15M_SERIES = ("KXBTC15M", "KXETH15M", "KXSOL15M")
 # Ciudades reales con mercado de clima activo en Kalshi (verificado en
 # vivo 2026-08-02) -- lista chica a propósito, se puede ampliar después.
 _WEATHER_SERIES = ("KXHIGHNY", "KXHIGHCHI", "KXHIGHAUS", "KXHIGHMIA", "KXHIGHDEN", "KXHIGHPHIL")
+_REGISTRY_REFRESH_S = int(os.getenv("MARKET_ARB_WS_REGISTRY_REFRESH_SECONDS", "900"))
 
 _CATEGORY_BY_SERIES_PREFIX = {
     "KXATPMATCH": "tennis", "KXWTAMATCH": "tennis",
@@ -153,18 +156,34 @@ async def run() -> None:
     api = KalshiAPI()
     api.initialize()
 
-    registry = build_market_registry(api)
-    tickers = list(registry.keys())
-    print(f"[market_arb_ws] escuchando {len(tickers)} tickers reales ({len(set(id(m) for m in registry.values()))} mercados únicos)")
+    while True:
+        registry = build_market_registry(api)
+        tickers = list(registry.keys())
+        print(f"[market_arb_ws] escuchando {len(tickers)} tickers reales ({len(set(id(m) for m in registry.values()))} mercados únicos)")
+        if not tickers:
+            return
 
-    async for update in stream_ticker_updates(tickers):
-        ticker = update.get("ticker") or update.get("market_ticker")
-        if not ticker or ticker not in registry:
-            continue
+        # La conexión websocket puede vivir indefinidamente. Acotarla
+        # obliga a reconstruir el registro y suscribirse también a los
+        # mercados que Kalshi abrió después de arrancar el contenedor.
         try:
-            _refresh_and_check(api, registry[ticker])
-        except Exception as e:
-            print(f"[market_arb_ws] error procesando {ticker}: {e}")
+            async with asyncio.timeout(_REGISTRY_REFRESH_S):
+                async for update in stream_ticker_updates(tickers):
+                    # Chequeo local por mensaje: no se evalúan ni guardan
+                    # oportunidades mientras el freno global está activo.
+                    halted, reason = is_halted()
+                    if halted:
+                        continue
+
+                    ticker = update.get("ticker") or update.get("market_ticker")
+                    if not ticker or ticker not in registry:
+                        continue
+                    try:
+                        _refresh_and_check(api, registry[ticker])
+                    except Exception as e:
+                        print(f"[market_arb_ws] error procesando {ticker}: {e}")
+        except TimeoutError:
+            print("[market_arb_ws] refrescando registro y suscripciones")
 
 
 if __name__ == "__main__":

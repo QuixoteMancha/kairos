@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import WtaTournamentLevel
+from database.historical.tennis import Tournament
 from outer_apis.scrapers.tennis.wta_scraper import get_all_tournaments
 
 # 2026-08-05, bug real encontrado en vivo: la API oficial devuelve, para
@@ -45,6 +45,15 @@ def _priority(level: str | None) -> int:
 
 
 def run_backfill() -> dict:
+    """2026-08-10, `WtaTournamentLevel` (tabla propia) eliminada,
+    reemplazada por `Tournament` (catálogo unificado ATP+WTA, ver
+    models.py). Match por (year, tournament_name, tour="WTA") -- el
+    índice único real de `Tournament` es solo (year, tournament_name),
+    así que se filtra `tour` a mano en Python para nunca pisar una
+    fila ATP co-alojada con el mismo nombre+año (ej. Indian Wells,
+    Miami -- eventos combinados reales). `city` no se conoce desde esta
+    fuente -- se deja vacío ("", NO None -- el campo es NOT NULL) hasta
+    que exista un backfill de geocoding real basado en TennisExplorer."""
     init_db_historical()
     tournaments = get_all_tournaments()
     now = datetime.now(timezone.utc)
@@ -52,14 +61,15 @@ def run_backfill() -> dict:
     inserted = updated = 0
     with db_historical.connection_context():
         for t in tournaments:
-            existing = WtaTournamentLevel.get_or_none(
-                (WtaTournamentLevel.year == t["year"])
-                & (WtaTournamentLevel.tournament_name == t["tournament_name"])
+            existing = Tournament.get_or_none(
+                (Tournament.year == t["year"])
+                & (Tournament.tournament_name == t["tournament_name"])
+                & (Tournament.tour == "WTA")
             )
             if existing is None:
-                WtaTournamentLevel.create(
+                Tournament.create(
                     year=t["year"], tournament_name=t["tournament_name"],
-                    level=t["level"], fetched_at=now,
+                    level=t["level"], tour="WTA", city="", fetched_at=now,
                 )
                 inserted += 1
             elif existing.level != t["level"] and _priority(t["level"]) > _priority(existing.level):

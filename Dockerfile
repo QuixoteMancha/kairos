@@ -7,8 +7,7 @@
 #   - CMD ahora arranca kairos.py directo, sin subcomandos CLI ("run",
 #     "dashboard") que ya no existen.
 #   - Se mantiene: build multi-stage (wheels precompiladas), usuario
-#     non-root, tini para manejo de señales, DB_PATH configurable + volumen
-#     persistente para SQLite (database/db.py).
+#     non-root y tini para manejo de señales.
 
 # ─── Stage 1: builder ──────────────────────────────────────────────────────
 FROM python:3.13-slim AS builder
@@ -22,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
     libssl-dev \
+    libpq-dev \
     libcurl4-openssl-dev \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -40,13 +40,13 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    DB_PATH=/data/kairos.db \
     KAIROS_HOME=/app
 
-# Libs runtime: curl_cffi, sqlite.
+# Libs runtime: curl_cffi, PostgreSQL y SQLite para el archivo frío.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     libssl3 \
+    libpq5 \
     libsqlite3-0 \
     libglib2.0-0 \
     ca-certificates \

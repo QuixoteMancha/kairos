@@ -1,5 +1,5 @@
 """Elo real por jugador (carrera + por superficie) y Elo de temporada
-("yElo"), fuente Tennis Abstract (Jeff Sackmann) -- ver
+("yElo"), fuente Tennis Abstract -- ver
 outer_apis/scrapers/tennis/tennisabstract_scraper.py para el detalle de
 scraping y por qué esto es un salto de calidad frente al sistema de
 buckets de ranking que usa `models/volatility/sports/tennis/tennis_markov.py`.
@@ -25,7 +25,6 @@ from typing import Any
 
 from database.historical.tennis.writer import (
     get_current_tennisabstract_elo, save_tennisabstract_elo_snapshot,
-    get_current_tennisabstract_yelo, save_tennisabstract_yelo_snapshot,
 )
 from outer_apis.scrapers.tennis import tennisabstract_scraper
 
@@ -62,16 +61,13 @@ def _fetch_elo_table(tour: str) -> dict[str, dict[str, Any]]:
 
 
 def _fetch_yelo_table(tour: str) -> dict[str, dict[str, Any]]:
-    cached = get_current_tennisabstract_yelo(tour)
-    if cached is not None:
-        return cached
-
+    # 2026-08-10, pedido explícito del usuario -- `TennisAbstractYelo`
+    # (cache DB) eliminada, mismo patrón que `TennisHeadToHead`/
+    # `TennisAbstractH2H`: fetch en vivo cada vez, sin persistencia.
     try:
         rows = tennisabstract_scraper.get_season_yelo(tour)
     except Exception:
         rows = []
-    if rows:
-        save_tennisabstract_yelo_snapshot(tour, rows)
     return {r["player"]: r for r in rows}
 
 
@@ -112,5 +108,5 @@ def get_season_form(player_name: str, tour: str) -> dict[str, Any] | None:
 
 def elo_implied_win_prob(elo_a: float, elo_b: float) -> float:
     """Fórmula logística estándar de Elo: P(A gana) = 1 / (1 + 10^((Elo_B - Elo_A) / 400)).
-    Misma constante 400 que ajedrez/Sackmann usan para esta escala de Elo."""
+    Misma constante 400 que ajedrez usa para esta escala de Elo."""
     return 1.0 / (1.0 + 10 ** ((elo_b - elo_a) / 400.0))

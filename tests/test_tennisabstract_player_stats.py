@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisAbstractCareerSplit, TennisAbstractH2H
+from database.historical.tennis import PlayerStats
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
     _slug_for_player, _parse_float_pct, _extract_section,
 )
@@ -20,12 +20,10 @@ from outer_apis.sports.tennis.tennisabstract_player_stats import get_career_win_
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        TennisAbstractCareerSplit.delete().execute()
-        TennisAbstractH2H.delete().execute()
+        PlayerStats.delete().execute()
     yield
     with db_historical.connection_context():
-        TennisAbstractCareerSplit.delete().execute()
-        TennisAbstractH2H.delete().execute()
+        PlayerStats.delete().execute()
 
 
 def test_slug_for_player_strips_spaces_and_accents():

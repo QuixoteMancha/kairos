@@ -35,12 +35,15 @@ import re
 import time
 import unicodedata
 from datetime import date
-from typing import Any
+from typing import Any, Iterable, Iterator
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 _SEARCH_URL = "https://www.tennisexplorer.com/res/ajax/search.php"
 _PLAYER_URL = "https://www.tennisexplorer.com/player/{slug}/"
+_ALL_PLAYERS_URL = "https://www.tennisexplorer.com/list-players/"
 _REQUEST_TIMEOUT_S = 15
 _USER_AGENT = "Mozilla/5.0 (compatible; KairosResearchBot/1.0)"
 
@@ -144,6 +147,124 @@ def _fetch_player_page(slug: str, year: int) -> str | None:
         return resp.text
     except requests.RequestException:
         return None
+
+
+def _fetch_list_page(url: str) -> str | None:
+    """Fetch a player-list page, applying the module-wide rate limit."""
+    _throttle()
+    try:
+        resp = requests.get(
+            url, headers={"User-Agent": _USER_AGENT}, timeout=_REQUEST_TIMEOUT_S,
+        )
+        if resp.status_code != 200:
+            return None
+        return resp.text
+    except requests.RequestException:
+        return None
+
+
+def _country_links_from_html(html: str) -> list[str]:
+    """Extract canonical country-list URLs and ignore unrelated links."""
+    links: list[str] = []
+    seen: set[str] = set()
+    for anchor in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        url = urljoin(_ALL_PLAYERS_URL, anchor["href"])
+        parsed = urlparse(url)
+        country = parse_qs(parsed.query).get("country", [])
+        if parsed.path != "/list-players/" or len(country) != 1:
+            continue
+        canonical = f"{_ALL_PLAYERS_URL}?country={country[0]}"
+        if canonical not in seen:
+            seen.add(canonical)
+            links.append(canonical)
+    return links
+
+
+def get_all_player_country_links() -> list[str]:
+    """Fetch ``/list-players/`` and return its nationality URLs.
+
+    Fail-closed: an unavailable or malformed index produces an empty list.
+    """
+    html = _fetch_list_page(_ALL_PLAYERS_URL)
+    return _country_links_from_html(html) if html else []
+
+
+def _player_links_from_html(html: str) -> list[tuple[str, str]]:
+    """Return ``(slug, displayed_name)`` pairs from a country page."""
+    players: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for anchor in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        path = urlparse(urljoin(_ALL_PLAYERS_URL, anchor["href"])).path
+        match = re.fullmatch(r"/player/([^/]+)/", path)
+        if not match or match.group(1) in seen:
+            continue
+        name = anchor.get_text(" ", strip=True)
+        if not name:
+            continue
+        slug = match.group(1)
+        seen.add(slug)
+        players.append((slug, name))
+    return players
+
+
+def _country_pagination_links(html: str, country_url: str) -> list[str]:
+    """Extract pagination URLs that still belong to ``country_url``."""
+    expected_country = parse_qs(urlparse(country_url).query).get("country", [None])[0]
+    pages: list[str] = []
+    for anchor in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        url = urljoin(country_url, anchor["href"])
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        if (parsed.path == "/list-players/"
+                and query.get("country", [None])[0] == expected_country
+                and "page" in query):
+            pages.append(url)
+    return list(dict.fromkeys(pages))
+
+
+def iter_all_player_pages(
+    country_links: Iterable[str], year: int,
+) -> Iterator[dict[str, str]]:
+    """Fetch every player page found below the supplied country URLs.
+
+    Country pagination is followed automatically. Players repeated across
+    pages are fetched once. Failed list/player requests are skipped. Results
+    are yielded incrementally as ``country_url``, ``player_url``, ``slug``,
+    ``player_name`` and raw ``html`` so callers can reuse the existing player
+    parsers without retaining the full site in memory.
+    """
+    seen_country_pages: set[str] = set()
+    seen_players: set[str] = set()
+    pending = list(country_links)
+
+    while pending:
+        country_url = urljoin(_ALL_PLAYERS_URL, pending.pop(0))
+        if country_url in seen_country_pages:
+            continue
+        seen_country_pages.add(country_url)
+
+        country_html = _fetch_list_page(country_url)
+        if not country_html:
+            continue
+        pending.extend(
+            url for url in _country_pagination_links(country_html, country_url)
+            if url not in seen_country_pages
+        )
+
+        for slug, player_name in _player_links_from_html(country_html):
+            if slug in seen_players:
+                continue
+            seen_players.add(slug)
+            player_html = _fetch_player_page(slug, year)
+            if not player_html:
+                continue
+            yield {
+                "country_url": country_url,
+                "player_url": _PLAYER_URL.format(slug=slug),
+                "slug": slug,
+                "player_name": player_name,
+                "html": player_html,
+            }
 
 
 def _extract_names(t_name_html: str) -> tuple[str, str] | None:

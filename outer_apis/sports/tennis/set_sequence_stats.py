@@ -50,9 +50,11 @@ def parse_set_scores(score: str | None) -> list[tuple[int, int]] | None:
     return sets if len(sets) >= 2 else None
 
 
-def get_set_tendencies(player_name: str, n: int = 30) -> dict[str, Any] | None:
+def get_set_tendencies(player_name: str, n: int = 30, surface: str | None = None) -> dict[str, Any] | None:
     """Tendencias de secuencia de sets sobre los últimos `n` partidos con
     historial parseable de `player_name`.
+
+    Si `surface` se provee, solo usa partidos en esa superficie.
 
     Returns:
         {"p_win_set1": float, "p_win_set2_after_losing_set1": float | None,
@@ -76,9 +78,20 @@ def get_set_tendencies(player_name: str, n: int = 30) -> dict[str, Any] | None:
     n_after_losing_set1 = 0
     won_set2_after_winning_set1 = 0
     n_after_winning_set1 = 0
+    n_after_losing_set1_winning_set2 = 0
+    won_set3_after_losing_set1_winning_set2 = 0
+    n_after_winning_set1_winning_set2 = 0
+    won_set3_after_winning_set1_winning_set2 = 0
+    n_after_losing_set1_losing_set2 = 0
+    won_set3_after_losing_set1_losing_set2 = 0
+    n_after_winning_set1_losing_set2 = 0
+    won_set3_after_winning_set1_losing_set2 = 0
     n_parseable = 0
 
     for m in matches:
+        if surface and m.get("surface") != surface:
+            continue
+
         sets = parse_set_scores(m.get("score"))
         if sets is None or len(sets) < 2:
             continue
@@ -105,6 +118,31 @@ def get_set_tendencies(player_name: str, n: int = 30) -> dict[str, Any] | None:
             if won_set2:
                 won_set2_after_losing_set1 += 1
 
+        if len(sets) < 3:
+            continue
+
+        s3_own, s3_opp = sets[2]
+        if s3_own == s3_opp:
+            continue  # score de set3 inválido, omitimos del branch
+
+        won_set3 = s3_own > s3_opp
+        if won_set1 and won_set2:
+            n_after_winning_set1_winning_set2 += 1
+            if won_set3:
+                won_set3_after_winning_set1_winning_set2 += 1
+        elif won_set1 and not won_set2:
+            n_after_winning_set1_losing_set2 += 1
+            if won_set3:
+                won_set3_after_winning_set1_losing_set2 += 1
+        elif not won_set1 and won_set2:
+            n_after_losing_set1_winning_set2 += 1
+            if won_set3:
+                won_set3_after_losing_set1_winning_set2 += 1
+        else:
+            n_after_losing_set1_losing_set2 += 1
+            if won_set3:
+                won_set3_after_losing_set1_losing_set2 += 1
+
     if n_parseable < _MIN_MATCHES:
         return None
 
@@ -118,7 +156,86 @@ def get_set_tendencies(player_name: str, n: int = 30) -> dict[str, Any] | None:
             round(won_set2_after_winning_set1 / n_after_winning_set1, 4)
             if n_after_winning_set1 >= _MIN_MATCHES else None
         ),
+        "p_win_set3_after_losing_set1_winning_set2": (
+            round(won_set3_after_losing_set1_winning_set2 / n_after_losing_set1_winning_set2, 4)
+            if n_after_losing_set1_winning_set2 else None
+        ),
+        "p_win_set3_after_winning_set1_winning_set2": (
+            round(won_set3_after_winning_set1_winning_set2 / n_after_winning_set1_winning_set2, 4)
+            if n_after_winning_set1_winning_set2 else None
+        ),
+        "p_win_set3_after_losing_set1_losing_set2": (
+            round(won_set3_after_losing_set1_losing_set2 / n_after_losing_set1_losing_set2, 4)
+            if n_after_losing_set1_losing_set2 else None
+        ),
+        "p_win_set3_after_winning_set1_losing_set2": (
+            round(won_set3_after_winning_set1_losing_set2 / n_after_winning_set1_losing_set2, 4)
+            if n_after_winning_set1_losing_set2 else None
+        ),
         "n_matches": n_parseable,
         "n_after_losing_set1": n_after_losing_set1,
         "n_after_winning_set1": n_after_winning_set1,
+        "n_after_losing_set1_winning_set2": n_after_losing_set1_winning_set2,
+        "n_after_winning_set1_winning_set2": n_after_winning_set1_winning_set2,
+        "n_after_losing_set1_losing_set2": n_after_losing_set1_losing_set2,
+        "n_after_winning_set1_losing_set2": n_after_winning_set1_losing_set2,
+    }
+
+
+def get_set_win_rates(player_name: str, n: int = 30, surface: str | None = None) -> dict[str, Any] | None:
+    """Winrates por set en los últimos `n` partidos del jugador.
+
+    Si `surface` se provee, el cálculo se restringe a esa superficie.
+
+    Returns:
+        {"p_win_set1": float | None, "p_win_set2": float | None,
+         "p_win_set3": float | None, "n_matches": int,
+         "n_set1": int, "n_set2": int, "n_set3": int}
+        o None si no hay matches parseables.
+
+    Fail-closed: si no hay partidos con score parseable, devuelve None.
+    """
+    from outer_apis.sports.tennis.match_history import get_recent_matches
+
+    matches = get_recent_matches(player_name, n=n)
+    if not matches:
+        return None
+
+    set1_wins = set2_wins = set3_wins = 0
+    set1_total = set2_total = set3_total = 0
+    n_parseable = 0
+
+    for m in matches:
+        if surface and m.get("surface") != surface:
+            continue
+
+        sets = parse_set_scores(m.get("score"))
+        if sets is None:
+            continue
+
+        n_parseable += 1
+        if len(sets) >= 1:
+            set1_total += 1
+            if sets[0][0] > sets[0][1]:
+                set1_wins += 1
+        if len(sets) >= 2:
+            set2_total += 1
+            if sets[1][0] > sets[1][1]:
+                set2_wins += 1
+        if len(sets) >= 3:
+            set3_total += 1
+            if sets[2][0] > sets[2][1]:
+                set3_wins += 1
+
+    if n_parseable == 0:
+        return None
+
+    return {
+        "p_win_set1": round(set1_wins / set1_total, 4) if set1_total else None,
+        "p_win_set2": round(set2_wins / set2_total, 4) if set2_total else None,
+        "p_win_set3": round(set3_wins / set3_total, 4) if set3_total else None,
+        "n_matches": n_parseable,
+        "n_set1": set1_total,
+        "n_set2": set2_total,
+        "n_set3": set3_total,
     }

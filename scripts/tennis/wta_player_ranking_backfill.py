@@ -29,7 +29,8 @@ import time
 from datetime import datetime, timezone
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import WtaPlayerRankingHistory
+from database.historical.tennis import PlayerRankingHistory
+from database.historical.tennis.writer import _resolve_player_id
 from outer_apis.scrapers.tennis import wta_scraper
 
 _ROSTER_SNAPSHOT_YEARS = [2016, 2018, 2020, 2022, 2024, 2026]
@@ -53,20 +54,30 @@ def build_roster(years: list[int] = _ROSTER_SNAPSHOT_YEARS, top_n: int = _ROSTER
 def backfill_player_ranking(player_id: int, player_name: str) -> int:
     """Persiste la serie semanal real de una jugadora -- idempotente
     (reemplaza su serie completa, para poder refrescar sin duplicar).
+    `player_id` acá es el ID numérico de la API oficial WTA (usado solo
+    para el fetch, ver `wta_scraper`), NO el `Player.id` canónico --
+    2026-08-10, `WtaPlayerRankingHistory.player_id`/`player_name`
+    (texto libre) reemplazados por `PlayerRankingHistory.player` (FK
+    real a `Player`, resuelto vía `_resolve_player_id` -- mismo
+    mecanismo fuzzy find-or-create ya usado en todo el proyecto).
     Devuelve el número de entradas guardadas."""
     init_db_historical()
     history = wta_scraper.get_weekly_ranking_history(player_id)
     now = datetime.now(timezone.utc)
 
+    resolved_player_id = _resolve_player_id(player_name, tour="WTA")
+    if resolved_player_id is None:
+        return 0
+
     with db_historical.atomic():
-        WtaPlayerRankingHistory.delete().where(WtaPlayerRankingHistory.player_id == player_id).execute()
+        PlayerRankingHistory.delete().where(PlayerRankingHistory.player == resolved_player_id).execute()
         if not history:
             return 0
         rows = [{
-            "player_id": player_id, "player_name": player_name,
+            "player": resolved_player_id,
             "ranked_at": h["ranked_at"], "singles_ranking": h["singles_ranking"], "fetched_at": now,
         } for h in history]
-        WtaPlayerRankingHistory.insert_many(rows).on_conflict_ignore().execute()
+        PlayerRankingHistory.insert_many(rows).on_conflict_ignore().execute()
     return len(history)
 
 

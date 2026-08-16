@@ -10,5 +10,7 @@ import os
 import tempfile
 
 _TEST_DIR = tempfile.mkdtemp(prefix="kairos_test_")
+os.environ.setdefault("KAIROS_DB_BACKEND", "sqlite")
+os.environ.setdefault("KAIROS_TESTING", "1")
 os.environ.setdefault("DB_PATH", os.path.join(_TEST_DIR, "kairos_test.db"))
 os.environ.setdefault("DB_HISTORICAL_PATH", os.path.join(_TEST_DIR, "kairos_test_historical.db"))

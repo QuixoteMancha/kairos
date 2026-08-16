@@ -80,16 +80,20 @@ def _load_priced_matches(
     init_db_historical()
     result: list[dict[str, Any]] = []
     with db_historical.connection_context():
-        query = MatchHistory.select().where(MatchHistory.winner_side.in_(["a", "b"]))
+        # 2026-08-10, `winner_side` (texto "a"/"b") reemplazado por
+        # `winner_id` (FK real al `Player` ganador, ver models.py).
+        query = MatchHistory.select().where(MatchHistory.winner_id.is_null(False))
         if start_year:
             query = query.where(MatchHistory.match_date >= f"{start_year}-01-01")
         if end_year:
             query = query.where(MatchHistory.match_date <= f"{end_year}-12-31")
 
         for row in query:
+            if row.player_a_id is None or row.player_b_id is None:
+                continue
             perspectives = [
-                (row.player_a_name, row.player_b_name, "W" if row.winner_side == "a" else "L"),
-                (row.player_b_name, row.player_a_name, "W" if row.winner_side == "b" else "L"),
+                (row.player_a.canonical_name, row.player_b.canonical_name, "W" if row.winner_id == row.player_a_id else "L"),
+                (row.player_b.canonical_name, row.player_a.canonical_name, "W" if row.winner_id == row.player_b_id else "L"),
             ]
             for player_name, opponent_name, match_result in perspectives:
                 if tour_players and player_name not in tour_players:
@@ -115,7 +119,13 @@ def _load_priced_matches(
 
                 result.append({
                     "player_name": player_name, "opponent_name": opponent_name,
-                    "match_date": row.match_date, "tournament": row.tournament,
+                    # 2026-08-11: `MatchHistory.tournament` es FK real
+                    # ahora (ver writer.py::_resolve_tournament_id) --
+                    # se guarda el NOMBRE (texto) acá para no romper la
+                    # forma de salida que consume el resto de este
+                    # backtest, no el objeto `Tournament` completo.
+                    "match_date": row.match_date,
+                    "tournament": row.tournament.tournament_name if row.tournament else None,
                     "favorite_fair_price": favorite_fair_price, "favorite_won": favorite_won,
                     "odds_self": odds_row.odds_self, "odds_opponent": odds_row.odds_opponent,
                 })

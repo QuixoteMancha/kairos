@@ -60,7 +60,7 @@ SET_SEQUENCE_LOOKBACK = 30
 # / 8% set-sequence / 10% forma en esta superficie.
 SURFACE_FORM_WEIGHT = 0.10
 
-# Pesos para Tennis Abstract (Jeff Sackmann, 2026-07-31, investigación +
+# Pesos para Tennis Abstract (2026-07-31, investigación +
 # construcción a pedido explícito del usuario): Elo real POR JUGADOR
 # (carrera + por superficie: hElo/cElo/gElo), y Elo de la TEMPORADA en
 # curso ("yElo"). Metodológicamente más sólido que el sistema propio de
@@ -277,7 +277,7 @@ class TennisFModel(_SportFModel):
 
     @staticmethod
     def _blend_tennisabstract_elo(fair_a: float, market: dict) -> float:
-        """Elo real por jugador (Tennis Abstract/Jeff Sackmann), carrera +
+        """Elo real por jugador (Tennis Abstract), carrera +
         por superficie (hElo/cElo/gElo, ver
         outer_apis/sports/tennis/tennisabstract_elo.py). Reemplaza
         conceptualmente al sistema propio de buckets de ranking en calidad

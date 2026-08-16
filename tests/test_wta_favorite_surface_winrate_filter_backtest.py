@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from database.db import init_db_historical
-from database.historical.tennis import MatchHistory, WtaTournamentLevel
+from database.historical.tennis import MatchHistory, Tournament, Player
 from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import (
     _rank_at, _name_token_key, _build_surface_winrate_tracker, collect_wta_cases, run_backtest,
     _MIN_RANK_GAP, _BEST_OF,
@@ -40,15 +40,35 @@ def _idx(plain: dict[str, list]) -> dict:
 def setup_function(_fn):
     init_db_historical()
     MatchHistory.delete().execute()
-    WtaTournamentLevel.delete().execute()
+    Tournament.delete().execute()
+    Player.delete().execute()
+
+
+def _get_or_create_test_player(name: str) -> Player:
+    existing = Player.get_or_none(Player.canonical_name == name)
+    if existing is not None:
+        return existing
+    return Player.create(canonical_name=name, created_at=datetime.now(timezone.utc))
 
 
 def _real_row(player, opponent, date, result, surface="Hard", score="6-4, 6-3", tournament=None):
+    # 2026-08-10, `winner_side` (texto "a"/"b") reemplazado por
+    # `winner` (FK real al Player ganador) -- resuelve/crea Player para
+    # ambos lados, mismo criterio que `_resolve_player_id` en producción.
+    # 2026-08-11: `tournament` es FK real ahora -- reusa el mismo
+    # resolver de producción (`_resolve_tournament_id`) para no
+    # duplicar lógica de find-or-create acá.
+    from database.historical.tennis.writer import _resolve_tournament_id
+
+    player_a = _get_or_create_test_player(player)
+    player_b = _get_or_create_test_player(opponent)
     MatchHistory.create(
         match_id=f"test:{next(_next_match_id)}",
         player_a_name=player, player_b_name=opponent, match_date=date,
-        winner_side=("a" if result == "W" else "b"),
-        score=score, source="tennisexplorer", surface=surface, tournament=tournament,
+        player_a=player_a, player_b=player_b,
+        winner=(player_a if result == "W" else player_b),
+        score=score, source="tennisexplorer", surface=surface,
+        tournament_id=_resolve_tournament_id(tournament, date),
         fetched_at=datetime.now(timezone.utc),
     )
 
@@ -247,8 +267,8 @@ def test_load_tournament_level_index_never_downgrades_on_post_normalization_coll
     # son filas reales distintas en la tabla (no colisionan ahí). El
     # índice point-in-time no debe dejar que la ITF pise al main-tour.
     from scripts.tennis.wta_favorite_surface_winrate_filter_backtest import _load_tournament_level_index
-    WtaTournamentLevel.create(year=2016, tournament_name="MADRID", level="Premier Mandatory", fetched_at=datetime.now(timezone.utc))
-    WtaTournamentLevel.create(year=2016, tournament_name="MADRID 2 ITF", level="ITF", fetched_at=datetime.now(timezone.utc))
+    Tournament.create(year=2016, tournament_name="MADRID", level="Premier Mandatory", tour="WTA", city="", fetched_at=datetime.now(timezone.utc))
+    Tournament.create(year=2016, tournament_name="MADRID 2 ITF", level="ITF", tour="WTA", city="", fetched_at=datetime.now(timezone.utc))
     index = _load_tournament_level_index()
     assert index[(2016, "MADRID")] == "Premier Mandatory"
 

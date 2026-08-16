@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.tennis.favorite_by_historical_rank_backtest import (
+from scripts.tennis.pricing_and_risk_utils import (
     _daily_returns, _annualized_sharpe, _annualized_sortino, _cagr_pct,
     _calmar_ratio, _cvar_95_pct, _TRADING_DAYS_PER_YEAR_ATP,
 )

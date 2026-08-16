@@ -80,7 +80,7 @@ from typing import Any
 
 from outer_apis.scrapers.tennis import tennisexplorer_player_scraper
 from database.historical.tennis.writer import (
-    save_match_history, save_head_to_head_snapshot, get_recent_match_history, get_any_match_history,
+    save_match_history, get_recent_match_history, get_any_match_history,
 )
 
 # Allowlist de fetch en vivo (2026-08-01, pedido explícito del usuario):
@@ -250,5 +250,4 @@ def get_head_to_head(player_a: str, player_b: str, lookback: int = 40) -> dict[s
     if total == 0:
         return None
     result = {"a_wins": a_wins, "b_wins": b_wins, "n_matches": total}
-    save_head_to_head_snapshot(player_a, player_b, result)
     return result

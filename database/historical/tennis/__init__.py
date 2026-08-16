@@ -12,9 +12,13 @@ These 4 tables map 1:1 onto what `outer_apis/tennis_*.py` already fetches live,
 using player NAME as the identifier (no surrogate Player table/FK chain):
 
   - TennisPlayerRanking    <- outer_apis/tennis_rankings.py
-  - TennisServeCalibration <- outer_apis/tennis_serve_stats.py
   - MatchHistory           <- outer_apis/tennis_match_history.py (recent matches, 1 fila/partido)
-  - TennisHeadToHead       <- outer_apis/tennis_match_history.py (h2h)
+  # 2026-08-10, pedido explícito del usuario -- TennisServeCalibration
+  # eliminada tras auditoría de writer.py (cero callers reales, su
+  # consumidor `outer_apis/tennis_serve_stats.py` ya no existe).
+  # 2026-08-10, pedido explícito del usuario -- TennisHeadToHead
+  # eliminado (redundante, h2h se computa en vivo desde MatchHistory
+  # en outer_apis/sports/tennis/match_history.py::get_head_to_head).
 
 `writer.py` in this package is what `outer_apis/tennis_*.py` calls to persist
 on a fresh fetch (never on a cache hit).
@@ -28,22 +32,16 @@ from database.historical.tennis.models import (
     MatchStatsSet as TennisMatchStatsSet,
     TennisPlayerRanking,
     TennisPlayerSyncStatus,
-    TennisServeCalibration,
     MatchHistory,
+    MatchDuration,
     Player,
     TennisMatchHistoryUnvalidated,
     TennisHistoricalOdds,
-    WtaPlayerRankingHistory,
-    WtaTournamentLevel,
-    AtpTournamentLevel,
+    PlayerRankingHistory,
+    Tournament,
     TennisPlayerWikidataReference,
-    TennisExplorerPlayerSlug,
-    TournamentLocationCache,
-    TennisHeadToHead,
     TennisAbstractElo,
-    TennisAbstractYelo,
-    TennisAbstractCareerSplit,
-    TennisAbstractH2H,
+    PlayerStats,
     TennisRecentResult,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
@@ -67,34 +65,29 @@ from database.historical.tennis.matchtracking import (
 )
 from database.historical.tennis.writer import (
     save_recent_results, get_recent_results,
-    save_rankings_snapshot, save_serve_calibration_snapshot,
-    save_match_history, save_head_to_head_snapshot,
+    save_rankings_snapshot,
+    save_match_history,
     save_surface_match_history, get_recent_surface_match_history,
     save_tennisabstract_elo_snapshot, get_current_tennisabstract_elo,
-    save_tennisabstract_yelo_snapshot, get_current_tennisabstract_yelo,
     save_tennisabstract_career_splits, get_current_career_splits,
-    save_tennisabstract_h2h, get_current_tennisabstract_h2h,
     get_all_career_splits_for_surface, get_latest_rankings, get_all_surface_matches,
     save_match_detail, save_next_match, has_real_match_detail_between,
 )
 
 __all__ = [
-    "TennisPlayerRanking", "TennisServeCalibration", "MatchHistory", "Player", "save_match_detail", "save_next_match",
+    "TennisPlayerRanking", "MatchHistory", "MatchDuration", "Player", "save_match_detail", "save_next_match",
     "has_real_match_detail_between",
     "TennisMatchHistoryUnvalidated",
-    "TennisHistoricalOdds", "TennisHeadToHead",
-    "TournamentLocationCache", "WtaPlayerRankingHistory", "WtaTournamentLevel", "AtpTournamentLevel",
+    "TennisHistoricalOdds",
+    "PlayerRankingHistory", "Tournament",
     "TennisPlayerWikidataReference",
-    "TennisExplorerPlayerSlug",
-    "TennisAbstractElo", "TennisAbstractYelo",
-    "TennisAbstractCareerSplit", "TennisAbstractH2H",
-    "save_rankings_snapshot", "save_serve_calibration_snapshot",
-    "save_match_history", "save_head_to_head_snapshot",
+    "TennisAbstractElo",
+    "PlayerStats",
+    "save_rankings_snapshot",
+    "save_match_history",
     "save_surface_match_history", "get_recent_surface_match_history",
     "save_tennisabstract_elo_snapshot", "get_current_tennisabstract_elo",
-    "save_tennisabstract_yelo_snapshot", "get_current_tennisabstract_yelo",
     "save_tennisabstract_career_splits", "get_current_career_splits",
-    "save_tennisabstract_h2h", "get_current_tennisabstract_h2h",
     "get_all_career_splits_for_surface", "get_latest_rankings", "get_all_surface_matches",
     "TennisScannedMatch", "TennisMatchProbabilityTick",
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",

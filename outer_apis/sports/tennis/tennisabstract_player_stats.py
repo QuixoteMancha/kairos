@@ -14,7 +14,6 @@ from typing import Any
 
 from database.historical.tennis.writer import (
     get_current_career_splits, save_tennisabstract_career_splits,
-    get_current_tennisabstract_h2h, save_tennisabstract_h2h,
 )
 from outer_apis.scrapers.tennis import tennisabstract_player_scraper
 
@@ -34,17 +33,14 @@ def _fetch_career_splits(player_name: str) -> list[dict[str, Any]]:
 
 
 def _fetch_h2h(player_name: str) -> list[dict[str, Any]]:
-    cached = get_current_tennisabstract_h2h(player_name)
-    if cached is not None:
-        return cached
-
+    # 2026-08-10, pedido explícito del usuario -- `TennisAbstractH2H`
+    # (cache DB) eliminada por redundante (mismo patrón que
+    # `TennisHeadToHead`, ver database/historical/tennis/__init__.py):
+    # fetch en vivo cada vez, sin persistencia intermedia.
     try:
-        rows = tennisabstract_player_scraper.get_head_to_head(player_name)
+        return tennisabstract_player_scraper.get_head_to_head(player_name)
     except Exception:
-        rows = []
-    if rows:
-        save_tennisabstract_h2h(player_name, rows)
-    return rows
+        return []
 
 
 def get_career_win_pct_by_surface(player_name: str, surface: str) -> dict[str, Any] | None:

@@ -23,7 +23,7 @@ import os
 import shutil
 from typing import Any
 
-from database.db import DB_HISTORICAL_PATH, init_db_historical
+from database.db import DB_BACKEND, DB_HISTORICAL_PATH, db_historical, init_db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.archive_db import (
@@ -41,6 +41,16 @@ def should_archive() -> bool:
     no existe o no se puede leer el uso de disco (nunca dispara un
     archivado por error de lectura)."""
     try:
+        if DB_BACKEND in {"postgres", "postgresql"}:
+            mount_path = os.getenv("POSTGRES_DATA_MOUNT", "/postgres_data")
+            if not os.path.exists(mount_path):
+                return False
+            db_historical.connect(reuse_if_open=True)
+            db_size = db_historical.execute_sql(
+                "SELECT pg_database_size(current_database())"
+            ).fetchone()[0]
+            total, _used, _free = shutil.disk_usage(mount_path)
+            return total > 0 and (db_size / total) >= ARCHIVE_TRIGGER_RATIO
         if not os.path.exists(DB_HISTORICAL_PATH):
             return False
         db_size = os.path.getsize(DB_HISTORICAL_PATH)
@@ -48,7 +58,7 @@ def should_archive() -> bool:
         if total <= 0:
             return False
         return (db_size / total) >= ARCHIVE_TRIGGER_RATIO
-    except OSError:
+    except Exception:
         return False
 
 

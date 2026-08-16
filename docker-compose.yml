@@ -1,4 +1,51 @@
+x-kairos-db-environment: &kairos-db-environment
+  KAIROS_DB_BACKEND: postgresql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: kairos
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-kairos}
+  DB_NAME: kairos
+  DB_HISTORICAL_NAME: kairos_historical
+
+x-kairos-db-depends: &kairos-db-depends
+  kairos_migrate:
+    condition: service_completed_successfully
+
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: kairos_postgres
+    environment:
+      POSTGRES_USER: kairos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kairos}
+      POSTGRES_DB: kairos
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kairos -d kairos && pg_isready -U kairos -d kairos_historical"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - kairos_net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-create-historical.sql:ro
+
+  kairos_migrate:
+    image: kairos:latest
+    build: .
+    command: ["python", "-m", "database.migrate"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - kairos_net
+
   kairos:
     image: kairos:latest
     container_name: kairos
@@ -6,16 +53,15 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # Sin esto, kairos.py corre una vez y termina -- en producción
       # queremos loop indefinido (ver kairos.py). 300s = 5 min entre scans;
       # un scan de tenis en vivo ya toma ~1-2 min (fetch de mercados +
       # prefetch paralelo de historial Flashscore), así que un intervalo
       # más corto encolaría scans sin necesidad.
       KAIROS_SCAN_INTERVAL_SECONDS: "300"
-      # Segunda DB, solo referencia/histórico (ver database/db.py y
-      # memoria kairos-two-volume-db-scheme-2026-07-21) -- separada de
-      # DB_PATH (contabilidad, /data/kairos.db, volumen "definitivo").
-      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+      # Las bases activa e histórica son bases PostgreSQL separadas.
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -44,16 +90,19 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 1h -- ver workers/tennis_history_archiver_worker.py, el chequeo
       # de tamaño de disco no necesita alta frecuencia.
       TENNIS_ARCHIVER_INTERVAL_SECONDS: "3600"
-      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
       TENNIS_ARCHIVE_DB_PATH: "/archive/kairos_tennis_archive.db"
+      POSTGRES_DATA_MOUNT: "/postgres_data"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
     volumes:
       - kairos_data_historical:/data_historical
+      - postgres_data:/postgres_data:ro
       # Este es el ÚNICO servicio con permiso de ESCRITURA en el disco
       # externo -- todo lo demás lo monta read-only.
       - /mnt/storage2/kairos_archive:/archive
@@ -66,10 +115,12 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 5min -- ver workers/brightdata_ip_watcher_worker.py. No necesita
       # ningún volumen (no toca DB, solo la API de BrightData + servicios
       # públicos de IP).
       BRIGHTDATA_WATCHER_INTERVAL_SECONDS: "300"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -82,20 +133,56 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 60s -- "minuto a minuto", pedido explícito del usuario. Ver
       # workers/tennis_match_tick_worker.py.
       TENNIS_TICK_INTERVAL_SECONDS: "60"
-      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
     volumes:
       - kairos_data_historical:/data_historical
-      # kairos_data (2026-08-02, pedido explícito del usuario, fusión de
-      # set1_favorite_reaction_worker acá -- ver docstring de
-      # workers/tennis_match_tick_worker.py) -- Set1EntrySignal vive en
-      # `db`/DB_PATH (kairos_data), no en la histórica.
+      # kairos_data (`db`/DB_PATH) -- 2026-08-11: la fusión con
+      # set1_favorite_reaction_worker (2026-08-02) se REVIRTIÓ, pedido
+      # explícito del usuario ("no lo usaremos de esa manera, más
+      # adelante habrá un worker con ejecución real de estrategias").
+      # El volumen sigue haciendo falta igual: `run_once` ahora chequea
+      # el circuit-breaker global (`SystemHaltState`, ver
+      # database/accounting/systemhaltstate.py, 2026-08-11).
       - kairos_data:/data
+
+  tennis_match_history_sync_worker:
+    image: kairos:latest
+    container_name: kairos_tennis_match_history_sync_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_match_history_sync_worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+      TENNIS_HISTORY_SYNC_SLEEP_S: "300"
+      TENNIS_HISTORY_SYNC_BATCH_SIZE: "10"
+      TENNIS_HISTORY_SYNC_STATS_LIMIT: "5"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks:
+      - kairos_net
+
+  mlb_match_tick_worker:
+    image: kairos:latest
+    container_name: kairos_mlb_match_tick_worker
+    build: .
+    command: ["python", "-m", "workers.mlb_match_tick_worker"]
+    env_file:
+      - .env
+    environment:
+      <<: *kairos-db-environment
+      MLB_TICK_INTERVAL_SECONDS: "60"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks:
+      - kairos_net
 
   market_arb_websocket_scanner:
     image: kairos:latest
@@ -111,6 +198,10 @@ services:
     command: ["python", "-m", "workers.market_arb_websocket_scanner"]
     env_file:
       - .env
+    environment:
+      <<: *kairos-db-environment
+      MARKET_ARB_WS_REGISTRY_REFRESH_SECONDS: "900"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -125,10 +216,11 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 6h -- MLS Elo solo cambia con resultados reales, no hace falta
       # refrescar más seguido (ver workers/mls_worker.py).
       MLS_REFRESH_INTERVAL_SECONDS: "21600"
-      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -143,11 +235,12 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 30min -- ver ventana de observación (2h-30d) documentada en el
       # docstring del worker; el intervalo del loop solo controla cada
       # cuánto se re-chequean señales YA elegibles, no la ventana en sí.
       OUTCOME_OBSERVER_INTERVAL_SECONDS: "1800"
-      DB_PATH: "/data/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -162,12 +255,13 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 30s -- see workers/limitarb_monitor_worker.py: rule A counts one
       # "attempt" per cycle where the limit leg isn't marketable yet, 3
       # attempts triggers timeout, so the interval directly drives that
       # timing (user-confirmed 30s).
       LIMITARB_MONITOR_INTERVAL_SECONDS: "30"
-      DB_PATH: "/data/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -182,10 +276,11 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 5min -- ticks/candles son time-sensitive (crypto_15m resuelve en
       # ~15min), ver workers/historical_collector_worker.py.
       HISTORICAL_COLLECTOR_INTERVAL_SECONDS: "300"
-      DB_HISTORICAL_PATH: "/data_historical/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -200,10 +295,11 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 10min -- retrospective analysis, not time-critical like
       # limitarb_monitor_worker's 30s (see workers/fill_verification_worker.py).
       FILL_VERIFICATION_INTERVAL_SECONDS: "600"
-      DB_PATH: "/data/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -218,12 +314,13 @@ services:
     env_file:
       - .env
     environment:
+      <<: *kairos-db-environment
       # 8765 -- puerto legacy pre-"extreme makeover" (había Flask acá
       # antes); otro proyecto del ecosistema (Aegis) ya tiene una
       # referencia apuntando acá, confirmado libre en la mini-pc (ver
       # inner_api/server.py module docstring).
       API_PORT: "8765"
-      DB_PATH: "/data/kairos.db"
+    depends_on: *kairos-db-depends
     restart: unless-stopped
     networks:
       - kairos_net
@@ -237,6 +334,8 @@ networks:
     name: kairos_kairos_net
 
 volumes:
+  postgres_data:
+    name: kairos_postgres_data
   kairos_data:
     name: kairos_data_v2
   kairos_data_historical:

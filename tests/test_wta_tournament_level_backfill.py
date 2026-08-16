@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import WtaTournamentLevel
+from database.historical.tennis import Tournament
 from scripts.tennis.wta_tournament_level_backfill import run_backfill, _priority
 
 
@@ -18,10 +18,10 @@ from scripts.tennis.wta_tournament_level_backfill import run_backfill, _priority
 def clean_db():
     init_db_historical()
     with db_historical.connection_context():
-        WtaTournamentLevel.delete().execute()
+        Tournament.delete().execute()
     yield
     with db_historical.connection_context():
-        WtaTournamentLevel.delete().execute()
+        Tournament.delete().execute()
 
 
 def test_priority_ranks_main_tour_above_itf():
@@ -38,7 +38,7 @@ def test_run_backfill_inserts_new_rows():
         result = run_backfill()
     assert result == {"fetched": 1, "inserted": 1, "updated": 0}
     with db_historical.connection_context():
-        row = WtaTournamentLevel.get(WtaTournamentLevel.tournament_name == "MADRID")
+        row = Tournament.get(Tournament.tournament_name == "MADRID")
         assert row.level == "Premier Mandatory"
 
 
@@ -63,7 +63,7 @@ def test_run_backfill_never_downgrades_existing_higher_level():
 
     assert result == {"fetched": 1, "inserted": 0, "updated": 0}
     with db_historical.connection_context():
-        row = WtaTournamentLevel.get(WtaTournamentLevel.tournament_name == "MADRID")
+        row = Tournament.get(Tournament.tournament_name == "MADRID")
         assert row.level == "Premier Mandatory"
 
 
@@ -82,5 +82,5 @@ def test_run_backfill_upgrades_when_new_level_is_higher():
 
     assert result == {"fetched": 1, "inserted": 0, "updated": 1}
     with db_historical.connection_context():
-        row = WtaTournamentLevel.get(WtaTournamentLevel.tournament_name == "MADRID")
+        row = Tournament.get(Tournament.tournament_name == "MADRID")
         assert row.level == "Premier Mandatory"

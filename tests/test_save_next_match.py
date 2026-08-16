@@ -73,11 +73,11 @@ def test_save_next_match_resolves_full_identity_before_match_is_played():
 
     assert result is True
     row = MatchHistory.get(MatchHistory.match_id == "3290769")
-    assert row.player_a_name == "Alexandrova Ekaterina"
-    assert row.player_b_name == "Svitolina Elina"
+    assert row.player_a.canonical_name == "Alexandrova Ekaterina"
+    assert row.player_b.canonical_name == "Svitolina Elina"
     assert row.tour == "WTA"
     assert row.score is None  # todavía no se jugó
-    assert row.winner_side is None
+    assert row.winner_id is None
 
 
 def test_save_next_match_false_when_no_next_match_scheduled():

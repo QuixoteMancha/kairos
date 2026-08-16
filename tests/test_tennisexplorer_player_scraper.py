@@ -231,6 +231,52 @@ def test_guess_player_slug_fail_closed_on_fetch_failure():
         assert guess_player_slug("Alexandra Eala") is None
 
 
+def test_guess_player_slug_falls_back_to_compound_surname():
+    # 2026-08-12, bug real encontrado en vivo con el backfill top-20 ATP:
+    # "Felix Auger Aliassime" (apellido compuesto) -- el candidato de 1
+    # token ("aliassime") no existe como jugador real en TE, el de 2
+    # tokens ("auger-aliassime") sí.
+    def _fetch_side_effect(slug, year=None):
+        if slug == "aliassime":
+            return None  # no existe, TE redirige al home (fail-closed acá)
+        if slug == "auger-aliassime":
+            return '<title>Felix Auger Aliassime - Tennis Explorer</title>'
+        return None
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        side_effect=_fetch_side_effect,
+    ):
+        assert guess_player_slug("Felix Auger Aliassime") == "auger-aliassime"
+
+
+def test_guess_player_slug_prefers_single_token_when_it_already_works():
+    # comportamiento previo intacto -- si el candidato de 1 token YA
+    # verifica, ni se intenta el de 2 tokens.
+    calls = []
+
+    def _fetch_side_effect(slug, year=None):
+        calls.append(slug)
+        if slug == "eala":
+            return _TITLE_OK
+        return '<title>Someone Else - Tennis Explorer</title>'
+
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        side_effect=_fetch_side_effect,
+    ):
+        assert guess_player_slug("Alexandra Eala") == "eala"
+    assert calls == ["eala"]  # nunca probó el candidato compuesto
+
+
+def test_guess_player_slug_fail_closed_when_neither_candidate_verifies():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch",
+        return_value='<title>Someone Else - Tennis Explorer</title>',
+    ):
+        assert guess_player_slug("Felix Auger Aliassime") is None
+
+
 # ── get_player_recent_matches (2026-08-04, reemplaza flashscore_scraper) ──
 
 def test_to_iso_date_uses_reference_year():
@@ -440,6 +486,8 @@ def test_get_match_detail_parses_real_page_structure():
         "surface": "hard",
         "score": "6-4, 6-2",
         "winner_side": "a",
+        "retired": False,
+        "retired_side": None,
         "player_a_name": "Amanda Anisimova",
         "player_a_slug": "anisimova-3be62",
         "player_a_ranking": 10,
@@ -455,6 +503,36 @@ def test_get_match_detail_parses_real_page_structure():
         "player_b_weight_kg": 80,
         "player_b_plays": "right",
     }
+
+
+_RETIREMENT_MATCH_DETAIL_HTML = _MATCH_DETAIL_HTML.replace(
+    '<td class="gScore">2 : 0<br /><span>(6-4, 6-2)</span></td>',
+    '<td class="gScore">2 : 1<br /><span>(7-5, 2-6, 6-4 ret.)</span></td>',
+)
+
+
+def test_get_match_detail_detects_retirement_and_identifies_loser_side():
+    # 2026-08-11, pedido explícito del usuario ("hay que agregar los
+    # retiros de los players") -- Anisimova (lado "a") sigue ganando por
+    # sets (2:1), Sabalenka (lado "b") es quien se retiró.
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail",
+        return_value=_RETIREMENT_MATCH_DETAIL_HTML,
+    ):
+        result = get_match_detail("2692781")
+    assert result["winner_side"] == "a"
+    assert result["retired"] is True
+    assert result["retired_side"] == "b"
+
+
+def test_get_match_detail_no_retirement_marker_stays_false():
+    with patch(
+        "outer_apis.scrapers.tennis.tennisexplorer_player_scraper._fetch_match_detail",
+        return_value=_MATCH_DETAIL_HTML,
+    ):
+        result = get_match_detail("2692781")
+    assert result["retired"] is False
+    assert result["retired_side"] is None
 
 
 def test_te_native_to_nombre_apellido_reorders_simple_name():

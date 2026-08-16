@@ -1,4 +1,4 @@
-"""Tennis Abstract (Jeff Sackmann, tennisabstract.com) — Elo ratings
+"""Tennis Abstract (tennisabstract.com) — Elo ratings
 reales, actualizados semanalmente, por jugador individual (NO por bucket
 de ranking como el sistema propio de Kairos en `tennis_markov.py`).
 

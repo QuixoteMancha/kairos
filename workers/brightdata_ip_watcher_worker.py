@@ -28,7 +28,7 @@ import os
 import time
 
 from outer_apis.scrapers.brightdata_proxy import (
-    ensure_ip_whitelisted, get_brightdata_config,
+    alert_if_account_broken, ensure_ip_whitelisted, get_brightdata_config,
 )
 
 _REFRESH_INTERVAL_S = os.getenv("BRIGHTDATA_WATCHER_INTERVAL_SECONDS")
@@ -43,6 +43,14 @@ def _run_once() -> bool:
     if not config.get("api_token") or not config.get("zone"):
         print("[brightdata_ip_watcher] falta BRIGHTDATA_API_TOKEN o no se pudo resolver la zona -- nada que hacer")
         return False
+
+    # 2026-08-11, pedido explícito del usuario ("si no funciona con el
+    # proxy o no hay dinero en el proxy, enviarme un correo") -- chequeo
+    # PROACTIVO del estado real de la cuenta en cada ciclo (cada 5 min
+    # por default), no solo reactivo ante un fallo de scraping. Mismo
+    # incidente real ya documentado 2026-07-30 ("Customer has invalid
+    # status") que en ese momento no generaba ninguna alerta.
+    alert_if_account_broken(config["api_token"], verbose=True)
 
     added = ensure_ip_whitelisted(config["api_token"], config["zone"], verbose=True)
     if added:
