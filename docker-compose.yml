@@ -185,6 +185,10 @@ services:
       # tandas chicas que van completando de a poco cada hora.
       TENNIS_GAP_FILLER_BIO_LIMIT: "40"
       TENNIS_GAP_FILLER_DURATIONS_LIMIT: "40"
+      # Estadísticas de partido (2026-08-16): mismo costo que duraciones
+      # (~2 requests a Flashscore por partido). Solo procesa partidos ya
+      # TERMINADOS -- los en curso devuelven un feed incompleto.
+      TENNIS_GAP_FILLER_STATS_LIMIT: "40"
       # Elo: pase cronológico COMPLETO (no incremental por diseño), no
       # tiene sentido cada hora -- cada 6 ciclos = ~6h.
       TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES: "6"

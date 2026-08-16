@@ -21,9 +21,12 @@ orden de COSTO CRECIENTE, cada uno acotado y fail-closed por separado
      niveles altos; después ubicación vía Nominatim (1 req/s por
      política del servicio, por eso la tanda es chica). Ver
      `scripts/tennis/fill_tournament_metadata.py`.
-  4. `match_durations` -- `enrich_match_durations`, ya reactivo de por
-     sí (busca los partidos sin duración). Cuesta 2 requests a
-     Flashscore por partido (resolver id + fetch), tanda chica.
+  4. `match_durations` / `match_stats` -- `enrich_match_durations` y
+     `enrich_match_stats`, ambos reactivos (buscan los partidos que
+     todavía no tienen el dato). Cuestan ~2 requests a Flashscore por
+     partido (resolver id + fetch), tandas chicas. `match_stats` solo
+     mira partidos TERMINADOS: los que están en curso devuelven un feed
+     incompleto ("Last 10 balls") y ensuciarían la tabla.
   5. `self_elo` -- `run_elo_backfill`, SIN RED pero es un pase
      cronológico sobre TODO el historial (no es incremental por
      diseño: el Elo de un partido depende de todos los anteriores).
@@ -46,6 +49,7 @@ Env vars:
   `TENNIS_GAP_FILLER_AGES_LIMIT`       (default 2000, sin red)
   `TENNIS_GAP_FILLER_BIO_LIMIT`        (default 40)
   `TENNIS_GAP_FILLER_DURATIONS_LIMIT`  (default 40)
+  `TENNIS_GAP_FILLER_STATS_LIMIT`      (default 40, ~2 req/partido)
   `TENNIS_GAP_FILLER_GEOCODE_LIMIT`    (default 25, Nominatim = 1 req/s)
   `TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES` (default 6, 0 = nunca)
 """
@@ -64,6 +68,7 @@ _DURATIONS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_DURATIONS_LIMIT", "40"))
 _SELF_ELO_EVERY_N = int(os.getenv("TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES", "6"))
 _GEOCODE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_GEOCODE_LIMIT", "25"))
 _REFINE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_REFINE_LIMIT", "30"))
+_STATS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_STATS_LIMIT", "40"))
 
 
 def _step(name: str, fn, *args, **kwargs) -> dict:
@@ -112,6 +117,18 @@ def _run_once(cycle: int = 0) -> dict:
         return enrich_match_durations(limit=_DURATIONS_LIMIT)
 
     result["match_durations"] = _step("match_durations", _durations)
+
+    # 4b. Estadísticas de partido (2026-08-16, pedido explícito del
+    # usuario). Hace falta aparte porque el otro productor
+    # (`sync_worker::fill_missing_stats_for_player`) solo cubre a los
+    # jugadores de partidos NUEVOS de Kalshi -- el histórico nunca
+    # recibía stats por ahí. Mismo costo que duraciones (~2 requests a
+    # Flashscore por partido).
+    def _stats():
+        from scripts.tennis.enrich_match_stats import enrich_match_stats
+        return enrich_match_stats(limit=_STATS_LIMIT)
+
+    result["match_stats"] = _step("match_stats", _stats)
 
     # 5. Elo propio -- pase completo, solo cada N ciclos.
     if _SELF_ELO_EVERY_N > 0 and cycle % _SELF_ELO_EVERY_N == 0:
