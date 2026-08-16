@@ -13,6 +13,7 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis import Tournament
 from scripts.tennis.fill_tournament_metadata import (
     derive_tournament_level, fill_tournament_levels, fill_tournament_locations,
+    refine_generic_levels,
 )
 
 
@@ -179,3 +180,82 @@ def test_fill_locations_respects_limit():
         fill_tournament_locations(limit=2)
 
     assert geo.call_count == 2
+
+
+# --- refine_generic_levels (página de torneo de TennisExplorer) ---
+
+def test_refine_replaces_generic_level_with_exact_one():
+    """El genérico "ATP Tour" es transitorio: se refina al nivel exacto
+    leído de los puntos de ranking del ganador."""
+    _t("Hamburg", level="ATP Tour")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+        return_value={"city": "Hamburg", "country": "Germany",
+                      "winner_points": 500, "level": "ATP 500"},
+    ):
+        result = refine_generic_levels(limit=5)
+
+    assert result["refined"] == 1
+    row = Tournament.get(Tournament.tournament_name == "Hamburg")
+    assert row.level == "ATP 500"
+    assert row.city == "Hamburg"
+    assert row.country == "Germany"
+
+
+def test_refine_only_touches_generic_levels():
+    """Challenger/ITF ya tienen nivel exacto sin request -- no se gastan
+    requests en ellos, ni en los que ya tienen nivel concreto."""
+    _t("Asuncion challenger", level="Challenger")
+    _t("Miami", level="Masters 1000")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+    ) as info:
+        result = refine_generic_levels(limit=5)
+
+    info.assert_not_called()
+    assert result["processed"] == 0
+
+
+def test_refine_keeps_generic_when_page_not_found():
+    """Fail-closed: si la página no existe (challenger con slug propio,
+    torneo raro), se conserva el genérico en vez de romper o inventar."""
+    _t("Torneo Raro", level="ATP Tour")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+        return_value=None,
+    ):
+        result = refine_generic_levels(limit=5)
+
+    assert result["not_found"] == 1
+    assert Tournament.get(Tournament.tournament_name == "Torneo Raro").level == "ATP Tour"
+
+
+def test_refine_never_downgrades():
+    _t("Wimbledon", level="ATP Tour")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+        return_value={"city": "Wimbledon", "country": "Great Britain",
+                      "winner_points": None, "level": None},
+    ):
+        refine_generic_levels(limit=5)
+
+    # Nivel sin dato real -> se conserva el que había; la ciudad/país sí
+    # se aprovechan.
+    row = Tournament.get(Tournament.tournament_name == "Wimbledon")
+    assert row.level == "ATP Tour"
+    assert row.country == "Great Britain"
+
+
+def test_geocoding_uses_city_and_country_when_available():
+    """"Santiago" a secas es ambiguo (Chile/Compostela/Cuba) -- con país
+    conocido se consulta "Santiago, Chile"."""
+    _t("Santiago", city="Santiago", country="Chile")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_location", return_value=None,
+    ), patch(
+        "scripts.tennis.fill_tournament_metadata.geocode_city",
+        return_value={"lat": -33.4, "lon": -70.6, "display_name": "Santiago"},
+    ) as geo:
+        fill_tournament_locations(limit=5)
+
+    geo.assert_called_once_with("Santiago, Chile")

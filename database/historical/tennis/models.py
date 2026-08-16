@@ -118,6 +118,13 @@ class Tournament(HistoricalBaseModel):
     level = CharField(null=True)
     tour = CharField(null=True)  # "ATP" | "WTA" | "ATP/WTA"-- fuente de verdad REAL, 1 sola vez
     city = CharField()
+    # 2026-08-16: país real de la sede, leído del `<h1>` de la página de
+    # torneo de TennisExplorer ("Santiago 2026 (Chile)") -- ver
+    # `tennisexplorer_tournament_scraper.py`. `null=True`: no todas las
+    # filas lo tienen (challengers/ITF cuya página no se reconstruye).
+    # Su razón de ser es hacer PRECISO el geocoding: "santiago" a secas
+    # es ambiguo (Chile / Compostela / Cuba), "Santiago, Chile" no.
+    country = CharField(null=True)
     lat = FloatField(null=True)
     lon = FloatField(null=True)
     fetched_at = DateTimeField()

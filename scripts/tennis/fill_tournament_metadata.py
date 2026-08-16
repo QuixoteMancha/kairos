@@ -15,21 +15,29 @@ llenar (ver `kairos-reactive-gap-filler-worker-2026-08-16`).
    para los backtests del proyecto -- "250+" siempre significó
    "circuito principal, ni challenger ni ITF" -- sin pedirle nada a
    nadie.
-2. **Tabla estática de niveles altos** (`_MAIN_TOUR_LEVELS`): solo
-   Grand Slam, Masters 1000 y Finals, que son estables año a año y
-   verificables. NO se intenta clasificar 500 vs 250: esos rotan de
-   categoría entre temporadas y ponerlos de memoria sería fabricar el
-   dato -- se quedan como "ATP Tour"/"WTA Tour" (circuito principal,
-   nivel exacto desconocido), que es honesto y ya sirve para el filtro
-   250+.
-3. **API oficial WTA** (`wta_tournament_level_backfill.py`, ya
+2. **Tabla estática de niveles altos** (`_MAIN_TOUR_LEVELS`): Grand
+   Slam, Masters 1000 y Finals, estables año a año. Es un atajo sin
+   request, no la fuente de verdad (ver punto 3).
+3. **Página de torneo de TennisExplorer** (`refine_generic_levels` ->
+   `tennisexplorer_tournament_scraper`): nivel EXACTO a partir de los
+   puntos de ranking del ganador (2000 = Grand Slam, 1000 = Masters
+   1000, 500, 250...), + ciudad y país reales.
+
+   CORRECCIÓN de una conclusión previa mía (2026-08-16, a raíz de la
+   pregunta del usuario "¿tennis explorer no trae el nombre del
+   torneo?"): yo había afirmado que separar 500 de 250 era imposible
+   sin una fuente nueva y lo había dejado en un genérico "ATP Tour".
+   Era FALSO -- el dato estaba en TennisExplorer todo el tiempo. El
+   genérico ahora es solo un estado TRANSITORIO: lo pone el paso 1/2
+   (sin red) y el paso 3 lo refina al nivel exacto.
+4. **API oficial WTA** (`wta_tournament_level_backfill.py`, ya
    existente): niveles reales del lado WTA. Se mantiene aparte, este
    módulo no la duplica.
 
 La API oficial de ATP se probó en vivo (2026-08-16) y está BLOQUEADA
 (403/`itp-api` sin ruta, `protennislive` 401), y el repo de Sackmann que
-la suplía ya no existe (404) -- por eso el punto 2 es una tabla estática
-y no una descarga.
+la suplía ya no existe (404) -- por eso el nivel exacto sale de la
+página de TennisExplorer y no de una descarga oficial.
 
 NUNCA DEGRADA: igual que `wta_tournament_level_backfill`, si la fila ya
 tiene un nivel de mayor jerarquía, se conserva.
@@ -50,6 +58,7 @@ from typing import Any
 from database.db import init_db_historical
 from database.historical.tennis.models import Tournament
 from outer_apis.scrapers.tennis.nominatim_geocoder import geocode_city
+from outer_apis.scrapers.tennis.tennisexplorer_tournament_scraper import get_tournament_info
 from outer_apis.scrapers.tennis.tournament_location import (
     extract_city_candidate, get_location, normalize_tournament_name,
 )
@@ -161,6 +170,62 @@ def fill_tournament_levels(limit: int | None = None) -> dict[str, Any]:
     return {"updated": updated, "skipped": skipped}
 
 
+def refine_generic_levels(limit: int = 30) -> dict[str, Any]:
+    """Reemplaza los niveles GENÉRICOS ("ATP Tour"/"WTA Tour") por el
+    nivel EXACTO (Grand Slam / Masters 1000 / 500 / 250) leído de la
+    página real del torneo en TennisExplorer.
+
+    2026-08-16: nace de la pregunta del usuario "¿tennis explorer no
+    trae el nombre del torneo?" -- resultó que trae ciudad, país Y los
+    puntos de ranking del ganador, que SON el nivel. Esto corrige mi
+    conclusión previa de que 500-vs-250 era indeterminable.
+
+    De paso guarda la ciudad y el país reales, que es lo que después
+    hace preciso al geocoding (ver `fill_tournament_locations`).
+
+    Solo toca filas con nivel genérico: los challenger/ITF ya tienen su
+    nivel exacto derivado del nombre sin gastar un request, y los que ya
+    tienen nivel concreto no se re-consultan."""
+    init_db_historical()
+
+    query = (
+        Tournament
+        .select()
+        .where(Tournament.level.in_(["ATP Tour", "WTA Tour"]))
+        .limit(limit)
+    )
+
+    processed = refined = not_found = 0
+    now = datetime.now(timezone.utc)
+    for tournament in query:
+        processed += 1
+        info = get_tournament_info(
+            tournament.tournament_name, tournament.year, tournament.tour,
+        )
+        if info is None:
+            not_found += 1
+            continue
+
+        changed = False
+        if info["level"] and _priority(info["level"]) > _priority(tournament.level):
+            tournament.level = info["level"]
+            changed = True
+        # Ciudad/país reales -- alimentan el geocoding posterior.
+        if info["city"] and not tournament.city:
+            tournament.city = info["city"]
+            changed = True
+        if info["country"] and not tournament.country:
+            tournament.country = info["country"]
+            changed = True
+
+        if changed:
+            tournament.fetched_at = now
+            tournament.save()
+            refined += 1
+
+    return {"processed": processed, "refined": refined, "not_found": not_found}
+
+
 def fill_tournament_locations(limit: int = 25) -> dict[str, Any]:
     """Completa `Tournament.lat`/`lon`/`city` donde falten.
 
@@ -198,12 +263,21 @@ def fill_tournament_locations(limit: int = 25) -> dict[str, Any]:
             lat, lon = static
             display_city = city
         else:
-            geo = geocode_city(city)
+            # 2026-08-16: si ya conocemos ciudad+país reales (leídos de
+            # la página de torneo de TennisExplorer, ver
+            # `refine_generic_levels`), se consulta "Ciudad, País" en vez
+            # de solo la ciudad -- desambigua casos reales como
+            # "Santiago" (Chile / Compostela / Cuba).
+            if tournament.city and tournament.country:
+                query = f"{tournament.city}, {tournament.country}"
+            else:
+                query = city
+            geo = geocode_city(query)
             if geo is None:
                 not_found += 1
                 continue
             lat, lon = geo["lat"], geo["lon"]
-            display_city = city
+            display_city = tournament.city or city
 
         tournament.lat = lat
         tournament.lon = lon

@@ -64,7 +64,17 @@ ACCOUNTING_MIGRATIONS = (
     Migration(1, "postgresql_accounting_baseline_20260815", _create_accounting_schema),
 )
 
+def _add_tournament_country(database: Database) -> None:
+    """2026-08-16: `Tournament.country`, leído del `<h1>` de la página de
+    torneo de TennisExplorer -- hace preciso el geocoding de la sede
+    (ver `outer_apis/scrapers/tennis/tennisexplorer_tournament_scraper.py`).
+    Aditiva y nullable: no toca ni requiere backfill de las filas
+    existentes."""
+    database.execute_sql("ALTER TABLE tournament ADD COLUMN IF NOT EXISTS country VARCHAR(255)")
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
+    Migration(2, "add_tournament_country_20260816", _add_tournament_country),
 )
 

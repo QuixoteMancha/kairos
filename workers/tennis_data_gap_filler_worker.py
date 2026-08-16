@@ -32,12 +32,14 @@ orden de COSTO CRECIENTE, cada uno acotado y fail-closed por separado
      razonable para un dato que solo cambia cuando entran partidos
      nuevos.
 
-Los huecos que este worker sigue SIN poder llenar (fuente inexistente,
-NO se inventan): el nivel EXACTO 500 vs 250 del circuito principal
-(rota entre temporadas y la API oficial de ATP está bloqueada -- se
-marca "ATP Tour"/"WTA Tour", suficiente para el filtro 250+), y
-`MatchHistory.best_of`/`minutes`. Ver
-`scripts/tennis/fill_data_gaps.py` y `fill_tournament_metadata.py`.
+El nivel EXACTO (500 vs 250) SÍ se resuelve, vía
+`tournament_levels_refined` -> página de torneo de TennisExplorer
+(puntos de ranking del ganador). El genérico "ATP Tour"/"WTA Tour" que
+pone el paso sin-red es solo un estado transitorio hasta que ese paso
+lo refine.
+
+El único hueco que sigue SIN fuente es `MatchHistory.best_of`/`minutes`
+(columnas legacy) -- no se inventan. Ver `scripts/tennis/fill_data_gaps.py`.
 
 Env vars:
   `TENNIS_GAP_FILLER_INTERVAL_SECONDS` (default 3600 = 1h)
@@ -61,6 +63,7 @@ _BIO_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_BIO_LIMIT", "40"))
 _DURATIONS_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_DURATIONS_LIMIT", "40"))
 _SELF_ELO_EVERY_N = int(os.getenv("TENNIS_GAP_FILLER_SELF_ELO_EVERY_N_CYCLES", "6"))
 _GEOCODE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_GEOCODE_LIMIT", "25"))
+_REFINE_LIMIT = int(os.getenv("TENNIS_GAP_FILLER_REFINE_LIMIT", "30"))
 
 
 def _step(name: str, fn, *args, **kwargs) -> dict:
@@ -94,7 +97,12 @@ def _run_once(cycle: int = 0) -> dict:
         from scripts.tennis.fill_tournament_metadata import fill_tournament_locations
         return fill_tournament_locations(limit=_GEOCODE_LIMIT)
 
+    def _refine():
+        from scripts.tennis.fill_tournament_metadata import refine_generic_levels
+        return refine_generic_levels(limit=_REFINE_LIMIT)
+
     result["tournament_levels"] = _step("tournament_levels", _levels)
+    result["tournament_levels_refined"] = _step("tournament_levels_refined", _refine)
     result["tournament_locations"] = _step("tournament_locations", _locations)
 
     # 4. Duraciones -- import perezoso: arrastra los scrapers de
