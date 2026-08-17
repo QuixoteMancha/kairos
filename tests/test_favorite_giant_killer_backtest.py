@@ -221,3 +221,147 @@ def test_disabling_veto_reproduces_baseline_filters_only():
 
     assert len(cases_with_veto) == 0
     assert len(cases_without_veto) == 1
+
+
+# --- filtro de resiliencia del favorito (comeback + tiebreaks) ---
+
+def _match_with_score(a, b, *, match_date, score, winner, surface="Hard",
+                       a_rank=1, b_rank=50, a_elo=2000.0, b_elo=1500.0, match_id=None):
+    return MatchHistory.create(
+        match_id=match_id or f"m-{next(_seq)}", match_date=match_date, tour="ATP",
+        surface=surface, player_a=a, player_b=b, score=score,
+        player_a_elo_rank=a_rank, player_b_elo_rank=b_rank,
+        player_a_elo=a_elo, player_b_elo=b_elo,
+        winner=(a if winner == "a" else b), fetched_at=datetime.now(timezone.utc),
+    )
+
+
+def test_comeback_filter_rejects_favorite_who_never_comes_back():
+    """El favorito de este caso perdió el set1 en 5 partidos previos y
+    NUNCA remontó (0% de comeback) -- con el filtro activo, debe
+    rechazarse."""
+    fav, dog = _player(), _player()
+    _seed_qualifying_history(fav, dog)
+
+    # 5 partidos previos donde el favorito pierde set1 (6-7) y termina
+    # perdiendo el partido (0% comeback real).
+    victim = _player()
+    for i in range(5):
+        d = f"2024-01-{11+i:02d}"
+        row = _match_with_score(
+            fav, victim, match_date=d, score="6-7, 3-6", winner="b",
+            a_rank=10, b_rank=15, match_id=f"loss-after-l1-{i}",
+        )
+        _odds(row, fav, victim, 1.3, 3.2, d)
+
+    case_date = "2024-01-20"
+    row = _match(fav, dog, match_date=case_date, winner="a", match_id="case-comeback-veto")
+    _odds(row, fav, dog, 1.3, 3.2, case_date)
+
+    cases_no_filter, _ = collect_cases(min_favorite_comeback_rate=None)
+    cases_with_filter, skipped = collect_cases(min_favorite_comeback_rate=0.3)
+
+    assert any(c["match_id"] == "case-comeback-veto" for c in cases_no_filter)
+    assert not any(c["match_id"] == "case-comeback-veto" for c in cases_with_filter)
+    assert skipped.get("favorite_weak_comeback_after_l1", 0) >= 1
+
+
+def test_comeback_filter_allows_favorite_with_strong_comeback_record():
+    """El favorito remontó 5/5 veces tras perder el set1 -- con el
+    filtro activo (umbral 30%), el caso debe seguir pasando."""
+    fav, dog = _player(), _player()
+    _seed_qualifying_history(fav, dog)
+
+    victim = _player()
+    for i in range(5):
+        d = f"2024-01-{11+i:02d}"
+        row = _match_with_score(
+            fav, victim, match_date=d, score="6-7, 6-3, 6-2", winner="a",
+            a_rank=10, b_rank=15, match_id=f"comeback-win-{i}",
+        )
+        _odds(row, fav, victim, 1.3, 3.2, d)
+
+    case_date = "2024-01-20"
+    row = _match(fav, dog, match_date=case_date, winner="a", match_id="case-comeback-ok")
+    _odds(row, fav, dog, 1.3, 3.2, case_date)
+
+    cases, skipped = collect_cases(min_favorite_comeback_rate=0.3)
+    matching = [c for c in cases if c["match_id"] == "case-comeback-ok"]
+    assert len(matching) == 1
+    assert matching[0]["favorite_comeback_after_l1_rate"] == 1.0
+    assert matching[0]["favorite_comeback_after_l1_n"] == 5
+
+
+def test_tiebreak_filter_rejects_favorite_who_loses_tiebreaks():
+    """El favorito perdió 5 tiebreaks seguidos (0% tiebreak WR) --
+    con el filtro activo debe rechazarse."""
+    fav, dog = _player(), _player()
+    _seed_qualifying_history(fav, dog)
+
+    victim = _player()
+    for i in range(5):
+        d = f"2024-01-{11+i:02d}"
+        # Favorito (player_a) pierde el set en tiebreak (6-7) y el partido.
+        row = _match_with_score(
+            fav, victim, match_date=d, score="6-7, 4-6", winner="b",
+            a_rank=10, b_rank=15, match_id=f"tb-loss-{i}",
+        )
+        _odds(row, fav, victim, 1.3, 3.2, d)
+
+    case_date = "2024-01-20"
+    row = _match(fav, dog, match_date=case_date, winner="a", match_id="case-tb-veto")
+    _odds(row, fav, dog, 1.3, 3.2, case_date)
+
+    cases_no_filter, _ = collect_cases(min_favorite_tiebreak_win_rate=None)
+    cases_with_filter, skipped = collect_cases(min_favorite_tiebreak_win_rate=0.3)
+
+    assert any(c["match_id"] == "case-tb-veto" for c in cases_no_filter)
+    assert not any(c["match_id"] == "case-tb-veto" for c in cases_with_filter)
+    assert skipped.get("favorite_weak_tiebreak", 0) >= 1
+
+
+def test_resilience_filters_fail_closed_without_enough_sample():
+    """Con solo 1 partido previo (por debajo de MIN_RESILIENCE_SAMPLE),
+    el filtro NO debe aplicarse -- muestra insuficiente, fail-closed."""
+    fav, dog = _player(), _player()
+    _seed_qualifying_history(fav, dog)
+
+    victim = _player()
+    row = _match_with_score(
+        fav, victim, match_date="2024-01-11", score="6-7, 3-6", winner="b",
+        a_rank=10, b_rank=15, match_id="only-one-loss",
+    )
+    _odds(row, fav, victim, 1.3, 3.2, "2024-01-11")
+
+    case_date = "2024-01-20"
+    row = _match(fav, dog, match_date=case_date, winner="a", match_id="case-insufficient-sample")
+    _odds(row, fav, dog, 1.3, 3.2, case_date)
+
+    cases, skipped = collect_cases(min_favorite_comeback_rate=0.9)
+    assert any(c["match_id"] == "case-insufficient-sample" for c in cases)
+    assert skipped.get("favorite_weak_comeback_after_l1", 0) == 0
+
+
+def test_resilience_never_uses_future_matches():
+    """El comeback-rate del favorito no debe verse afectado por
+    partidos posteriores a la fecha del caso."""
+    fav, dog = _player(), _player()
+    _seed_qualifying_history(fav, dog)
+
+    case_date = "2024-01-20"
+    row = _match(fav, dog, match_date=case_date, winner="a", match_id="case-before-future")
+    _odds(row, fav, dog, 1.3, 3.2, case_date)
+
+    victim = _player()
+    for i in range(5):
+        d = f"2024-02-{1+i:02d}"  # DESPUÉS del caso
+        future_row = _match_with_score(
+            fav, victim, match_date=d, score="6-7, 3-6", winner="b",
+            a_rank=10, b_rank=15, match_id=f"future-loss-{i}",
+        )
+        _odds(future_row, fav, victim, 1.3, 3.2, d)
+
+    cases, _ = collect_cases(min_favorite_comeback_rate=0.9)
+    matching = [c for c in cases if c["match_id"] == "case-before-future"]
+    assert len(matching) == 1
+    assert matching[0]["favorite_comeback_after_l1_n"] == 0

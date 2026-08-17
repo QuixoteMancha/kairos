@@ -28,21 +28,36 @@ from typing import Any
 _MIN_MATCHES = 5  # fail-closed: menos partidos utilizables -> sin señal confiable.
 
 _SET_RE = re.compile(r"^(\d+)-(\d+)$")
+_SUP_TAG_RE = re.compile(r"<sup>.*?</sup>", re.DOTALL)
 
 
 def parse_set_scores(score: str | None) -> list[tuple[int, int]] | None:
-    """Parsea "6-4 3-6 6-2" -> [(6,4), (3,6), (6,2)], siempre desde la
+    """Parsea "6-4, 3-6, 6-2" -> [(6,4), (3,6), (6,2)], siempre desde la
     perspectiva del jugador cuyo historial se está mirando (mismo
     convenio que `flashscore_scraper.get_player_recent_matches`, que ya
     orienta el score a "propios-rivales" antes de guardarlo).
+
+    2026-08-17, bug real encontrado ANTES de construir el filtro de
+    resiliencia point-in-time que pidió el usuario: esta función nunca
+    funcionó contra el formato real de `MatchHistory.score` -- separador
+    real es COMA, no espacio (`"6-1, 6-1"`), y el marcador de tiebreak
+    trae el tag `<sup>N</sup>` sin limpiar (`"7-6<sup>3</sup>, 6-1"`,
+    mismo patrón ya encontrado y arreglado en el parser de Flashscore
+    2026-08-12). Verificado: `parse_set_scores` devolvía `None` para
+    el 100% de los scores reales de producción, nunca se detectó porque
+    el módulo entero nunca se deployó. Ahora: se quitan los tags
+    `<sup>` (igual que en `flashscore_scraper._parse_score_sets`) y se
+    separa por coma.
 
     Fail-closed: None si el string está vacío, tiene un token que no
     matchea "N-N", o tiene menos de 2 sets (partido no resuelto / walkover
     sin secuencia completa) -- nunca se rellena un set faltante."""
     if not score:
         return None
+    cleaned = _SUP_TAG_RE.sub("", score)
     sets: list[tuple[int, int]] = []
-    for token in score.split():
+    for token in cleaned.split(","):
+        token = token.strip()
         m = _SET_RE.match(token)
         if not m:
             return None

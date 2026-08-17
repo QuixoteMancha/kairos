@@ -45,16 +45,26 @@ def test_surface_from_rules_secondary_end_to_end():
 
 
 def test_parse_set_scores_valid_and_invalid():
-    assert parse_set_scores("6-4 3-6 6-2") == [(6, 4), (3, 6), (6, 2)]
+    assert parse_set_scores("6-4, 3-6, 6-2") == [(6, 4), (3, 6), (6, 2)]
     assert parse_set_scores("6-4") is None  # menos de 2 sets
-    assert parse_set_scores("6-x 3-6") is None  # token no numérico
+    assert parse_set_scores("6-x, 3-6") is None  # token no numérico
     assert parse_set_scores(None) is None
     assert parse_set_scores("") is None
 
 
+def test_parse_set_scores_strips_tiebreak_sup_tags():
+    """2026-08-17, bug real encontrado antes de construir el filtro de
+    resiliencia: el formato REAL de `MatchHistory.score` usa coma como
+    separador (no espacio, que era lo que el test/parser viejo
+    asumían -- por eso el bug nunca se detectó) y trae el marcador de
+    tiebreak `<sup>N</sup>`, en cualquiera de los 2 lados del guión."""
+    assert parse_set_scores("7-6<sup>3</sup>, 6-1") == [(7, 6), (6, 1)]
+    assert parse_set_scores("6<sup>5</sup>-7, 6-4, 6-2") == [(6, 7), (6, 4), (6, 2)]
+
+
 def test_get_set_tendencies_none_when_insufficient_sample():
     with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=[
-        {"score": "6-4 6-3"}, {"score": "6-2 6-1"},
+        {"score": "6-4, 6-3"}, {"score": "6-2, 6-1"},
     ]):
         assert get_set_tendencies("Jugadora X") is None  # solo 2 partidos, MIN_MATCHES=5
 
@@ -63,11 +73,11 @@ def test_get_set_tendencies_computes_conditional_rates_with_enough_sample():
     # 5 partidos, todos con set1+set2 resueltos:
     # 3 ganó set1 (de esos, ganó set2 en 2) ; 2 perdió set1 (de esos, remontó ganando set2 en 1)
     matches = [
-        {"score": "6-4 6-3"},  # ganó set1, ganó set2
-        {"score": "6-4 6-3"},  # ganó set1, ganó set2
-        {"score": "6-4 3-6 6-2"},  # ganó set1, perdió set2
-        {"score": "3-6 6-4 6-2"},  # perdió set1, remontó set2
-        {"score": "3-6 4-6"},  # perdió set1, perdió set2
+        {"score": "6-4, 6-3"},  # ganó set1, ganó set2
+        {"score": "6-4, 6-3"},  # ganó set1, ganó set2
+        {"score": "6-4, 3-6, 6-2"},  # ganó set1, perdió set2
+        {"score": "3-6, 6-4, 6-2"},  # perdió set1, remontó set2
+        {"score": "3-6, 4-6"},  # perdió set1, perdió set2
     ]
     with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
         result = get_set_tendencies("Jugadora Y")
@@ -84,7 +94,7 @@ def test_get_set_tendencies_computes_conditional_rates_with_enough_sample():
 def test_get_set_tendencies_fills_conditional_rates_with_enough_sub_sample():
     # 10 partidos donde SIEMPRE gana el set 1 (10 obs en esa rama) y de esos
     # gana el set 2 en 6 -- rama "perdió set1" queda vacía (0 obs, None).
-    matches = [{"score": "6-4 6-3"}] * 6 + [{"score": "6-4 3-6 6-2"}] * 4
+    matches = [{"score": "6-4, 6-3"}] * 6 + [{"score": "6-4, 3-6, 6-2"}] * 4
     with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
         result = get_set_tendencies("Jugadora Z")
 
@@ -96,10 +106,10 @@ def test_get_set_tendencies_fills_conditional_rates_with_enough_sub_sample():
 
 def test_get_set_win_rates_by_set_and_surface():
     matches = [
-        {"score": "6-4 6-3", "surface": "Clay"},
-        {"score": "6-4 3-6 6-2", "surface": "Clay"},
-        {"score": "3-6 6-4 6-2", "surface": "Hard"},
-        {"score": "6-4 6-3", "surface": "Hard"},
+        {"score": "6-4, 6-3", "surface": "Clay"},
+        {"score": "6-4, 3-6, 6-2", "surface": "Clay"},
+        {"score": "3-6, 6-4, 6-2", "surface": "Hard"},
+        {"score": "6-4, 6-3", "surface": "Hard"},
     ]
     with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
         result_clay = get_set_win_rates("Jugadora S", n=10, surface="Clay")
@@ -120,12 +130,12 @@ def test_get_set_win_rates_by_set_and_surface():
 
 def test_get_set_tendencies_all_set3_branches():
     matches = [
-        {"score": "6-4 4-6 6-4"},  # W-L-W
-        {"score": "6-4 4-6 3-6"},  # W-L-L
-        {"score": "4-6 6-4 6-4"},  # L-W-W
-        {"score": "4-6 6-4 4-6"},  # L-W-L
-        {"score": "6-4 6-4 6-4"},  # W-W-W
-        {"score": "4-6 4-6"},      # L-L no set3
+        {"score": "6-4, 4-6, 6-4"},  # W-L-W
+        {"score": "6-4, 4-6, 3-6"},  # W-L-L
+        {"score": "4-6, 6-4, 6-4"},  # L-W-W
+        {"score": "4-6, 6-4, 4-6"},  # L-W-L
+        {"score": "6-4, 6-4, 6-4"},  # W-W-W
+        {"score": "4-6, 4-6"},      # L-L no set3
     ]
     with patch("outer_apis.sports.tennis.match_history.get_recent_matches", return_value=matches):
         result = get_set_tendencies("Jugadora T", n=10)

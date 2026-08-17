@@ -46,6 +46,7 @@ from typing import Any
 
 from database.db import db_historical, init_db_historical
 from database.historical.tennis import MatchHistory
+from outer_apis.sports.tennis.set_sequence_stats import parse_set_scores
 from scripts.tennis.bet_on_favourite_backtest import RANK_GAP_BY_TOUR, _odds_for_match, simulate
 
 # Umbrales del veto de "asesino de gigantes" -- validados
@@ -56,24 +57,76 @@ UPSET_ELO_GAP = 50.0
 MAX_UNDERDOG_UPSET_RATE = 0.5
 MIN_UPSET_ATTEMPTS = 3
 
+# --- Filtro de resiliencia del FAVORITO -- 2026-08-17, pedido explícito
+# del usuario: "no tenemos stop loss... apostamos el 100% sin retirar si
+# las cosas empiezan a ir mal para el favorito. Necesitamos un segundo
+# set de filtros... cuándo es más probable que el favorito logre
+# remontar si pierde el 1er o el segundo set luego de ganar el primero
+# ... específico para cada player, superficie, y su wr en tbs."
+#
+# Como `simulate()` liquida el 100% del stake si el favorito termina
+# perdiendo (sin salida a mitad de partido, ver docstring de
+# `bet_on_favourite_backtest.simulate` -- no hay precio in-play
+# histórico para simular una salida real), la única defensa disponible
+# hoy es de ENTRADA: no tomar el pick si el favorito tiene un
+# historial real de "doblarse" cuando el partido se pone cuesta arriba,
+# en vez de pelear. Point-in-time real, misma disciplina que el veto de
+# arriba -- nunca mira el propio caso ni partidos futuros.
+MIN_RESILIENCE_SAMPLE = 5  # mínimo de observaciones para confiar en la tasa (fail-closed si menos)
+MIN_SURFACE_RESILIENCE_SAMPLE = 3  # umbral más bajo para la variante por superficie (dato más escaso)
+
+
+def _rate(events: list[bool], overall_events: list[bool]) -> tuple[float | None, int, bool]:
+    """Tasa point-in-time con fallback superficie -> general.
+
+    Returns: (tasa, tamaño de muestra usado, usó_superficie). Fail-closed:
+    `(None, 0, False)` si ni la muestra por superficie ni la general
+    alcanzan el mínimo requerido -- nunca se calcula una tasa de menos
+    de `MIN_SURFACE_RESILIENCE_SAMPLE`/`MIN_RESILIENCE_SAMPLE` casos."""
+    if len(events) >= MIN_SURFACE_RESILIENCE_SAMPLE:
+        return sum(events) / len(events), len(events), True
+    if len(overall_events) >= MIN_RESILIENCE_SAMPLE:
+        return sum(overall_events) / len(overall_events), len(overall_events), False
+    return None, 0, False
+
 
 def collect_cases(
     *,
     max_underdog_upset_rate: float | None = MAX_UNDERDOG_UPSET_RATE,
     min_upset_attempts: int = MIN_UPSET_ATTEMPTS,
     upset_elo_gap: float = UPSET_ELO_GAP,
+    min_favorite_comeback_rate: float | None = None,
+    min_favorite_tiebreak_win_rate: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Construye casos point-in-time, sin leakage de resultado futuro.
 
-    `max_underdog_upset_rate=None` desactiva el veto nuevo (deja el
-    comportamiento idéntico a `bet_on_favourite_backtest.collect_cases`,
-    útil para comparar apples-to-apples en el mismo proceso)."""
+    `max_underdog_upset_rate=None` desactiva el veto de asesino de
+    gigantes (deja el comportamiento idéntico a
+    `bet_on_favourite_backtest.collect_cases`, útil para comparar
+    apples-to-apples en el mismo proceso).
+
+    `min_favorite_comeback_rate`/`min_favorite_tiebreak_win_rate`:
+    filtro de resiliencia del FAVORITO (ver docstring del módulo,
+    "no tenemos stop loss"). Rechaza el caso si CUALQUIERA de las 2
+    tasas de remontada (perdió set1 -> ganó el partido; ganó set1,
+    perdió set2 -> ganó el partido) o la tasa de tiebreaks está por
+    debajo del umbral, PRIORIZANDO la variante por superficie sobre la
+    general cuando hay muestra suficiente (`_rate`). `None` (default)
+    desactiva cada filtro por separado -- sin umbral validado todavía,
+    ver `run_resilience_sweep` para el sondeo que hace falta antes de
+    fijar un valor por default real."""
     init_db_historical()
     surface_record: dict[tuple[str, str], list[tuple[date, bool]]] = defaultdict(list)
     recent_record: dict[str, deque[bool]] = defaultdict(lambda: deque(maxlen=10))
     # (elo_gap_cuando_era_underdog, ganó) -- historial COMPLETO por
     # jugador, no acotado a los últimos N (queremos la tasa real).
     upset_record: dict[int, deque[tuple[float, bool]]] = defaultdict(deque)
+    # Resiliencia del favorito -- point-in-time, claves (player_id,
+    # surface) para la variante específica y (player_id, None) para la
+    # general (fallback cuando la muestra por superficie es chica).
+    comeback_after_l1: dict[tuple[int, str | None], list[bool]] = defaultdict(list)
+    comeback_after_w1l2: dict[tuple[int, str | None], list[bool]] = defaultdict(list)
+    tiebreak_record: dict[tuple[int, str | None], list[bool]] = defaultdict(list)
     cases: list[dict[str, Any]] = []
     skipped: dict[str, int] = defaultdict(int)
 
@@ -131,6 +184,18 @@ def collect_cases(
                     dog_upset_wins / dog_upset_attempts if dog_upset_attempts else None
                 )
 
+                # Resiliencia del FAVORITO -- point-in-time, mismo
+                # criterio (superficie con fallback a general).
+                comeback_l1_rate, comeback_l1_n, comeback_l1_surf = _rate(
+                    comeback_after_l1[(fav_id, surface)], comeback_after_l1[(fav_id, None)],
+                )
+                comeback_w1l2_rate, comeback_w1l2_n, comeback_w1l2_surf = _rate(
+                    comeback_after_w1l2[(fav_id, surface)], comeback_after_w1l2[(fav_id, None)],
+                )
+                tiebreak_rate, tiebreak_n, tiebreak_surf = _rate(
+                    tiebreak_record[(fav_id, surface)], tiebreak_record[(fav_id, None)],
+                )
+
                 if len(fav_record) < 3 or len(dog_record) < 3:
                     skipped["no_surface_52w_sample"] += 1
                 elif len(fav_recent) < 5 or len(dog_recent) < 5:
@@ -153,6 +218,24 @@ def collect_cases(
                         and dog_upset_rate > max_underdog_upset_rate
                     ):
                         skipped["underdog_giant_killer"] += 1
+                    elif (
+                        min_favorite_comeback_rate is not None
+                        and comeback_l1_rate is not None
+                        and comeback_l1_rate < min_favorite_comeback_rate
+                    ):
+                        skipped["favorite_weak_comeback_after_l1"] += 1
+                    elif (
+                        min_favorite_comeback_rate is not None
+                        and comeback_w1l2_rate is not None
+                        and comeback_w1l2_rate < min_favorite_comeback_rate
+                    ):
+                        skipped["favorite_weak_comeback_after_w1l2"] += 1
+                    elif (
+                        min_favorite_tiebreak_win_rate is not None
+                        and tiebreak_rate is not None
+                        and tiebreak_rate < min_favorite_tiebreak_win_rate
+                    ):
+                        skipped["favorite_weak_tiebreak"] += 1
                     else:
                         cases.append({
                             "match_id": row.match_id,
@@ -169,6 +252,12 @@ def collect_cases(
                             "underdog_recent_10_winrate": dog_recent_wr,
                             "underdog_upset_attempts": dog_upset_attempts,
                             "underdog_upset_rate": dog_upset_rate,
+                            "favorite_comeback_after_l1_rate": comeback_l1_rate,
+                            "favorite_comeback_after_l1_n": comeback_l1_n,
+                            "favorite_comeback_after_w1l2_rate": comeback_w1l2_rate,
+                            "favorite_comeback_after_w1l2_n": comeback_w1l2_n,
+                            "favorite_tiebreak_win_rate": tiebreak_rate,
+                            "favorite_tiebreak_n": tiebreak_n,
                             "favorite_decimal_odds": fav_odds,
                             "hit": row.winner_id == fav_id,
                         })
@@ -191,7 +280,79 @@ def collect_cases(
                 if b_gap >= upset_elo_gap:
                     upset_record[row.player_b_id].append((b_gap, not a_won))
 
+            # --- resiliencia: parsear la secuencia de sets UNA vez y
+            # actualizar ambos jugadores, orientando cada set a cada
+            # lado (mismo string "sets_a-sets_b" por token, ver
+            # verificación real 2026-08-17 en `set_sequence_stats.py`).
+            sets = parse_set_scores(row.score)
+            if sets is not None and len(sets) >= 2:
+                a_id, b_id = row.player_a_id, row.player_b_id
+                s1_a, s1_b = sets[0]
+                s2_a, s2_b = sets[1]
+                if s1_a != s1_b and s2_a != s2_b:
+                    a_won_set1, b_won_set1 = s1_a > s1_b, s1_b > s1_a
+                    a_won_set2, b_won_set2 = s2_a > s2_b, s2_b > s2_a
+                    a_won_match = row.winner_id == a_id
+                    b_won_match = not a_won_match
+                    for pid, won_set1, won_set2, won_match in (
+                        (a_id, a_won_set1, a_won_set2, a_won_match),
+                        (b_id, b_won_set1, b_won_set2, b_won_match),
+                    ):
+                        keys = ((pid, surface), (pid, None)) if surface else ((pid, None),)
+                        if not won_set1:
+                            for key in keys:
+                                comeback_after_l1[key].append(won_match)
+                        elif won_set1 and not won_set2:
+                            for key in keys:
+                                comeback_after_w1l2[key].append(won_match)
+                for set_a, set_b in sets:
+                    # Tiebreak real: 7-6 o 6-7 en games (única forma de
+                    # llegar a 7 con el rival en 6, regla estándar).
+                    if {set_a, set_b} == {7, 6}:
+                        a_won_tb = set_a == 7
+                        keys_a = ((a_id, surface), (a_id, None)) if surface else ((a_id, None),)
+                        keys_b = ((b_id, surface), (b_id, None)) if surface else ((b_id, None),)
+                        for key in keys_a:
+                            tiebreak_record[key].append(a_won_tb)
+                        for key in keys_b:
+                            tiebreak_record[key].append(not a_won_tb)
+
     return cases, dict(skipped)
+
+
+def run_resilience_sweep() -> dict[str, Any]:
+    """Sondeo exploratorio de umbrales de resiliencia -- barre
+    `min_favorite_comeback_rate` y `min_favorite_tiebreak_win_rate` por
+    separado sobre la base ya filtrada (rank_gap+superficie+forma+veto
+    de asesino de gigantes) para encontrar un umbral real antes de
+    fijarlo como default. Mismo criterio que ya se aplicó para el veto
+    de upsets: NUNCA se elige un umbral mirando el resultado agregado
+    sin, como mínimo, revisar la estabilidad por año."""
+    results: dict[str, Any] = {}
+    baseline_cases, _ = collect_cases()
+    results["baseline (solo veto asesino de gigantes)"] = {
+        "n": len(baseline_cases), **simulate(baseline_cases, 50.0),
+    }
+    for label, kwargs in (
+        ("comeback>=30%", {"min_favorite_comeback_rate": 0.30}),
+        ("comeback>=40%", {"min_favorite_comeback_rate": 0.40}),
+        ("comeback>=50%", {"min_favorite_comeback_rate": 0.50}),
+        ("tiebreak>=40%", {"min_favorite_tiebreak_win_rate": 0.40}),
+        ("tiebreak>=50%", {"min_favorite_tiebreak_win_rate": 0.50}),
+        ("tiebreak>=60%", {"min_favorite_tiebreak_win_rate": 0.60}),
+        ("comeback>=40% + tiebreak>=50%", {
+            "min_favorite_comeback_rate": 0.40, "min_favorite_tiebreak_win_rate": 0.50,
+        }),
+    ):
+        cases, _ = collect_cases(**kwargs)
+        sim = simulate(cases, 50.0)
+        by_year = {}
+        for year in sorted({int(c["date"][:4]) for c in cases}):
+            yearly = [c for c in cases if int(c["date"][:4]) == year]
+            if len(yearly) >= 5:
+                by_year[str(year)] = simulate(yearly, 50.0)
+        results[label] = {"n": len(cases), **sim, "by_year": by_year}
+    return results
 
 
 def run_backtest(initial_capital: float = 50.0) -> dict[str, Any]:
