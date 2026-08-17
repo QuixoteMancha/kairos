@@ -121,7 +121,10 @@ def has_match_stats_for_history(match_history_id: int) -> bool:
         return False
 
 
-def remember_match_stats_source(match_history_id: int, flashscore_match_id: str) -> bool:
+def remember_match_stats_source(
+    match_history_id: int, flashscore_match_id: str,
+    player_a_is_p1: bool | None = None,
+) -> bool:
     """Conserva el ID resuelto aunque Flashscore aún no entregue stats."""
     try:
         init_db_historical()
@@ -134,22 +137,47 @@ def remember_match_stats_source(match_history_id: int, flashscore_match_id: str)
                 source="flashscore",
                 market_id=f"history:{match_history_id}",
                 flashscore_match_id=flashscore_match_id,
+                player_a_is_flashscore_p1=player_a_is_p1,
                 raw_stats_json="{}",
                 fetched_at=_now(),
                 is_usable=False,
                 invalid_reason="stats pendientes",
             )
-        elif row.flashscore_match_id != flashscore_match_id:
-            row.flashscore_match_id = flashscore_match_id
-            row.fetched_at = _now()
-            row.save(only=[TennisMatchStats.flashscore_match_id, TennisMatchStats.fetched_at])
+        else:
+            changed = []
+            if row.flashscore_match_id != flashscore_match_id:
+                row.flashscore_match_id = flashscore_match_id
+                changed.append(TennisMatchStats.flashscore_match_id)
+            if player_a_is_p1 is not None and row.player_a_is_flashscore_p1 != player_a_is_p1:
+                row.player_a_is_flashscore_p1 = player_a_is_p1
+                changed.append(TennisMatchStats.player_a_is_flashscore_p1)
+            if changed:
+                row.fetched_at = _now()
+                changed.append(TennisMatchStats.fetched_at)
+                row.save(only=changed)
         return True
     except Exception:
         return False
 
 
+def match_stats_source_identity(match_history_id: int) -> tuple[str, bool] | None:
+    """Devuelve ID y orientación sólo cuando ambos quedaron verificados."""
+    try:
+        row = TennisMatchStats.get_or_none(
+            TennisMatchStats.match_history == match_history_id
+        )
+        if (
+            row is None or row.flashscore_match_id is None
+            or row.player_a_is_flashscore_p1 is None
+        ):
+            return None
+        return row.flashscore_match_id, row.player_a_is_flashscore_p1
+    except Exception:
+        return None
+
+
 def match_stats_source_id(match_history_id: int) -> str | None:
-    """Devuelve el ID de Flashscore previamente resuelto, si existe."""
+    """API compatible para consumidores que sólo necesitan el ID."""
     try:
         row = TennisMatchStats.get_or_none(
             TennisMatchStats.match_history == match_history_id
@@ -159,14 +187,91 @@ def match_stats_source_id(match_history_id: int) -> str | None:
         return None
 
 
+def orient_stats_to_match_history(
+    stats: dict[str, Any], player_a_is_p1: bool,
+) -> dict[str, Any]:
+    """Convierte pares P1/P2 del proveedor a player_a/player_b canónicos."""
+    if player_a_is_p1:
+        return stats
+    oriented: dict[str, Any] = {}
+    for section_name, section in (stats or {}).items():
+        if not isinstance(section, dict):
+            oriented[section_name] = section
+            continue
+        oriented[section_name] = {
+            stat_name: [pair[1], pair[0]]
+            if isinstance(pair, (list, tuple)) and len(pair) == 2 else pair
+            for stat_name, pair in section.items()
+        }
+    return oriented
+
+
+def apply_match_stats_orientation(
+    match_history_id: int, player_a_is_p1: bool,
+) -> bool:
+    """Repara una fila legacy una sola vez y marca su orientación fuente."""
+    try:
+        init_db_historical()
+        row = TennisMatchStats.get(
+            TennisMatchStats.match_history == match_history_id
+        )
+        if row.player_a_is_flashscore_p1 is not None:
+            return True
+        with TennisMatchStats._meta.database.atomic():
+            if not player_a_is_p1:
+                try:
+                    raw = json.loads(row.raw_stats_json or "{}")
+                    row.raw_stats_json = json.dumps(
+                        orient_stats_to_match_history(raw, False)
+                    )
+                except (TypeError, ValueError):
+                    return False
+                fields = TennisMatchStats._meta.fields
+                for name in tuple(fields):
+                    if not name.endswith("_a"):
+                        continue
+                    peer = f"{name[:-2]}_b"
+                    if peer in fields:
+                        a_value, b_value = getattr(row, name), getattr(row, peer)
+                        setattr(row, name, b_value)
+                        setattr(row, peer, a_value)
+                for set_row in TennisMatchStatsSet.select().where(
+                    TennisMatchStatsSet.match_history == match_history_id
+                ):
+                    set_fields = TennisMatchStatsSet._meta.fields
+                    for name in tuple(set_fields):
+                        if name.endswith("_a") and f"{name[:-2]}_b" in set_fields:
+                            peer = f"{name[:-2]}_b"
+                            a_value, b_value = getattr(set_row, name), getattr(set_row, peer)
+                            setattr(set_row, name, b_value)
+                            setattr(set_row, peer, a_value)
+                    try:
+                        raw_set = json.loads(set_row.raw_stats_json or "{}")
+                        set_row.raw_stats_json = json.dumps({
+                            key: [value[1], value[0]]
+                            if isinstance(value, (list, tuple)) and len(value) == 2 else value
+                            for key, value in raw_set.items()
+                        })
+                    except (TypeError, ValueError):
+                        return False
+                    set_row.save()
+            row.player_a_is_flashscore_p1 = player_a_is_p1
+            row.save()
+        return True
+    except Exception:
+        return False
+
+
 def save_match_stats_for_history_status(
     match_history_id: int, flashscore_match_id: str, stats: dict[str, Any],
+    *, player_a_is_p1: bool = True,
 ) -> str:
     """Persiste stats y distingue guardado, feed incompleto y fallo DB."""
     if not stats:
         return "source_unavailable"
     try:
         init_db_historical()
+        stats = orient_stats_to_match_history(stats, player_a_is_p1)
         existing = TennisMatchStats.get_or_none(
             TennisMatchStats.match_history == match_history_id
         )
@@ -174,7 +279,9 @@ def save_match_stats_for_history_status(
             return "already_usable"
         if not stats_are_usable(stats):
             if existing is None:
-                remember_match_stats_source(match_history_id, flashscore_match_id)
+                remember_match_stats_source(
+                    match_history_id, flashscore_match_id, player_a_is_p1,
+                )
                 existing = TennisMatchStats.get(
                     TennisMatchStats.match_history == match_history_id
                 )
@@ -186,6 +293,7 @@ def save_match_stats_for_history_status(
             return classify_unusable_stats(stats)
         fields = {
             "flashscore_match_id": flashscore_match_id,
+            "player_a_is_flashscore_p1": player_a_is_p1,
             "raw_stats_json": json.dumps(stats), "fetched_at": _now(),
             "is_usable": True, "invalid_reason": None,
             **typed_columns_from_stats(stats.get("match") or {}),
@@ -208,7 +316,10 @@ def save_match_stats_for_history_status(
         return "database_write_failed"
 
 
-def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str, stats: dict[str, Any]) -> bool:
+def save_match_stats_for_history(
+    match_history_id: int, flashscore_match_id: str, stats: dict[str, Any],
+    *, player_a_is_p1: bool = True,
+) -> bool:
     """Igual que `save_match_stats` pero vinculando por `MatchHistory`
     (`source="flashscore"`) en vez de `market_id` de Kalshi -- ver
     docstring del módulo y `has_match_stats_for_history`. `market_id`
@@ -221,6 +332,7 @@ def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str
     falló (fail-closed, nunca duplica ni lanza)."""
     return save_match_stats_for_history_status(
         match_history_id, flashscore_match_id, stats,
+        player_a_is_p1=player_a_is_p1,
     ) == "saved"
 
 

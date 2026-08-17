@@ -45,7 +45,9 @@ from database.historical.tennis.writer import _lookup_player_id
 from database.historical.tennis.matchstats import has_match_stats_for_history, save_match_stats_for_history
 from database.historical.tennis.player_sync_status import get_pending_priority_requests, mark_player_synced
 from outer_apis.sports.tennis.rankings import get_top_rankings
-from outer_apis.scrapers.tennis.flashscore_scraper import find_match_id, get_match_statistics
+from outer_apis.scrapers.tennis.flashscore_scraper import (
+    find_match_identity, get_match_statistics,
+)
 from scripts.tennis.wta_top200_historical_backfill import backfill_player
 
 _BATCH_SIZE = int(os.getenv("TENNIS_HISTORY_SYNC_BATCH_SIZE", "10"))
@@ -92,14 +94,18 @@ def fill_missing_stats_for_player(player_name: str, limit: int = _STATS_FILL_LIM
             # Flashscore tenga el MISMO resultado de sets, no solo
             # nombre+fecha.
             tournament_name = mh.tournament.tournament_name if mh.tournament else None
-            match_id = find_match_id(
+            identity = find_match_identity(
                 mh.player_a.canonical_name, mh.player_b.canonical_name, mh.match_date or "",
                 tournament_name, expected_score=mh.score,
             )
-            if not match_id:
+            if not identity:
                 continue
+            match_id = identity["match_id"]
             stats = get_match_statistics(match_id)
-            if stats and save_match_stats_for_history(mh.id, match_id, stats):
+            if stats and save_match_stats_for_history(
+                mh.id, match_id, stats,
+                player_a_is_p1=identity["player_a_is_p1"],
+            ):
                 filled += 1
         except Exception:
             continue

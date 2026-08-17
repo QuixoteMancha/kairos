@@ -29,12 +29,12 @@ from typing import Any
 
 from database.db import init_db_historical
 from database.historical.tennis.matchstats import (
-    has_match_stats_for_history, match_stats_source_id,
+    has_match_stats_for_history, match_stats_source_identity,
     remember_match_stats_source, save_match_stats_for_history_status,
 )
 from database.historical.tennis.models import MatchHistory
 from outer_apis.scrapers.tennis.flashscore_scraper import (
-    find_match_id, get_match_statistics,
+    find_match_identity, get_match_statistics,
 )
 from database.historical.tennis.models import MatchStats
 from scripts.tennis.rotating_batch import take_rotating_batch
@@ -96,7 +96,7 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
         cursor_key="tennis_match_stats",
     )
 
-    processed = resolved = not_found = errors = deferred = 0
+    processed = resolved = not_found = incomplete = errors = deferred = 0
     failure_categories = {
         "match_lookup_not_found": 0,
         "source_stats_unavailable": 0,
@@ -117,27 +117,29 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
             # La duración y las stats viven en feeds distintos pero usan
             # el mismo ID de Flashscore. Reutilizarlo evita repetir la
             # búsqueda más costosa cuando el otro worker ya la resolvió.
-            fs_match_id = (
-                match.duration.flashscore_match_id
-                if match.duration_id is not None else None
-            )
-            if fs_match_id is None:
-                fs_match_id = match_stats_source_id(match.id)
-            if fs_match_id is None:
+            source_identity = match_stats_source_identity(match.id)
+            if source_identity is None:
                 tournament_name = match.tournament.tournament_name if match.tournament else None
-                fs_match_id = find_match_id(
+                identity = find_match_identity(
                     match.player_a.canonical_name, match.player_b.canonical_name,
                     match.match_date, tournament_name, expected_score=match.score,
                 )
-            if fs_match_id is None:
+                source_identity = (
+                    (identity["match_id"], identity["player_a_is_p1"])
+                    if identity else None
+                )
+            if source_identity is None:
                 not_found += 1
                 failure_categories["match_lookup_not_found"] += 1
                 record_enrichment_failure("tennis_match_stats", match.id, "match no encontrado")
                 continue
+            fs_match_id, player_a_is_p1 = source_identity
 
             # Resolver nombres/fecha es la parte cara. Conservar el ID aun
             # cuando el proveedor no tenga stats evita repetir esa búsqueda.
-            if not remember_match_stats_source(match.id, fs_match_id):
+            if not remember_match_stats_source(
+                match.id, fs_match_id, player_a_is_p1,
+            ):
                 errors += 1
                 failure_categories["database_write_failed"] += 1
                 record_enrichment_failure(
@@ -155,12 +157,15 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
                 )
                 continue
 
-            status = save_match_stats_for_history_status(match.id, fs_match_id, stats)
+            status = save_match_stats_for_history_status(
+                match.id, fs_match_id, stats,
+                player_a_is_p1=player_a_is_p1,
+            )
             if status == "saved":
                 resolved += 1
                 clear_enrichment_failure("tennis_match_stats", match.id)
             elif status == "source_incomplete":
-                errors += 1
+                incomplete += 1
                 failure_categories["source_stats_incomplete"] += 1
                 record_enrichment_source_unavailable(
                     "tennis_match_stats", match.id, "stats incompletas del proveedor",
@@ -185,7 +190,8 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
 
     result = {
         "processed": processed, "resolved": resolved,
-        "not_found": not_found, "errors": errors, "deferred_by_backoff": deferred,
+        "not_found": not_found, "incomplete": incomplete,
+        "errors": errors, "deferred_by_backoff": deferred,
         "failure_categories": failure_categories,
     }
     print(f"[enrich_match_stats] {result}", flush=True)

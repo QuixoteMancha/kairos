@@ -13,7 +13,8 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import MatchStats as TennisMatchStats
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from outer_apis.scrapers.tennis.flashscore_scraper import (
-    _extract_tournament_name, get_match_statistics, find_match_id, _parse_record,
+    _extract_tournament_name, get_match_statistics, find_match_id,
+    find_match_identity, _parse_record,
     _parse_score_sets, _score_sets_match,
 )
 
@@ -234,6 +235,26 @@ def test_find_match_id_matches_hyphenated_compound_surname():
             "Frances Tiafoe", "Pablo Carreno Busta", "2026-08-01",
         )
     assert match_id == "hyphen123"
+
+
+def test_find_match_identity_reports_player_a_orientation():
+    import time
+    ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))
+    html = _fake_results_html(
+        _raw_record("reverse123", ts, "Bautista-Agut R.", "Ruud C."),
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.search_player",
+        return_value=("pid1", "slug1"),
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_results_page",
+        return_value=html,
+    ):
+        identity = find_match_identity(
+            "Casper Ruud", "Roberto Bautista Agut", "2026-08-01",
+        )
+    assert identity["match_id"] == "reverse123"
+    assert identity["player_a_is_p1"] is False
 
 
 def test_find_match_id_fail_closed_when_names_dont_match():

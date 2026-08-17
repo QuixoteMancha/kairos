@@ -100,6 +100,9 @@ class Player(HistoricalBaseModel):
     canonical_name = CharField(unique=True)
     slug = CharField(null=True)  # slug real de TennisExplorer, si se conoce
     tour = CharField(null=True)  # "ATP" | "WTA" -- fuente de verdad REAL, 1 sola vez
+    flashscore_participant_id = CharField(null=True, unique=True)
+    flashscore_slug = CharField(null=True)
+    flashscore_lookup_failed_at = DateTimeField(null=True)
     birthdate = DateField(null=True)
     height_cm = IntegerField(null=True)
     weight_kg = IntegerField(null=True)
@@ -450,6 +453,9 @@ class MatchStats(HistoricalBaseModel):
     # Backwards-compatible identifier fields used by legacy code/tests
     market_id = CharField(null=True, unique=True)
     flashscore_match_id = CharField(null=True)
+    # Orientación del feed crudo: True si MatchHistory.player_a era P1.
+    # Las columnas tipadas/raw se guardan siempre en orientación canónica A/B.
+    player_a_is_flashscore_p1 = BooleanField(null=True)
     raw_stats_json = TextField()
     fetched_at = DateTimeField()
     is_usable = BooleanField(default=True)

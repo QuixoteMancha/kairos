@@ -244,6 +244,53 @@ def _index_hot_market_deduplication(database: Database) -> None:
     """)
 
 
+def _add_flashscore_stats_orientation(database: Database) -> None:
+    """Permite garantizar que stats _a/_b correspondan al MatchHistory."""
+    database.execute_sql(
+        "ALTER TABLE tennis_match_stats ADD COLUMN IF NOT EXISTS "
+        "player_a_is_flashscore_p1 BOOLEAN"
+    )
+    database.execute_sql(
+        "ALTER TABLE tennis_player ADD COLUMN IF NOT EXISTS "
+        "flashscore_participant_id VARCHAR(255)"
+    )
+    database.execute_sql(
+        "ALTER TABLE tennis_player ADD COLUMN IF NOT EXISTS "
+        "flashscore_slug VARCHAR(255)"
+    )
+    database.execute_sql(
+        "ALTER TABLE tennis_player ADD COLUMN IF NOT EXISTS "
+        "flashscore_lookup_failed_at TIMESTAMP"
+    )
+    database.execute_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS tennis_player_flashscore_participant "
+        "ON tennis_player(flashscore_participant_id) "
+        "WHERE flashscore_participant_id IS NOT NULL"
+    )
+    database.execute_sql("""
+        UPDATE historical_enrichment_attempt
+        SET last_error = CASE
+              WHEN attempt_count >= 2 THEN 'terminal: stats incompletas del proveedor'
+              ELSE 'stats incompletas del proveedor'
+            END,
+            retry_after = CASE WHEN attempt_count >= 2
+              THEN CURRENT_TIMESTAMP + INTERVAL '10 years' ELSE retry_after END
+        WHERE job_name='tennis_match_stats'
+          AND last_error='stats incompletas o escritura fallida'
+    """)
+    database.execute_sql("""
+        UPDATE historical_enrichment_attempt
+        SET last_error = CASE
+              WHEN attempt_count >= 2 THEN 'terminal: stats no disponibles'
+              ELSE last_error
+            END,
+            retry_after = CASE WHEN attempt_count >= 2
+              THEN CURRENT_TIMESTAMP + INTERVAL '10 years' ELSE retry_after END
+        WHERE job_name='tennis_match_stats'
+          AND last_error='stats no disponibles'
+    """)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -257,4 +304,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(10, "link_scanned_matches_to_history_20260816", _link_scanned_matches_to_history),
     Migration(11, "add_retirement_metadata_20260816", _add_retirement_metadata),
     Migration(12, "index_hot_market_deduplication_20260816", _index_hot_market_deduplication),
+    Migration(13, "add_flashscore_stats_orientation_20260817", _add_flashscore_stats_orientation),
 )

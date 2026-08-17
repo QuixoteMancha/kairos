@@ -131,7 +131,7 @@ def test_fill_missing_stats_skips_matches_without_score():
         player_a_name="Novak Djokovic", player_b_name="Carlos Alcaraz",
         score=None, fetched_at=_now(),
     )
-    with patch("workers.tennis_match_history_sync_worker.find_match_id") as mock_find:
+    with patch("workers.tennis_match_history_sync_worker.find_match_identity") as mock_find:
         result = fill_missing_stats_for_player("Novak Djokovic")
     mock_find.assert_not_called()
     assert result == {"attempted": 0, "filled": 0}
@@ -149,7 +149,7 @@ def test_fill_missing_stats_respects_limit():
             player_a=djokovic, player_b=rival,
             score="6-4 6-2", fetched_at=_now(),
         )
-    with patch("workers.tennis_match_history_sync_worker.find_match_id", return_value=None) as mock_find:
+    with patch("workers.tennis_match_history_sync_worker.find_match_identity", return_value=None) as mock_find:
         result = fill_missing_stats_for_player("Novak Djokovic", limit=3)
     assert mock_find.call_count == 3
     assert result["attempted"] == 3
@@ -169,7 +169,7 @@ def test_fill_missing_stats_passes_tournament_name_not_fk_model():
         score="6-4 6-2", fetched_at=_now(),
     )
     with patch(
-        "workers.tennis_match_history_sync_worker.find_match_id", return_value=None,
+        "workers.tennis_match_history_sync_worker.find_match_identity", return_value=None,
     ) as find:
         fill_missing_stats_for_player("Player A", limit=1)
 
@@ -186,7 +186,7 @@ def test_fill_missing_stats_skips_already_covered_matches():
         match_history=mh.id, source="flashscore", market_id="history:1",
         flashscore_match_id="fs-1", raw_stats_json="{}", fetched_at=_now(),
     )
-    with patch("workers.tennis_match_history_sync_worker.find_match_id") as mock_find:
+    with patch("workers.tennis_match_history_sync_worker.find_match_identity") as mock_find:
         result = fill_missing_stats_for_player("Novak Djokovic")
     mock_find.assert_not_called()
     assert result == {"attempted": 0, "filled": 0}

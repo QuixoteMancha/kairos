@@ -76,11 +76,12 @@ def _match(**overrides) -> MatchHistory:
 
 
 _STATS = {"match": {"Aces": ("3", "0")}}
+_IDENTITY = {"match_id": "fsid", "player_a_is_p1": True}
 
 
 def test_resolves_and_saves_stats_for_finished_match():
     _match()
-    with patch(f"{_MOD}.find_match_id", return_value="fsid"), patch(
+    with patch(f"{_MOD}.find_match_identity", return_value=_IDENTITY), patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ), patch(f"{_MOD}.save_match_stats_for_history_status", return_value="saved") as save, patch(
         f"{_MOD}.time.sleep",
@@ -92,13 +93,16 @@ def test_resolves_and_saves_stats_for_finished_match():
     assert save.call_args[0][1] == "fsid"
 
 
-def test_reuses_flashscore_id_from_existing_duration():
+def test_reuses_flashscore_id_with_verified_orientation():
     duration = MatchDuration.create(
         flashscore_match_id="shared-id", total_minutes=90,
         fetched_at=datetime.now(timezone.utc),
     )
-    _match(duration=duration)
-    with patch(f"{_MOD}.find_match_id") as find, patch(
+    match = _match(duration=duration)
+    assert stats_module.remember_match_stats_source(
+        match.id, "shared-id", True,
+    )
+    with patch(f"{_MOD}.find_match_identity") as find, patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ) as fetch, patch(
         f"{_MOD}.save_match_stats_for_history_status", return_value="saved",
@@ -117,7 +121,7 @@ def test_skips_matches_still_in_progress():
     -- el sync worker filtraba solo por `score`, por eso los pescaba."""
     today = datetime.now(timezone.utc).date().isoformat()
     _match(match_date=today)
-    with patch(f"{_MOD}.find_match_id") as find, patch(f"{_MOD}.time.sleep"):
+    with patch(f"{_MOD}.find_match_identity") as find, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
     find.assert_not_called()
@@ -126,7 +130,7 @@ def test_skips_matches_still_in_progress():
 
 def test_skips_matches_without_score():
     _match(score=None)
-    with patch(f"{_MOD}.find_match_id") as find, patch(f"{_MOD}.time.sleep"):
+    with patch(f"{_MOD}.find_match_identity") as find, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
     find.assert_not_called()
@@ -136,7 +140,7 @@ def test_skips_matches_without_score():
 def test_skips_matches_that_already_have_stats():
     _match()
     with patch(f"{_MOD}.has_match_stats_for_history", return_value=True), patch(
-        f"{_MOD}.find_match_id",
+        f"{_MOD}.find_match_identity",
     ) as find, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
@@ -146,7 +150,7 @@ def test_skips_matches_that_already_have_stats():
 
 def test_counts_not_found_when_flashscore_match_unresolved():
     _match()
-    with patch(f"{_MOD}.find_match_id", return_value=None), patch(
+    with patch(f"{_MOD}.find_match_identity", return_value=None), patch(
         f"{_MOD}.get_match_statistics",
     ) as stats, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
@@ -160,7 +164,7 @@ def test_counts_not_found_when_no_stats_available():
     """Común en challenger/ITF: el partido existe pero Flashscore no
     trackea estadísticas. Fail-closed, no se guarda nada."""
     _match()
-    with patch(f"{_MOD}.find_match_id", return_value="fsid"), patch(
+    with patch(f"{_MOD}.find_match_identity", return_value=_IDENTITY), patch(
         f"{_MOD}.get_match_statistics", return_value=None,
     ), patch(f"{_MOD}.save_match_stats_for_history_status") as save, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
@@ -175,8 +179,8 @@ def test_one_failing_match_does_not_stop_the_batch():
         _match(match_id=f"m{i}", players=(a, b))
 
     with patch(
-        f"{_MOD}.find_match_id",
-        side_effect=[RuntimeError("red caída"), "fs2", "fs3"],
+        f"{_MOD}.find_match_identity",
+        side_effect=[RuntimeError("red caída"), _IDENTITY, _IDENTITY],
     ), patch(f"{_MOD}.get_match_statistics", return_value=_STATS), patch(
         f"{_MOD}.save_match_stats_for_history_status", return_value="saved",
     ), patch(f"{_MOD}.time.sleep"):
@@ -192,7 +196,7 @@ def test_respects_limit():
         a, b = _players()
         _match(match_id=f"m{i}", players=(a, b))
 
-    with patch(f"{_MOD}.find_match_id", return_value="fsid") as find, patch(
+    with patch(f"{_MOD}.find_match_identity", return_value=_IDENTITY) as find, patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ), patch(f"{_MOD}.save_match_stats_for_history_status", return_value="saved"), patch(
         f"{_MOD}.time.sleep",
@@ -209,7 +213,7 @@ def test_unresolvable_first_batch_does_not_block_later_matches():
         _match(match_id=f"rotate{i}", players=(a, b))
 
     with patch(
-        f"{_MOD}.find_match_id", side_effect=[None, None, "fsid"],
+        f"{_MOD}.find_match_identity", side_effect=[None, None, _IDENTITY],
     ), patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ), patch(

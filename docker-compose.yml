@@ -375,6 +375,20 @@ services:
     networks:
       - kairos_net
 
+  tennis_match_stats_orientation_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_match_stats_orientation_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_match_stats_orientation_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      TENNIS_STATS_ORIENTATION_INTERVAL_SECONDS: "1800"
+      TENNIS_STATS_ORIENTATION_LIMIT: "25"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+
   mlb_match_tick_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_mlb_match_tick_worker

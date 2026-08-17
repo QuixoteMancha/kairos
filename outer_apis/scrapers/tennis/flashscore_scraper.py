@@ -30,7 +30,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from outer_apis.scrapers import brightdata_proxy
@@ -74,7 +74,56 @@ PROXY_FETCH_ENABLED = os.getenv("FLASHSCORE_PROXY_FETCH_ENABLED", "false").strip
 
 _SET_FIELDS = [("BA", "BB"), ("BC", "BD"), ("BE", "BF"), ("BG", "BH"), ("BI", "BJ")]
 
-_player_id_cache: dict[str, tuple[str, str] | None] = {}
+_NEGATIVE_PLAYER_CACHE_TTL = timedelta(minutes=15)
+_player_id_cache: dict[
+    str, tuple[tuple[str, str] | None, datetime]
+] = {}
+
+
+def _persistent_player_identity(name: str) -> tuple[str, str] | None:
+    """Lee identidad verificada sin convertir una falla DB en falla de scraping."""
+    if os.getenv("KAIROS_TESTING") == "1":
+        return None
+    try:
+        from peewee import fn
+        from database.db import init_db_historical
+        from database.historical.tennis.models import Player
+
+        init_db_historical()
+        row = Player.get_or_none(fn.LOWER(Player.canonical_name) == name.lower().strip())
+        if row and row.flashscore_participant_id and row.flashscore_slug is not None:
+            return row.flashscore_participant_id, row.flashscore_slug
+    except Exception:
+        pass
+    return None
+
+
+def _persist_player_identity(
+    name: str, result: tuple[str, str] | None, observed_at: datetime,
+) -> None:
+    if os.getenv("KAIROS_TESTING") == "1":
+        return
+    try:
+        from peewee import fn
+        from database.db import init_db_historical
+        from database.historical.tennis.models import Player
+
+        init_db_historical()
+        row = Player.get_or_none(fn.LOWER(Player.canonical_name) == name.lower().strip())
+        if row is None:
+            return
+        if result is None:
+            row.flashscore_lookup_failed_at = observed_at
+            row.save(only=[Player.flashscore_lookup_failed_at])
+        else:
+            row.flashscore_participant_id, row.flashscore_slug = result
+            row.flashscore_lookup_failed_at = None
+            row.save(only=[
+                Player.flashscore_participant_id, Player.flashscore_slug,
+                Player.flashscore_lookup_failed_at,
+            ])
+    except Exception:
+        pass
 
 
 # ── Búsqueda de jugador (sin proxy) ────────────────────────────────────────
@@ -152,8 +201,17 @@ def search_player(name: str) -> tuple[str, str] | None:
         ningún candidato verifica.
     """
     cache_key = name.lower().strip()
-    if cache_key in _player_id_cache:
-        return _player_id_cache[cache_key]
+    cached = _player_id_cache.get(cache_key)
+    now = datetime.now(UTC)
+    if cached is not None:
+        cached_result, cached_at = cached
+        if cached_result is not None or now - cached_at < _NEGATIVE_PLAYER_CACHE_TTL:
+            return cached_result
+
+    persistent = _persistent_player_identity(name)
+    if persistent is not None:
+        _player_id_cache[cache_key] = (persistent, now)
+        return persistent
 
     result = None
     try:
@@ -186,7 +244,8 @@ def search_player(name: str) -> tuple[str, str] | None:
     except Exception:
         result = None
 
-    _player_id_cache[cache_key] = result
+    _player_id_cache[cache_key] = (result, now)
+    _persist_player_identity(name, result, now)
     return result
 
 
@@ -631,10 +690,10 @@ def find_match_tournament(player_a_name: str, player_b_name: str, match_date: st
     return best_tournament
 
 
-def find_match_id(
+def find_match_identity(
     player_a_name: str, player_b_name: str, match_date: str, tournament: str | None = None,
     expected_score: str | None = None,
-) -> str | None:
+) -> dict[str, Any] | None:
     """Busca el `match_id` real de Flashscore para un partido YA JUGADO,
     por coincidencia de AMBOS nombres + fecha (+ torneo como bonus,
     best-effort, ver `_extract_tournament_name`) -- necesario para poder
@@ -688,7 +747,7 @@ def find_match_id(
     if not html:
         return None
 
-    best_match_id = None
+    best_match: dict[str, Any] | None = None
     best_score = 0.0
     for rec in _parse_all_records_with_tournament(html):
         if rec.get("status") != 3 or not rec.get("timestamp"):
@@ -725,9 +784,30 @@ def find_match_id(
 
         if combined > best_score:
             best_score = combined
-            best_match_id = rec.get("match_id")
+            player_a_p1 = _name_score(player_a_name, p1_fs)
+            player_a_p2 = _name_score(player_a_name, p2_fs)
+            if max(player_a_p1, player_a_p2) < 0.6:
+                continue
+            best_match = {
+                "match_id": rec.get("match_id"),
+                "player_a_is_p1": player_a_p1 >= player_a_p2,
+                "p1_name": p1_fs,
+                "p2_name": p2_fs,
+            }
 
-    return best_match_id
+    return best_match
+
+
+def find_match_id(
+    player_a_name: str, player_b_name: str, match_date: str,
+    tournament: str | None = None, expected_score: str | None = None,
+) -> str | None:
+    """API compatible que devuelve sólo el ID; ver ``find_match_identity``."""
+    identity = find_match_identity(
+        player_a_name, player_b_name, match_date, tournament,
+        expected_score=expected_score,
+    )
+    return identity["match_id"] if identity else None
 
 
 def get_match_statistics(match_id: str) -> dict[str, dict[str, tuple[str | None, str | None]]] | None:

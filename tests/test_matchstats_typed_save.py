@@ -116,3 +116,14 @@ def test_unknown_performance_metric_is_classified_as_parser_unrecognized():
         mh.id, "fsid", {"match": {"Serve dominance": ["1.2", "0.8"]}},
     )
     assert status == "parser_unrecognized"
+
+
+def test_save_reorients_flashscore_p1_p2_to_match_history_a_b():
+    mh = _match()
+    assert save_match_stats_for_history(
+        mh.id, "reversed", _FEED, player_a_is_p1=False,
+    ) is True
+    row = MatchStats.get(MatchStats.match_history == mh.id)
+    assert row.aces_a == 8
+    assert row.aces_b == 2
+    assert row.player_a_is_flashscore_p1 is False
