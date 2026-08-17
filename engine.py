@@ -176,18 +176,26 @@ class Kairos:
             market_arb_opportunities = market_arb.opportunities
 
         bet_on_favourite_opportunities = []
-        if _enabled("ENABLE_BET_ON_FAVOURITE"):
+        bet_on_favourite_shadow_recorded = 0
+        favourite_enabled = _enabled("ENABLE_BET_ON_FAVOURITE")
+        favourite_shadow_enabled = _enabled("ENABLE_BET_ON_FAVOURITE_SHADOW")
+        if favourite_enabled or favourite_shadow_enabled:
             favourite = BetOnFavourite(
                 api=kalshi_api,
                 markets=tennis_markets_fresh_for_prematch,
+                record_shadow=favourite_shadow_enabled,
             )
             favourite.evaluate_risk_and_return_opportunities()
-            bet_on_favourite_opportunities = favourite.opportunities
+            if favourite_enabled:
+                bet_on_favourite_opportunities = favourite.opportunities
+            bet_on_favourite_shadow_recorded = favourite.shadow_recorded
 
         return {
             'limit_arb_enabled': _enabled("ENABLE_LIMIT_ARB"),
             'market_arb_enabled': _enabled("ENABLE_MARKET_ARB"),
             'bet_on_favourite_enabled': _enabled("ENABLE_BET_ON_FAVOURITE"),
+            'bet_on_favourite_shadow_enabled': favourite_shadow_enabled,
+            'bet_on_favourite_shadow_recorded': bet_on_favourite_shadow_recorded,
             'limit_arb_opportunities': limit_arb_opportunities,
             'market_arb_opportunities': market_arb_opportunities,
             'bet_on_favourite_opportunities': bet_on_favourite_opportunities,

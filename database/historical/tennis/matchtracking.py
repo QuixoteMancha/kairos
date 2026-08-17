@@ -214,7 +214,10 @@ def get_open_scanned_matches(max_age_days: float = 3.0) -> list[dict[str, Any]]:
         return []
 
 
-def save_probability_tick(market_id: str, market_price_a: float | None, model_fair_a: float | None) -> None:
+def save_probability_tick(
+    market_id: str, market_price_a: float | None, model_fair_a: float | None,
+    market_price_b: float | None = None, model_fair_b: float | None = None,
+) -> None:
     """Fail-closed: no hace nada si `market_id` no está registrado (nunca
     fabrica un TennisScannedMatch a partir de un tick suelto) o si falla
     la escritura."""
@@ -224,7 +227,9 @@ def save_probability_tick(market_id: str, market_price_a: float | None, model_fa
         if match is None:
             return
         TennisMatchProbabilityTick.create(
-            match=match, observed_at=_now(), market_price_a=market_price_a, model_fair_a=model_fair_a,
+            match=match, observed_at=_now(),
+            market_price_a=market_price_a, model_fair_a=model_fair_a,
+            market_price_b=market_price_b, model_fair_b=model_fair_b,
         )
     except Exception:
         pass
@@ -245,6 +250,8 @@ def get_probability_history(match_history_id: int) -> list[dict[str, Any]]:
             "observed_at": row.observed_at,
             "market_probability_a": row.market_price_a,
             "model_probability_a": row.model_fair_a,
+            "market_probability_b": row.market_price_b,
+            "model_probability_b": row.model_fair_b,
         } for row in rows]
     except Exception:
         return []

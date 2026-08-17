@@ -35,6 +35,7 @@ def historical_models():
         MatchDuration, MatchHistory, Player, PlayerStats,
         TennisHistoricalOdds,
         TennisMatchProbabilityTick, TennisMatchStats, TennisMatchStatsSet,
+        TennisFavouriteShadowDecision,
         TennisMatchWeather, TennisPlayerRanking, TennisPlayerSyncStatus,
         TennisScannedMatch,
         Tournament,
@@ -45,6 +46,7 @@ def historical_models():
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating, TennisPlayerRanking,
         TennisHistoricalOdds, PlayerStats, TennisScannedMatch,
         TennisMatchProbabilityTick, TennisMatchWeather,
+        TennisFavouriteShadowDecision,
         TennisMatchStats, TennisMatchStatsSet, Player, MatchDuration, MatchHistory,
         TennisPlayerSyncStatus, TeamMatchHistory,
         MlbGameHistory, MlbScannedMatch, MlbMatchProbabilityTick,
@@ -288,6 +290,19 @@ def _invalidate_unoriented_ml_experiments(database: Database) -> None:
             promotion_status='invalidated_stats_orientation'
         WHERE promotion_status NOT LIKE 'invalidated_%%'
     """)
+
+
+def _add_favourite_shadow_decisions(database: Database) -> None:
+    database.execute_sql(
+        "ALTER TABLE tennis_match_probability_tick ADD COLUMN IF NOT EXISTS "
+        "market_price_b DOUBLE PRECISION"
+    )
+    database.execute_sql(
+        "ALTER TABLE tennis_match_probability_tick ADD COLUMN IF NOT EXISTS "
+        "model_fair_b DOUBLE PRECISION"
+    )
+    from database.historical.tennis import TennisFavouriteShadowDecision
+    database.create_tables([TennisFavouriteShadowDecision], safe=True)
     database.execute_sql("""
         UPDATE historical_enrichment_attempt
         SET last_error = CASE
@@ -316,4 +331,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(12, "index_hot_market_deduplication_20260816", _index_hot_market_deduplication),
     Migration(13, "add_flashscore_stats_orientation_20260817", _add_flashscore_stats_orientation),
     Migration(14, "invalidate_unoriented_ml_experiments_20260817", _invalidate_unoriented_ml_experiments),
+    Migration(15, "add_favourite_shadow_decisions_20260817", _add_favourite_shadow_decisions),
 )

@@ -89,6 +89,7 @@ services:
       ENABLE_LIMIT_ARB: "false"
       ENABLE_MARKET_ARB: "false"
       ENABLE_BET_ON_FAVOURITE: "false"
+      ENABLE_BET_ON_FAVOURITE_SHADOW: "true"
       # Las bases activa e histórica son bases PostgreSQL separadas.
     depends_on: *kairos-db-depends
     restart: unless-stopped
@@ -375,6 +376,19 @@ services:
     restart: unless-stopped
     networks:
       - kairos_net
+
+  tennis_favourite_shadow_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_favourite_shadow_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_favourite_shadow_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      TENNIS_FAVOURITE_SHADOW_INTERVAL_SECONDS: "300"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
 
   tennis_match_stats_orientation_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}

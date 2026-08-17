@@ -82,7 +82,10 @@ def test_save_probability_tick_requires_registered_match():
 
 def test_save_probability_tick_persists_both_prices():
     register_scanned_match(_fake_market("KXATPMATCH-TICK"))
-    save_probability_tick("KXATPMATCH-TICK", market_price_a=0.55, model_fair_a=0.58)
+    save_probability_tick(
+        "KXATPMATCH-TICK", market_price_a=0.55, model_fair_a=0.58,
+        market_price_b=0.47, model_fair_b=0.42,
+    )
 
     tick = TennisMatchProbabilityTick.select().first()
     assert tick.market_price_a == 0.55
@@ -94,6 +97,8 @@ def test_save_probability_tick_persists_both_prices():
         "observed_at": tick.observed_at,
         "market_probability_a": 0.55,
         "model_probability_a": 0.58,
+        "market_probability_b": 0.47,
+        "model_probability_b": 0.42,
     }]
 
 

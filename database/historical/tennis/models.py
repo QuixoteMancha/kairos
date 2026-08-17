@@ -403,6 +403,41 @@ class ProbabilityTick(HistoricalBaseModel):
     observed_at = DateTimeField()
     market_price_a = FloatField(null=True)
     model_fair_a = FloatField(null=True)
+    market_price_b = FloatField(null=True)
+    model_fair_b = FloatField(null=True)
+
+
+class FavouriteShadowDecision(HistoricalBaseModel):
+    """Decisión pre-match inmutable, enlazada al tick exacto observado."""
+
+    class Meta:
+        table_name = "tennis_favourite_shadow_decision"
+        indexes = (
+            (("probability_tick", "strategy_version"), True),
+            (("status", "decision_at"), False),
+        )
+
+    match = ForeignKeyField(Match, backref="favourite_shadow_decisions", on_delete="CASCADE")
+    probability_tick = ForeignKeyField(
+        ProbabilityTick, backref="favourite_shadow_decisions", on_delete="CASCADE",
+    )
+    strategy_version = CharField()
+    decision_at = DateTimeField()
+    favourite_side = CharField()  # a|b
+    ticker = CharField()
+    favourite_name = CharField()
+    underdog_name = CharField()
+    entry_market_probability = FloatField()
+    model_probability = FloatField()
+    model_probability_before_injury = FloatField(null=True)
+    model_edge = FloatField()
+    proposed_stake_usd = FloatField()
+    features_json = TextField()
+    status = CharField(default="open")  # open|won|lost
+    settled_at = DateTimeField(null=True)
+    closing_market_probability = FloatField(null=True)
+    clv = FloatField(null=True)
+    simulated_pnl_usd = FloatField(null=True)
 
 
 class MatchWeather(HistoricalBaseModel):

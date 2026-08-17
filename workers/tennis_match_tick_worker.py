@@ -147,16 +147,21 @@ def run_once() -> dict:
                 continue  # ya resolvió, no hace falta tick de probabilidad
 
             market_price_a = (market_a or {}).get("current_a_price")
+            market_price_b = (market_b or {}).get("current_a_price")
 
-            model_fair_a = None
+            model_fair_a = model_fair_b = None
             try:
                 rebuilt = _rebuild_market_dict(scanned, market_a, market_b)
                 fair = _fmodel.calculate_fair_price(rebuilt)
                 model_fair_a = fair.get("fair_a_price")
+                model_fair_b = fair.get("fair_b_price")
             except Exception:
                 pass  # fail-closed por campo: el tick de precio real igual se guarda
 
-            save_probability_tick(scanned["market_id"], market_price_a, model_fair_a)
+            save_probability_tick(
+                scanned["market_id"], market_price_a, model_fair_a,
+                market_price_b, model_fair_b,
+            )
             ticked += 1
         except Exception as e:
             errors += 1

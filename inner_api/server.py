@@ -57,7 +57,8 @@ from database.historical.workerstate import (
     HistoricalEnrichmentAttempt, HistoricalWorkerState, TennisMlExperiment,
 )
 from database.historical.tennis.models import (
-    MatchHistory, MatchStats, MatchWeather, Player, TennisHistoricalOdds,
+    FavouriteShadowDecision, MatchHistory, MatchStats, MatchWeather, Player,
+    TennisHistoricalOdds,
 )
 from database.accounting.limitarbsignal import LimitArbSignal
 from database.accounting.papertrade import PaperTrade
@@ -188,6 +189,50 @@ def tennis_data_quality():
                 } if latest_ml else None),
             }
         return jsonify(payload), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tennis/favourite-shadow')
+def tennis_favourite_shadow():
+    """Resultados observados de BetOnFavourite shadow, sin ejecución real."""
+    try:
+        init_db_historical()
+        with db_historical.connection_context():
+            rows = list(FavouriteShadowDecision.select().order_by(
+                FavouriteShadowDecision.decision_at.desc(),
+                FavouriteShadowDecision.id.desc(),
+            ))
+        settled = [row for row in rows if row.status in {"won", "lost"}]
+        pnl = sum(float(row.simulated_pnl_usd or 0.0) for row in settled)
+        staked = sum(float(row.proposed_stake_usd or 0.0) for row in settled)
+        clv_values = [float(row.clv) for row in settled if row.clv is not None]
+        return jsonify({
+            'total': len(rows),
+            'open': sum(row.status == 'open' for row in rows),
+            'settled': len(settled),
+            'wins': sum(row.status == 'won' for row in settled),
+            'win_rate': round(
+                sum(row.status == 'won' for row in settled) / len(settled), 4
+            ) if settled else None,
+            'simulated_pnl_usd': round(pnl, 2),
+            'simulated_roi_pct': round(100.0 * pnl / staked, 2) if staked else None,
+            'average_clv': round(sum(clv_values) / len(clv_values), 4) if clv_values else None,
+            'recent': [{
+                'id': row.id,
+                'market_id': row.match.market_id,
+                'tick_id': row.probability_tick_id,
+                'decision_at': row.decision_at.isoformat(),
+                'favourite': row.favourite_name,
+                'underdog': row.underdog_name,
+                'entry_probability': row.entry_market_probability,
+                'model_probability': row.model_probability,
+                'edge': row.model_edge,
+                'status': row.status,
+                'clv': row.clv,
+                'simulated_pnl_usd': row.simulated_pnl_usd,
+            } for row in rows[:50]],
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

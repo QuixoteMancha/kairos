@@ -274,6 +274,7 @@ def _evaluate_match(match: dict) -> dict | None:
     return {
         "market_id": match.get("id"),
         "ticker": fav_ticker,
+        "fav_side": fav_side,
         "side": "yes",
         "stake_usd": final_stake,
         "fav_name": fav_name,
@@ -302,13 +303,16 @@ class BetOnFavourite:
     La clase solo produce propuestas; no coloca órdenes reales.
     """
 
-    def __init__(self, api, markets):
+    def __init__(self, api, markets, *, record_shadow: bool = False):
         self.api = api
         self.markets = markets
+        self.record_shadow = record_shadow
         self.opportunities = []
+        self.shadow_recorded = 0
 
     def evaluate_risk_and_return_opportunities(self):
         self.opportunities = []
+        self.shadow_recorded = 0
         preload_post_injury_performance_penalties([
             (name, market.get("surface"))
             for market in self.markets
@@ -319,6 +323,10 @@ class BetOnFavourite:
             proposal = _evaluate_match(market)
             if proposal is not None:
                 self.opportunities.append(proposal)
+                if self.record_shadow:
+                    from database.historical.tennis.shadow import record_shadow_decision
+                    if record_shadow_decision(proposal) is not None:
+                        self.shadow_recorded += 1
         return self.opportunities
 
 

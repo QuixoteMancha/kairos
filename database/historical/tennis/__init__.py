@@ -27,6 +27,7 @@ on a fresh fetch (never on a cache hit).
 from database.historical.tennis.models import (
     Match as TennisScannedMatch,
     ProbabilityTick as TennisMatchProbabilityTick,
+    FavouriteShadowDecision as TennisFavouriteShadowDecision,
     MatchWeather as TennisMatchWeather,
     MatchStats as TennisMatchStats,
     MatchStatsSet as TennisMatchStatsSet,
@@ -91,7 +92,7 @@ __all__ = [
     "save_tennisabstract_elo_snapshot", "get_current_tennisabstract_elo",
     "save_tennisabstract_career_splits", "get_current_career_splits",
     "get_all_career_splits_for_surface", "get_latest_rankings", "get_all_surface_matches",
-    "TennisScannedMatch", "TennisMatchProbabilityTick",
+    "TennisScannedMatch", "TennisMatchProbabilityTick", "TennisFavouriteShadowDecision",
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
     "save_probability_tick", "mark_match_settled", "backfill_missing_tournaments",
     "backfill_missing_rounds", "filter_new_markets",
