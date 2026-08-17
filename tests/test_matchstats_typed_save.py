@@ -13,7 +13,10 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory
-from database.historical.tennis.matchstats import save_match_stats_for_history
+from database.historical.tennis.matchstats import (
+    match_stats_source_id, remember_match_stats_source,
+    save_match_stats_for_history, save_match_stats_for_history_status,
+)
 from database.historical.tennis.models import MatchStats, MatchStatsSet
 
 
@@ -88,3 +91,28 @@ def test_feed_without_sets_still_saves_the_match_row():
     assert save_match_stats_for_history(mh.id, "fsid", {"match": {"Aces": ["1", "2"]}}) is True
     assert MatchStats.select().count() == 1
     assert MatchStatsSet.select().count() == 0
+
+
+def test_remembers_flashscore_id_before_stats_are_available():
+    mh = _match()
+    assert remember_match_stats_source(mh.id, "pending-id") is True
+    assert match_stats_source_id(mh.id) == "pending-id"
+    row = MatchStats.get(MatchStats.match_history == mh.id)
+    assert row.is_usable is False
+    assert row.invalid_reason == "stats pendientes"
+
+
+def test_unusable_feed_is_classified_as_source_incomplete():
+    mh = _match()
+    status = save_match_stats_for_history_status(
+        mh.id, "fsid", {"match": {"Last 10 balls": ["3", "7"]}},
+    )
+    assert status == "source_incomplete"
+
+
+def test_unknown_performance_metric_is_classified_as_parser_unrecognized():
+    mh = _match()
+    status = save_match_stats_for_history_status(
+        mh.id, "fsid", {"match": {"Serve dominance": ["1.2", "0.8"]}},
+    )
+    assert status == "parser_unrecognized"

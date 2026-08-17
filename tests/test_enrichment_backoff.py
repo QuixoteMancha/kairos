@@ -6,7 +6,7 @@ from database.db import init_db_historical
 from database.historical.workerstate import (
     HistoricalEnrichmentAttempt, clear_enrichment_failure,
     enrichment_can_attempt, record_enrichment_failure, HistoricalWorkerState,
-    startup_schedule_delay,
+    record_enrichment_source_unavailable, startup_schedule_delay,
 )
 
 
@@ -39,6 +39,15 @@ def test_repeated_failures_increase_backoff():
     record_enrichment_failure('duration', 5, 'second')
     second = HistoricalEnrichmentAttempt.get().retry_after
     assert second > first
+
+
+def test_source_unavailable_becomes_terminal_after_second_attempt():
+    assert record_enrichment_source_unavailable("stats", 7, "empty") is False
+    assert record_enrichment_source_unavailable("stats", 7, "empty") is True
+    row = HistoricalEnrichmentAttempt.get()
+    assert row.attempt_count == 2
+    assert row.last_error.startswith("terminal:")
+    assert row.retry_after.year >= datetime.now(timezone.utc).year + 9
 
 
 def test_startup_schedule_respects_recent_completion_without_randomness():

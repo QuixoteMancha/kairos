@@ -217,6 +217,25 @@ def test_find_match_id_matches_both_names_and_date():
     assert match_id == "abc123"
 
 
+def test_find_match_id_matches_hyphenated_compound_surname():
+    import time
+    ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))
+    html = _fake_results_html(
+        _raw_record("hyphen123", ts, "Tiafoe F.", "Carreno-Busta P."),
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.search_player",
+        return_value=("pid1", "slug1"),
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_results_page",
+        return_value=html,
+    ):
+        match_id = find_match_id(
+            "Frances Tiafoe", "Pablo Carreno Busta", "2026-08-01",
+        )
+    assert match_id == "hyphen123"
+
+
 def test_find_match_id_fail_closed_when_names_dont_match():
     import time
     ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))

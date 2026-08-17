@@ -29,7 +29,8 @@ from typing import Any
 
 from database.db import init_db_historical
 from database.historical.tennis.matchstats import (
-    has_match_stats_for_history, save_match_stats_for_history,
+    has_match_stats_for_history, match_stats_source_id,
+    remember_match_stats_source, save_match_stats_for_history_status,
 )
 from database.historical.tennis.models import MatchHistory
 from outer_apis.scrapers.tennis.flashscore_scraper import (
@@ -39,6 +40,7 @@ from database.historical.tennis.models import MatchStats
 from scripts.tennis.rotating_batch import take_rotating_batch
 from database.historical.workerstate import (
     clear_enrichment_failure, enrichment_can_attempt, record_enrichment_failure,
+    record_enrichment_source_unavailable,
 )
 
 # Mismo criterio conservador que `enrich_match_durations`: el throttle
@@ -98,7 +100,9 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
     failure_categories = {
         "match_lookup_not_found": 0,
         "source_stats_unavailable": 0,
-        "incomplete_or_write_failed": 0,
+        "source_stats_incomplete": 0,
+        "parser_unrecognized": 0,
+        "database_write_failed": 0,
         "exception": 0,
     }
     for match in matches:
@@ -118,6 +122,8 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
                 if match.duration_id is not None else None
             )
             if fs_match_id is None:
+                fs_match_id = match_stats_source_id(match.id)
+            if fs_match_id is None:
                 tournament_name = match.tournament.tournament_name if match.tournament else None
                 fs_match_id = find_match_id(
                     match.player_a.canonical_name, match.player_b.canonical_name,
@@ -129,20 +135,47 @@ def enrich_match_stats(limit: int = 40) -> dict[str, Any]:
                 record_enrichment_failure("tennis_match_stats", match.id, "match no encontrado")
                 continue
 
+            # Resolver nombres/fecha es la parte cara. Conservar el ID aun
+            # cuando el proveedor no tenga stats evita repetir esa búsqueda.
+            if not remember_match_stats_source(match.id, fs_match_id):
+                errors += 1
+                failure_categories["database_write_failed"] += 1
+                record_enrichment_failure(
+                    "tennis_match_stats", match.id,
+                    "database_write_failed: no se pudo conservar flashscore_match_id",
+                )
+                continue
+
             stats = get_match_statistics(fs_match_id)
             if not stats:
                 not_found += 1
                 failure_categories["source_stats_unavailable"] += 1
-                record_enrichment_failure("tennis_match_stats", match.id, "stats no disponibles")
+                record_enrichment_source_unavailable(
+                    "tennis_match_stats", match.id, "stats no disponibles",
+                )
                 continue
 
-            if save_match_stats_for_history(match.id, fs_match_id, stats):
+            status = save_match_stats_for_history_status(match.id, fs_match_id, stats)
+            if status == "saved":
                 resolved += 1
+                clear_enrichment_failure("tennis_match_stats", match.id)
+            elif status == "source_incomplete":
+                errors += 1
+                failure_categories["source_stats_incomplete"] += 1
+                record_enrichment_source_unavailable(
+                    "tennis_match_stats", match.id, "stats incompletas del proveedor",
+                )
+            elif status == "already_usable":
                 clear_enrichment_failure("tennis_match_stats", match.id)
             else:
                 errors += 1
-                failure_categories["incomplete_or_write_failed"] += 1
-                record_enrichment_failure("tennis_match_stats", match.id, "stats incompletas o escritura fallida")
+                category = (
+                    "parser_unrecognized"
+                    if status == "parser_unrecognized"
+                    else "database_write_failed"
+                )
+                failure_categories[category] += 1
+                record_enrichment_failure("tennis_match_stats", match.id, status)
         except Exception as e:
             errors += 1
             failure_categories["exception"] += 1

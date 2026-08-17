@@ -35,6 +35,22 @@ def stats_are_usable(stats: dict[str, Any]) -> bool:
     )
 
 
+_NON_PERFORMANCE_STATS = {"Last 10 balls", "Match points saved"}
+
+
+def classify_unusable_stats(stats: dict[str, Any]) -> str:
+    """Distingue feed reducido del proveedor de nombres que el parser ignora."""
+    names = {
+        str(stat_name)
+        for section in (stats or {}).values()
+        if isinstance(section, dict)
+        for stat_name in section
+    }
+    if names and not names.issubset(_NON_PERFORMANCE_STATS):
+        return "parser_unrecognized"
+    return "source_incomplete"
+
+
 def has_match_stats(market_id: str) -> bool:
     """Fail-closed: False si falla la query (nunca fuerza un re-fetch
     accidental por asumir 'sí existe' ante un error de DB -- ante la
@@ -105,34 +121,69 @@ def has_match_stats_for_history(match_history_id: int) -> bool:
         return False
 
 
-def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str, stats: dict[str, Any]) -> bool:
-    """Igual que `save_match_stats` pero vinculando por `MatchHistory`
-    (`source="flashscore"`) en vez de `market_id` de Kalshi -- ver
-    docstring del módulo y `has_match_stats_for_history`. `market_id`
-    sintético y único (`history:{match_history_id}`) porque la columna
-    real en producción es NOT NULL pese a que el modelo la marca
-    `null=True` (mismo hallazgo real que en
-    `migrate_charted_stats_to_match_stats.py`).
-
-    Returns: True si escribió una fila nueva, False si ya existía o
-    falló (fail-closed, nunca duplica ni lanza)."""
-    if not stats:
+def remember_match_stats_source(match_history_id: int, flashscore_match_id: str) -> bool:
+    """Conserva el ID resuelto aunque Flashscore aún no entregue stats."""
+    try:
+        init_db_historical()
+        row = TennisMatchStats.get_or_none(
+            TennisMatchStats.match_history == match_history_id
+        )
+        if row is None:
+            TennisMatchStats.create(
+                match_history=match_history_id,
+                source="flashscore",
+                market_id=f"history:{match_history_id}",
+                flashscore_match_id=flashscore_match_id,
+                raw_stats_json="{}",
+                fetched_at=_now(),
+                is_usable=False,
+                invalid_reason="stats pendientes",
+            )
+        elif row.flashscore_match_id != flashscore_match_id:
+            row.flashscore_match_id = flashscore_match_id
+            row.fetched_at = _now()
+            row.save(only=[TennisMatchStats.flashscore_match_id, TennisMatchStats.fetched_at])
+        return True
+    except Exception:
         return False
+
+
+def match_stats_source_id(match_history_id: int) -> str | None:
+    """Devuelve el ID de Flashscore previamente resuelto, si existe."""
+    try:
+        row = TennisMatchStats.get_or_none(
+            TennisMatchStats.match_history == match_history_id
+        )
+        return row.flashscore_match_id if row is not None else None
+    except Exception:
+        return None
+
+
+def save_match_stats_for_history_status(
+    match_history_id: int, flashscore_match_id: str, stats: dict[str, Any],
+) -> str:
+    """Persiste stats y distingue guardado, feed incompleto y fallo DB."""
+    if not stats:
+        return "source_unavailable"
     try:
         init_db_historical()
         existing = TennisMatchStats.get_or_none(
             TennisMatchStats.match_history == match_history_id
         )
         if existing is not None and existing.is_usable:
-            return False
+            return "already_usable"
         if not stats_are_usable(stats):
-            if existing is not None:
-                existing.is_usable = False
-                existing.invalid_reason = "Flashscore no entregó métricas tipables"
-                existing.raw_stats_json = json.dumps(stats)
-                existing.fetched_at = _now()
-                existing.save()
-            return False
+            if existing is None:
+                remember_match_stats_source(match_history_id, flashscore_match_id)
+                existing = TennisMatchStats.get(
+                    TennisMatchStats.match_history == match_history_id
+                )
+            existing.is_usable = False
+            existing.invalid_reason = "Flashscore no entregó métricas tipables"
+            existing.raw_stats_json = json.dumps(stats)
+            existing.fetched_at = _now()
+            existing.save()
+            return classify_unusable_stats(stats)
         fields = {
             "flashscore_match_id": flashscore_match_id,
             "raw_stats_json": json.dumps(stats), "fetched_at": _now(),
@@ -152,9 +203,25 @@ def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str
                 setattr(existing, key, value)
             existing.save()
         _save_set_rows(stats, match_history_id=match_history_id)
-        return True
+        return "saved"
     except Exception:
-        return False
+        return "database_write_failed"
+
+
+def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str, stats: dict[str, Any]) -> bool:
+    """Igual que `save_match_stats` pero vinculando por `MatchHistory`
+    (`source="flashscore"`) en vez de `market_id` de Kalshi -- ver
+    docstring del módulo y `has_match_stats_for_history`. `market_id`
+    sintético y único (`history:{match_history_id}`) porque la columna
+    real en producción es NOT NULL pese a que el modelo la marca
+    `null=True` (mismo hallazgo real que en
+    `migrate_charted_stats_to_match_stats.py`).
+
+    Returns: True si escribió una fila nueva, False si ya existía o
+    falló (fail-closed, nunca duplica ni lanza)."""
+    return save_match_stats_for_history_status(
+        match_history_id, flashscore_match_id, stats,
+    ) == "saved"
 
 
 def get_match_stats(market_id: str) -> dict[str, Any] | None:

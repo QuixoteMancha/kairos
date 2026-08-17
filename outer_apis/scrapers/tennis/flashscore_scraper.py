@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import unicodedata
 from datetime import datetime, UTC
 from typing import Any
 
@@ -423,7 +424,19 @@ def _score_sets_match(expected: list[tuple[int, int]], candidate_sets: list[tupl
 # ── Matching de nombres ──────────────────────────────────────────────────────
 
 def _norm_name(name: str) -> str:
-    return name.lower().replace(".", "").strip()
+    """Normaliza variantes editoriales sin borrar identidad del jugador.
+
+    Flashscore suele publicar apellidos compuestos con guion
+    (``Carreno-Busta P.``), mientras otras fuentes usan espacios
+    (``Pablo Carreno Busta``). También alterna apóstrofes y diacríticos.
+    Convertir esos separadores a espacios permite comparar los mismos
+    tokens sin relajar el umbral de identidad.
+    """
+    value = unicodedata.normalize("NFKD", str(name or ""))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower().replace("’", "'")
+    value = re.sub(r"[-.'’`_/]+", " ", value)
+    return " ".join(value.split())
 
 
 _NAME_PARTICLES = frozenset({

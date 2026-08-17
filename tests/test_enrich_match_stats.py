@@ -13,7 +13,9 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import MatchDuration, MatchHistory, Player
+from database.historical.tennis import (
+    MatchDuration, MatchHistory, Player, TennisMatchStats,
+)
 from scripts.tennis.enrich_match_stats import enrich_match_stats
 import scripts.tennis.enrich_match_stats as stats_module
 from database.historical.workerstate import HistoricalEnrichmentAttempt
@@ -29,6 +31,7 @@ def clean_db():
         HistoricalEnrichmentAttempt.delete().where(
             HistoricalEnrichmentAttempt.job_name == "tennis_match_stats"
         ).execute()
+        TennisMatchStats.delete().execute()
         MatchHistory.delete().execute()
         Player.delete().execute()
     yield
@@ -37,6 +40,7 @@ def clean_db():
         HistoricalEnrichmentAttempt.delete().where(
             HistoricalEnrichmentAttempt.job_name == "tennis_match_stats"
         ).execute()
+        TennisMatchStats.delete().execute()
         MatchHistory.delete().execute()
         Player.delete().execute()
 
@@ -78,7 +82,7 @@ def test_resolves_and_saves_stats_for_finished_match():
     _match()
     with patch(f"{_MOD}.find_match_id", return_value="fsid"), patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
-    ), patch(f"{_MOD}.save_match_stats_for_history", return_value=True) as save, patch(
+    ), patch(f"{_MOD}.save_match_stats_for_history_status", return_value="saved") as save, patch(
         f"{_MOD}.time.sleep",
     ):
         result = enrich_match_stats(limit=10)
@@ -97,7 +101,7 @@ def test_reuses_flashscore_id_from_existing_duration():
     with patch(f"{_MOD}.find_match_id") as find, patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ) as fetch, patch(
-        f"{_MOD}.save_match_stats_for_history", return_value=True,
+        f"{_MOD}.save_match_stats_for_history_status", return_value="saved",
     ), patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
@@ -158,7 +162,7 @@ def test_counts_not_found_when_no_stats_available():
     _match()
     with patch(f"{_MOD}.find_match_id", return_value="fsid"), patch(
         f"{_MOD}.get_match_statistics", return_value=None,
-    ), patch(f"{_MOD}.save_match_stats_for_history") as save, patch(f"{_MOD}.time.sleep"):
+    ), patch(f"{_MOD}.save_match_stats_for_history_status") as save, patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
     save.assert_not_called()
@@ -174,7 +178,7 @@ def test_one_failing_match_does_not_stop_the_batch():
         f"{_MOD}.find_match_id",
         side_effect=[RuntimeError("red caída"), "fs2", "fs3"],
     ), patch(f"{_MOD}.get_match_statistics", return_value=_STATS), patch(
-        f"{_MOD}.save_match_stats_for_history", return_value=True,
+        f"{_MOD}.save_match_stats_for_history_status", return_value="saved",
     ), patch(f"{_MOD}.time.sleep"):
         result = enrich_match_stats(limit=10)
 
@@ -190,7 +194,7 @@ def test_respects_limit():
 
     with patch(f"{_MOD}.find_match_id", return_value="fsid") as find, patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
-    ), patch(f"{_MOD}.save_match_stats_for_history", return_value=True), patch(
+    ), patch(f"{_MOD}.save_match_stats_for_history_status", return_value="saved"), patch(
         f"{_MOD}.time.sleep",
     ):
         result = enrich_match_stats(limit=2)
@@ -209,7 +213,7 @@ def test_unresolvable_first_batch_does_not_block_later_matches():
     ), patch(
         f"{_MOD}.get_match_statistics", return_value=_STATS,
     ), patch(
-        f"{_MOD}.save_match_stats_for_history", return_value=True,
+        f"{_MOD}.save_match_stats_for_history_status", return_value="saved",
     ), patch(f"{_MOD}.time.sleep"):
         first = enrich_match_stats(limit=2)
         second = enrich_match_stats(limit=2)

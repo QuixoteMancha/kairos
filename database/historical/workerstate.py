@@ -86,6 +86,34 @@ def record_enrichment_failure(job_name: str, record_id: int, reason: str) -> Non
     row.save()
 
 
+def record_enrichment_source_unavailable(
+    job_name: str, record_id: int, reason: str, *, terminal_after: int = 2,
+) -> bool:
+    """Registra ausencia estructural del proveedor sin reintentos infinitos.
+
+    En partidos históricos, un feed de estadísticas vacío o no tipable no
+    suele completarse después. Se permite un segundo intento para absorber
+    respuestas transitorias y luego se difiere diez años. Devuelve ``True``
+    cuando el registro quedó terminalmente diferido.
+    """
+    now = datetime.now(timezone.utc)
+    row, _ = HistoricalEnrichmentAttempt.get_or_create(
+        job_name=job_name, record_id=record_id,
+        defaults={"updated_at": now},
+    )
+    row.attempt_count += 1
+    terminal = row.attempt_count >= terminal_after
+    if terminal:
+        row.retry_after = now + timedelta(days=3650)
+        reason = f"terminal: {reason}"
+    else:
+        row.retry_after = now + timedelta(hours=1)
+    row.last_error = reason[:2000]
+    row.updated_at = now
+    row.save()
+    return terminal
+
+
 def clear_enrichment_failure(job_name: str, record_id: int) -> None:
     HistoricalEnrichmentAttempt.delete().where(
         (HistoricalEnrichmentAttempt.job_name == job_name)
