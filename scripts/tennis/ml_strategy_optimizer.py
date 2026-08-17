@@ -327,7 +327,10 @@ def _evaluate_predictions(rows: list[dict[str, Any]], probabilities: np.ndarray)
     }
 
 
-def train_and_evaluate(rows: list[dict[str, Any]], artifact_root: str | Path) -> dict[str, Any]:
+def train_and_evaluate(
+    rows: list[dict[str, Any]], artifact_root: str | Path,
+    *, dataset_quality: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Entrena challengers secuencialmente y devuelve reportes reproducibles."""
     rows = sorted(rows, key=lambda row: (row["date"], row["match_id"]))
     dataset_hash = dataset_sha256(rows)
@@ -366,7 +369,7 @@ def train_and_evaluate(rows: list[dict[str, Any]], artifact_root: str | Path) ->
         "sample_count": len(rows),
         "training_through": rows[-1]["date"] if rows else None,
         "models": reports,
-        "dataset_quality": stats_orientation_quality(),
+        "dataset_quality": dataset_quality or {"orientation_status": "not_measured"},
         "evaluation_assumptions": {
             "pricing": "tennisexplorer_bookmaker_decimal_odds_proxy",
             "payout": "raw_bookmaker_odds_including_embedded_vig",
@@ -408,7 +411,9 @@ def persist_report(report: dict[str, Any]) -> None:
 def run_optimizer(artifact_root: str | Path | None = None) -> dict[str, Any]:
     root = artifact_root or os.getenv("TENNIS_ML_ARTIFACT_DIR", "/data/ml/tennis")
     rows = collect_dataset()
-    report = train_and_evaluate(rows, root)
+    report = train_and_evaluate(
+        rows, root, dataset_quality=stats_orientation_quality(),
+    )
     persist_report(report)
     return report
 

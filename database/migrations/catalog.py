@@ -286,7 +286,7 @@ def _invalidate_unoriented_ml_experiments(database: Database) -> None:
         UPDATE tennis_ml_experiment
         SET eligible_for_review=FALSE,
             promotion_status='invalidated_stats_orientation'
-        WHERE promotion_status NOT LIKE 'invalidated_%'
+        WHERE promotion_status NOT LIKE 'invalidated_%%'
     """)
     database.execute_sql("""
         UPDATE historical_enrichment_attempt
