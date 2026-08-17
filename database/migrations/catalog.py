@@ -278,6 +278,16 @@ def _add_flashscore_stats_orientation(database: Database) -> None:
         WHERE job_name='tennis_match_stats'
           AND last_error='stats incompletas o escritura fallida'
     """)
+
+
+def _invalidate_unoriented_ml_experiments(database: Database) -> None:
+    """Los experimentos previos pudieron consumir stats A/B invertidas."""
+    database.execute_sql("""
+        UPDATE tennis_ml_experiment
+        SET eligible_for_review=FALSE,
+            promotion_status='invalidated_stats_orientation'
+        WHERE promotion_status NOT LIKE 'invalidated_%'
+    """)
     database.execute_sql("""
         UPDATE historical_enrichment_attempt
         SET last_error = CASE
@@ -305,4 +315,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(11, "add_retirement_metadata_20260816", _add_retirement_metadata),
     Migration(12, "index_hot_market_deduplication_20260816", _index_hot_market_deduplication),
     Migration(13, "add_flashscore_stats_orientation_20260817", _add_flashscore_stats_orientation),
+    Migration(14, "invalidate_unoriented_ml_experiments_20260817", _invalidate_unoriented_ml_experiments),
 )

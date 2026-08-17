@@ -279,6 +279,20 @@ def dataset_sha256(rows: list[dict[str, Any]]) -> str:
     return sha256(identity.encode()).hexdigest()
 
 
+def stats_orientation_quality() -> dict[str, Any]:
+    usable = MatchStats.select().where(MatchStats.is_usable == True).count()
+    audited = MatchStats.select().where(
+        (MatchStats.is_usable == True)
+        & MatchStats.player_a_is_flashscore_p1.is_null(False)
+    ).count()
+    return {
+        "usable_stats": usable,
+        "orientation_audited": audited,
+        "orientation_pending": max(0, usable - audited),
+        "orientation_coverage_pct": round(100.0 * audited / usable, 2) if usable else 100.0,
+    }
+
+
 def _evaluate_predictions(rows: list[dict[str, Any]], probabilities: np.ndarray) -> dict[str, Any]:
     probabilities = np.asarray([
         _relative_injury_adjustment(
@@ -352,6 +366,7 @@ def train_and_evaluate(rows: list[dict[str, Any]], artifact_root: str | Path) ->
         "sample_count": len(rows),
         "training_through": rows[-1]["date"] if rows else None,
         "models": reports,
+        "dataset_quality": stats_orientation_quality(),
         "evaluation_assumptions": {
             "pricing": "tennisexplorer_bookmaker_decimal_odds_proxy",
             "payout": "raw_bookmaker_odds_including_embedded_vig",
@@ -377,10 +392,15 @@ def persist_report(report: dict[str, Any]) -> None:
                 parameters_json=json.dumps({
                     "features": FEATURE_COLUMNS, "edge": EDGE_THRESHOLD,
                     "max_odds": MAX_ODDS, "promotion": "manual_only",
+                    "dataset_quality": report.get("dataset_quality", {}),
                 }),
                 artifact_path=result.get("artifact_path"),
                 eligible_for_review=result.get("eligible_for_review", False),
-                promotion_status="challenger",
+                promotion_status=(
+                    "challenger_oriented"
+                    if report.get("dataset_quality", {}).get("orientation_pending") == 0
+                    else "challenger_partial_orientation"
+                ),
                 created_at=now,
             )
 

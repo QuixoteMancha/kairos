@@ -53,7 +53,9 @@ from flask import Flask, jsonify, request
 
 from database.db import init_db, db
 from database.db import init_db_historical, db_historical
-from database.historical.workerstate import HistoricalWorkerState, TennisMlExperiment
+from database.historical.workerstate import (
+    HistoricalEnrichmentAttempt, HistoricalWorkerState, TennisMlExperiment,
+)
 from database.historical.tennis.models import (
     MatchHistory, MatchStats, MatchWeather, Player, TennisHistoricalOdds,
 )
@@ -130,12 +132,34 @@ def tennis_data_quality():
             latest_ml = TennisMlExperiment.select().order_by(
                 TennisMlExperiment.created_at.desc(), TennisMlExperiment.id.desc(),
             ).first()
+            usable_stats = MatchStats.select().where(MatchStats.is_usable == True).count()
+            audited_stats = MatchStats.select().where(
+                (MatchStats.is_usable == True)
+                & MatchStats.player_a_is_flashscore_p1.is_null(False)
+            ).count()
+            pending_stats = max(0, usable_stats - audited_stats)
+            stats_failures = {}
+            for attempt in HistoricalEnrichmentAttempt.select().where(
+                HistoricalEnrichmentAttempt.job_name == "tennis_match_stats"
+            ):
+                reason = attempt.last_error or "unknown"
+                stats_failures[reason] = stats_failures.get(reason, 0) + 1
             payload = {
                 'generated_at': datetime.now(timezone.utc).isoformat(),
                 'matches_total': total,
                 'players_total': Player.select().count(),
                 'historical_odds_total': TennisHistoricalOdds.select().count(),
                 'match_stats_total': MatchStats.select().count(),
+                'match_stats_quality': {
+                    'usable': usable_stats,
+                    'orientation_audited': audited_stats,
+                    'orientation_pending': pending_stats,
+                    'orientation_coverage_pct': round(
+                        100.0 * audited_stats / usable_stats, 2
+                    ) if usable_stats else 100.0,
+                    'estimated_hours_remaining': round(pending_stats / 50.0, 1),
+                    'failure_categories': stats_failures,
+                },
                 'match_weather_total': MatchWeather.select().count(),
                 'coverage': {
                     'both_players': coverage(

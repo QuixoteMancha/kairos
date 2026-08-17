@@ -45,6 +45,7 @@ services:
       POSTGRES_BACKUP_INTERVAL_SECONDS: "86400"
       POSTGRES_BACKUP_RETENTION_DAYS: "14"
       POSTGRES_BACKUP_DIR: /backups
+      POSTGRES_BACKUP_VERIFY_RESTORE: "true"
     depends_on:
       postgres:
         condition: service_healthy

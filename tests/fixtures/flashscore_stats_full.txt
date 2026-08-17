@@ -1,0 +1,1 @@
+SE÷Match¬~SF÷Service¬~SG÷Aces¬SH÷2¬SI÷8¬~SG÷Double Faults¬SH÷3¬SI÷2¬~SG÷1st serve percentage¬SH÷75%¬SI÷63%¬~SG÷1st serve points won¬SH÷58% (32/55)¬SI÷71% (39/55)¬~SG÷Break Points Saved¬SH÷4/7¬SI÷0/1¬~SE÷Set 1¬~SG÷Aces¬SH÷1¬SI÷3
