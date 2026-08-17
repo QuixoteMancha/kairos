@@ -5,7 +5,8 @@ import pytest
 from database.db import init_db_historical
 from database.historical.workerstate import (
     HistoricalEnrichmentAttempt, clear_enrichment_failure,
-    enrichment_can_attempt, record_enrichment_failure,
+    enrichment_can_attempt, record_enrichment_failure, HistoricalWorkerState,
+    startup_schedule_delay,
 )
 
 
@@ -38,3 +39,15 @@ def test_repeated_failures_increase_backoff():
     record_enrichment_failure('duration', 5, 'second')
     second = HistoricalEnrichmentAttempt.get().retry_after
     assert second > first
+
+
+def test_startup_schedule_respects_recent_completion_without_randomness():
+    now = datetime.now(timezone.utc)
+    HistoricalWorkerState.create(
+        worker_name="heavy", cycle_finished_at=now, updated_at=now,
+    )
+    delay = startup_schedule_delay("heavy", 3600, jitter_max_seconds=0)
+    assert 3598 <= delay <= 3600
+    HistoricalWorkerState.delete().where(
+        HistoricalWorkerState.worker_name == "heavy"
+    ).execute()

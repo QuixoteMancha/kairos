@@ -20,10 +20,11 @@ class KalshiMarketTick(HistoricalBaseModel):
 
     class Meta:
         table_name = "kalshimarkettick"
+        indexes = ((('trade_id',), True),)
 
     created_at = DateTimeField()
     updated_at = DateTimeField()
-    trade_id = CharField()
+    trade_id = CharField(unique=True)
     ticker = CharField()
     event_ticker = CharField(null=True)
     created_time = DateTimeField()

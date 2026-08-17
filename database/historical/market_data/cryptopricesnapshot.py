@@ -17,6 +17,7 @@ class CryptoPriceSnapshot(HistoricalBaseModel):
 
     class Meta:
         table_name = "cryptopricesnapshot"
+        indexes = ((('symbol', 'timestamp'), True),)
 
     created_at = DateTimeField()
     updated_at = DateTimeField()

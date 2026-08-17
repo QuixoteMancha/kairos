@@ -14,7 +14,7 @@ import os
 import time
 
 from database.db import init_db_historical
-from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started, wait_for_startup_schedule
 from scripts.tennis.backfill_typed_match_stats import backfill_typed_match_stats
 from scripts.tennis.enrich_match_stats import enrich_match_stats
 
@@ -48,6 +48,7 @@ def _run_once() -> dict:
 
 if __name__ == "__main__":
     init_db_historical()
+    wait_for_startup_schedule(_WORKER_NAME, _INTERVAL_S, jitter_max_seconds=90)
     print(
         f"[tennis_match_stats_backfill] loop mode, interval={_INTERVAL_S}s, "
         f"fetch_limit={_FETCH_LIMIT}, typed_limit={_TYPED_LIMIT}",

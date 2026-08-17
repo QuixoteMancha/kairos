@@ -32,7 +32,7 @@ import os
 import time
 
 from database.db import init_db_historical
-from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started, wait_for_startup_schedule
 from scripts.tennis.fill_data_gaps import count_data_gaps, fill_player_ages
 
 _INTERVAL_S = int(os.getenv("TENNIS_GAP_FILLER_INTERVAL_SECONDS", "3600"))
@@ -62,6 +62,7 @@ def _run_once(cycle: int = 0) -> dict:
 
 if __name__ == "__main__":
     init_db_historical()
+    wait_for_startup_schedule(_WORKER_NAME, _INTERVAL_S, jitter_max_seconds=120)
     print(
         f"[tennis_gap_filler] loop mode, interval={_INTERVAL_S}s, "
         f"ages_limit={_AGES_LIMIT}",

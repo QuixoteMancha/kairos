@@ -73,26 +73,20 @@ def collect_real_prices(symbols: list[str] | None = None, interval: str = "1m",
             continue
 
         stats["candles_seen"] += len(candles)
+        rows = []
         for candle in candles:
             row = _candle_to_row(symbol, candle, fetched_now)
-            if row is None:
-                continue
-            try:
-                exists = (
-                    CryptoPriceSnapshot
-                    .select()
-                    .where(
-                        (CryptoPriceSnapshot.symbol == row["symbol"])
-                        & (CryptoPriceSnapshot.timestamp == row["timestamp"])
-                    )
-                    .exists()
-                )
-                if exists:
-                    continue
-                CryptoPriceSnapshot.create(**row)
-                stats["rows_inserted"] += 1
-            except Exception:
-                continue
+            if row is not None:
+                rows.append(row)
+        try:
+            inserted = (
+                CryptoPriceSnapshot.insert_many(rows)
+                .on_conflict_ignore()
+                .execute()
+            ) if rows else 0
+            stats["rows_inserted"] += int(inserted or 0)
+        except Exception:
+            continue
 
     return stats
 

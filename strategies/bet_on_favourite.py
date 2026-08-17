@@ -48,7 +48,9 @@ from models.volatility.sports.tennis.weighted_elo import (
     calibrate, combined_probability, regress_for_inactivity,
 )
 from scripts.tennis.compute_weighted_elo import normalize_surface
-from outer_apis.sports.tennis.injury_risk import get_post_injury_performance_penalty
+from outer_apis.sports.tennis.injury_risk import (
+    get_post_injury_performance_penalty, preload_post_injury_performance_penalties,
+)
 
 ATP_THRESHOLD = 20
 WTA_THRESHOLD = 30
@@ -307,6 +309,12 @@ class BetOnFavourite:
 
     def evaluate_risk_and_return_opportunities(self):
         self.opportunities = []
+        preload_post_injury_performance_penalties([
+            (name, market.get("surface"))
+            for market in self.markets
+            for name in (market.get("player_a_name"), market.get("player_b_name"))
+            if name
+        ])
         for market in self.markets:
             proposal = _evaluate_match(market)
             if proposal is not None:

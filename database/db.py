@@ -50,6 +50,7 @@ no existe como opción de despliegue.
 """
 
 import os
+import threading
 from pathlib import Path
 
 from peewee import Database, PostgresqlDatabase, SqliteDatabase
@@ -101,9 +102,27 @@ else:
         f"KAIROS_DB_BACKEND no soportado: {DB_BACKEND!r}; Kairos requiere PostgreSQL"
     )
 
+_accounting_init_lock = threading.Lock()
+_historical_init_lock = threading.Lock()
+_accounting_initialized = False
+_historical_initialized = False
+
 
 def init_db() -> None:
     """Migra y valida la base PostgreSQL de contabilidad."""
+    global _accounting_initialized
+    if _accounting_initialized:
+        db.connect(reuse_if_open=True)
+        return
+    with _accounting_init_lock:
+        if _accounting_initialized:
+            db.connect(reuse_if_open=True)
+            return
+        _initialize_accounting_db()
+        _accounting_initialized = True
+
+
+def _initialize_accounting_db() -> None:
     from database.accounting.paperaccount import PaperAccount
     from database.accounting.systemhaltstate import SystemHaltState
     from database.migrations.catalog import ACCOUNTING_MIGRATIONS, accounting_models
@@ -134,6 +153,19 @@ def init_db_historical() -> None:
     volumen viejo — create_tables con safe=True no las toca ni las
     recrea. Las tablas de tenis/team_sports nuevas se crean vacías la
     primera vez que corre esto."""
+    global _historical_initialized
+    if _historical_initialized:
+        db_historical.connect(reuse_if_open=True)
+        return
+    with _historical_init_lock:
+        if _historical_initialized:
+            db_historical.connect(reuse_if_open=True)
+            return
+        _initialize_historical_db()
+        _historical_initialized = True
+
+
+def _initialize_historical_db() -> None:
     from database.migrations.catalog import HISTORICAL_MIGRATIONS, historical_models
     from database.migrations.runner import run_migrations, validate_model_schema
 

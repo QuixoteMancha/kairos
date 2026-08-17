@@ -4,7 +4,7 @@ import os
 import time
 
 from database.db import init_db_historical
-from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started, wait_for_startup_schedule
 from scripts.tennis.fill_data_gaps import fill_player_bio
 
 _WORKER_NAME = "tennis_player_bio_backfill_worker"
@@ -20,6 +20,7 @@ def _run_once() -> dict:
 
 if __name__ == "__main__":
     init_db_historical()
+    wait_for_startup_schedule(_WORKER_NAME, _INTERVAL_S, jitter_max_seconds=150)
     print(f"[tennis_player_bio_backfill] loop mode, interval={_INTERVAL_S}s, batch_limit={_BATCH_LIMIT}", flush=True)
     while True:
         try:

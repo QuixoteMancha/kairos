@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -141,3 +143,41 @@ def mark_cycle_failed(worker_name: str, error: Exception) -> None:
     row.last_error = f"{type(error).__name__}: {error}"
     row.updated_at = now
     row.save()
+
+
+def startup_schedule_delay(
+    worker_name: str, interval_seconds: int, *, jitter_max_seconds: int = 120,
+) -> int:
+    """Delay de arranque que respeta el último ciclo y escalona workers.
+
+    Un redeploy no debe disparar nuevamente un trabajo de 6/24 horas que
+    acaba de terminar. El jitter es determinístico por nombre para que los
+    contenedores pesados tampoco despierten simultáneamente.
+    """
+    row = HistoricalWorkerState.get_or_none(
+        HistoricalWorkerState.worker_name == worker_name
+    )
+    remaining = 0
+    if row is not None and row.cycle_finished_at is not None:
+        finished = row.cycle_finished_at
+        if finished.tzinfo is None:
+            finished = finished.replace(tzinfo=timezone.utc)
+        elapsed = max(0.0, (datetime.now(timezone.utc) - finished).total_seconds())
+        remaining = max(0, int(interval_seconds - elapsed))
+    jitter = (
+        zlib.crc32(worker_name.encode()) % (jitter_max_seconds + 1)
+        if jitter_max_seconds > 0 else 0
+    )
+    return remaining + jitter
+
+
+def wait_for_startup_schedule(
+    worker_name: str, interval_seconds: int, *, jitter_max_seconds: int = 120,
+) -> int:
+    delay = startup_schedule_delay(
+        worker_name, interval_seconds, jitter_max_seconds=jitter_max_seconds,
+    )
+    if delay > 0:
+        print(f"[{worker_name}] startup delay={delay}s", flush=True)
+        time.sleep(delay)
+    return delay

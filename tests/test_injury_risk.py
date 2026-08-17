@@ -14,6 +14,7 @@ from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
 )
 from outer_apis.sports.tennis.injury_risk import (
     get_injury_risk_flag, INJURY_LOOKBACK_DAYS, calculate_post_injury_penalty,
+    get_post_injury_performance_penalty,
 )
 
 
@@ -38,6 +39,20 @@ def test_post_injury_penalty_never_rewards_improvement_and_is_capped():
         elo_delta=-1000, service_delta=-100, return_delta=-1,
     )
     assert severe["total"] == 0.10
+
+
+def test_live_post_injury_signal_is_cached_but_historical_is_not():
+    from outer_apis.sports.tennis import injury_risk
+
+    injury_risk._signal_cache.clear()
+    with patch.object(
+        injury_risk, "_compute_post_injury_performance_penalty",
+        return_value={"penalty": 0.02},
+    ) as compute:
+        assert get_post_injury_performance_penalty("Player", surface="Hard")["penalty"] == 0.02
+        assert get_post_injury_performance_penalty("Player", surface="Hard")["penalty"] == 0.02
+        get_post_injury_performance_penalty("Player", as_of="2025-01-01", surface="Hard")
+    assert compute.call_count == 2
 
 
 def test_parse_date_iso_conversion():

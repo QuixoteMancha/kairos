@@ -15,6 +15,8 @@ documentado como heurística, no como algo calibrado."""
 from __future__ import annotations
 
 from datetime import date, timedelta
+import threading
+import time
 from typing import Any
 
 from outer_apis.sports.tennis.recent_results_cache import fetch_and_cache as _fetch_and_cache
@@ -23,6 +25,9 @@ INJURY_LOOKBACK_DAYS = 45  # ventana en la que un retiro/walkover real se consid
 POST_INJURY_RECOVERY_DAYS = 90
 POST_INJURY_PERFORMANCE_DAYS = 180
 MAX_INJURY_PROBABILITY_PENALTY = 0.10
+INJURY_SIGNAL_CACHE_TTL_SECONDS = 300
+_signal_cache: dict[tuple[str, str | None], tuple[float, dict[str, Any] | None]] = {}
+_signal_cache_lock = threading.Lock()
 
 
 def calculate_post_injury_penalty(
@@ -61,7 +66,7 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def get_post_injury_performance_penalty(
+def _compute_post_injury_performance_penalty(
     player_name: str,
     *,
     as_of: date | str | None = None,
@@ -167,6 +172,47 @@ def get_post_injury_performance_penalty(
         "return_delta_vs_preinjury_52w": return_delta,
         "baseline_matches": len(baseline), "post_injury_matches": len(recent),
     }
+
+
+def get_post_injury_performance_penalty(
+    player_name: str,
+    *,
+    as_of: date | str | None = None,
+    surface: str | None = None,
+) -> dict[str, Any] | None:
+    """Facade con caché corta para evaluaciones live repetidas.
+
+    Consultas históricas ``as_of`` nunca se cachean. En vivo, el mismo
+    jugador/superficie se calcula una vez por cinco minutos aunque aparezca
+    en varias estrategias o ticks del mismo ciclo.
+    """
+    if as_of is not None:
+        return _compute_post_injury_performance_penalty(
+            player_name, as_of=as_of, surface=surface,
+        )
+    key = (player_name.strip().casefold(), surface.casefold() if surface else None)
+    now = time.monotonic()
+    with _signal_cache_lock:
+        cached = _signal_cache.get(key)
+        if cached and now - cached[0] < INJURY_SIGNAL_CACHE_TTL_SECONDS:
+            return cached[1]
+    result = _compute_post_injury_performance_penalty(player_name, surface=surface)
+    with _signal_cache_lock:
+        _signal_cache[key] = (now, result)
+        if len(_signal_cache) > 2000:
+            expired = [item for item, value in _signal_cache.items() if now - value[0] >= INJURY_SIGNAL_CACHE_TTL_SECONDS]
+            for item in expired:
+                _signal_cache.pop(item, None)
+    return result
+
+
+def preload_post_injury_performance_penalties(
+    players: list[tuple[str, str | None]],
+) -> None:
+    """Precalienta una sola vez las señales distintas del próximo ciclo."""
+    for player_name, surface in dict.fromkeys(players):
+        if player_name:
+            get_post_injury_performance_penalty(player_name, surface=surface)
 
 
 def get_injury_risk_flag(player_name: str, lookback_days: int = INJURY_LOOKBACK_DAYS) -> dict[str, Any] | None:

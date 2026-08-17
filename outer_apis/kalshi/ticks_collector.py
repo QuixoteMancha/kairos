@@ -127,16 +127,19 @@ def collect_real_ticks(api: KalshiAPI | None = None) -> dict[str, int]:
             continue
 
         stats["trades_seen"] += len(trades)
+        rows = []
         for trade in trades:
             row = _trade_to_row(ticker, event_ticker, trade, fetched_at)
-            if row is None:
-                continue
+            if row is not None:
+                rows.append(row)
+        for offset in range(0, len(rows), 500):
             try:
-                exists = KalshiMarketTick.select().where(KalshiMarketTick.trade_id == row["trade_id"]).exists()
-                if exists:
-                    continue
-                KalshiMarketTick.create(**row)
-                stats["rows_inserted"] += 1
+                inserted = (
+                    KalshiMarketTick.insert_many(rows[offset:offset + 500])
+                    .on_conflict_ignore()
+                    .execute()
+                )
+                stats["rows_inserted"] += int(inserted or 0)
             except Exception:
                 continue
 

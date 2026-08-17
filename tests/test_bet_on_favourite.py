@@ -23,7 +23,8 @@ def strategy_signals():
     with patch("strategies.bet_on_favourite._model_probability", return_value=0.80), \
          patch("strategies.bet_on_favourite.get_recent_form_by_surface", side_effect=default_form), \
          patch("strategies.bet_on_favourite.get_recent_form", side_effect=default_form), \
-         patch("strategies.bet_on_favourite.get_post_injury_performance_penalty", return_value={"flagged": False, "penalty": 0.0}):
+         patch("strategies.bet_on_favourite.get_post_injury_performance_penalty", return_value={"flagged": False, "penalty": 0.0}), \
+         patch("strategies.bet_on_favourite.preload_post_injury_performance_penalties"):
         yield
 
 

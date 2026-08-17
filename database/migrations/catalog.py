@@ -221,6 +221,18 @@ def _add_retirement_metadata(database: Database) -> None:
         "retirement_source VARCHAR(255)",
     ):
         database.execute_sql(f"ALTER TABLE match_history ADD COLUMN IF NOT EXISTS {column}")
+
+
+def _index_hot_market_deduplication(database: Database) -> None:
+    """Evita scans completos por cada trade/candle observado."""
+    database.execute_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS kalshimarkettick_trade_id "
+        "ON kalshimarkettick(trade_id)"
+    )
+    database.execute_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS cryptopricesnapshot_symbol_timestamp "
+        "ON cryptopricesnapshot(symbol, timestamp)"
+    )
     database.execute_sql("""
         UPDATE tennis_scanned_match s SET match_history_id=h.id
         FROM match_history h
@@ -244,4 +256,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(9, "normalize_tennis_storage_20260816", _normalize_tennis_storage),
     Migration(10, "link_scanned_matches_to_history_20260816", _link_scanned_matches_to_history),
     Migration(11, "add_retirement_metadata_20260816", _add_retirement_metadata),
+    Migration(12, "index_hot_market_deduplication_20260816", _index_hot_market_deduplication),
 )

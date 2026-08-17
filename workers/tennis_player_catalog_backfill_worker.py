@@ -38,7 +38,7 @@ import os
 import time
 
 from database.db import init_db_historical
-from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started, wait_for_startup_schedule
 from scripts.tennis.wta_top200_historical_backfill import run_country_catalog_backfill
 
 _MAX_WORKERS = int(os.getenv("TENNIS_CATALOG_BACKFILL_MAX_WORKERS", "4"))
@@ -56,6 +56,7 @@ def _run_once() -> dict:
 
 if __name__ == "__main__":
     init_db_historical()
+    wait_for_startup_schedule(_WORKER_NAME, _INTERVAL_S, jitter_max_seconds=180)
     print(
         f"[tennis_player_catalog_backfill] loop mode, "
         f"max_workers={_MAX_WORKERS}, interval_between_passes={_INTERVAL_S}s",
