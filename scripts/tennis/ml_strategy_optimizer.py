@@ -93,7 +93,9 @@ def collect_dataset() -> list[dict[str, Any]]:
         stats_by_match = {
             row.match_history_id: row
             for row in MatchStats.select().where(
-                MatchStats.match_history.is_null(False) & MatchStats.is_usable
+                MatchStats.match_history.is_null(False)
+                & MatchStats.is_usable
+                & MatchStats.player_a_is_flashscore_p1.is_null(False)
             )
         }
         matches = list(

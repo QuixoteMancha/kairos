@@ -64,7 +64,9 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
     with db_historical.connection_context():
         stats_by_match = {
             item.match_history_id: item for item in TennisMatchStats.select().where(
-                TennisMatchStats.match_history.is_null(False) & TennisMatchStats.is_usable
+                TennisMatchStats.match_history.is_null(False)
+                & TennisMatchStats.is_usable
+                & TennisMatchStats.player_a_is_flashscore_p1.is_null(False)
             )
         }
         rows = list(
