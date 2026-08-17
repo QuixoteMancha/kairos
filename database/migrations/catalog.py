@@ -13,11 +13,10 @@ def accounting_models():
     from database.accounting.marketarbwebsocketsignal import MarketArbWebsocketSignal
     from database.accounting.paperaccount import PaperAccount
     from database.accounting.papertrade import PaperTrade
-    from database.accounting.set1entrysignal import Set1EntrySignal
     from database.accounting.systemhaltstate import SystemHaltState
 
     return [
-        LimitArbSignal, MarketArbWebsocketSignal, Set1EntrySignal,
+        LimitArbSignal, MarketArbWebsocketSignal,
         PaperTrade, PaperAccount, SystemHaltState, FillVerification,
     ]
 
@@ -79,10 +78,21 @@ def _create_historical_schema(database: Database) -> None:
     database.create_tables(historical_models(), safe=True)
 
 
+def _drop_set1_entry_signal(database: Database) -> None:
+    """2026-08-17: `Set1EntrySignal` quedó huérfana -- el único productor
+    real (`workers/set1_favorite_reaction_worker.py`) se eliminó el
+    2026-08-11, reemplazado por `strategies/bet_on_favourite.py` +
+    `workers/tennis_favourite_shadow_worker.py`. Verificado en vivo antes
+    de este cambio: 0 filas reales en producción, sin pérdida de datos.
+    `IF EXISTS` -- idempotente ante una base ya limpia."""
+    database.execute_sql("DROP TABLE IF EXISTS set1_entry_signal")
+
+
 # Las migraciones aplicadas son inmutables. Todo cambio de modelo futuro debe
 # agregar una entrada nueva; nunca se edita una versión ya desplegada.
 ACCOUNTING_MIGRATIONS = (
     Migration(1, "postgresql_accounting_baseline_20260815", _create_accounting_schema),
+    Migration(2, "drop_orphaned_set1_entry_signal_20260817", _drop_set1_entry_signal),
 )
 
 def _add_tournament_country(database: Database) -> None:
