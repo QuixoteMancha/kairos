@@ -58,8 +58,9 @@ from database.historical.workerstate import (
 )
 from database.historical.tennis.models import (
     FavouriteShadowDecision, MatchHistory, MatchStats, MatchWeather, Player,
-    TennisHistoricalOdds,
+    TennisHistoricalOdds, LivePointSnapshot, LiveStatsSnapshot,
 )
+from database.historical.tennis.live_tracking import latest_live_state
 from database.accounting.limitarbsignal import LimitArbSignal
 from database.accounting.papertrade import PaperTrade
 from database.accounting.paperaccount import PaperAccount
@@ -162,6 +163,8 @@ def tennis_data_quality():
                     'failure_categories': stats_failures,
                 },
                 'match_weather_total': MatchWeather.select().count(),
+                'live_point_snapshots_total': LivePointSnapshot.select().count(),
+                'live_stats_snapshots_total': LiveStatsSnapshot.select().count(),
                 'coverage': {
                     'both_players': coverage(
                         MatchHistory.player_a.is_null(False) & MatchHistory.player_b.is_null(False)
@@ -189,6 +192,64 @@ def tennis_data_quality():
                 } if latest_ml else None),
             }
         return jsonify(payload), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tennis/live-snapshots')
+def tennis_live_snapshots():
+    """Último corte live de un mercado, listo para dashboard/estrategia."""
+    market_id = (request.args.get('market_id') or '').strip()
+    if not market_id:
+        return jsonify({'error': 'market_id is required'}), 400
+    try:
+        state = latest_live_state(market_id)
+        if state is None:
+            return jsonify({'error': 'match not found'}), 404
+        match, point, stats, tick = (
+            state['match'], state['point'], state['stats'], state['tick'],
+        )
+        stat_fields = (
+            'aces_a', 'aces_b', 'double_faults_a', 'double_faults_b',
+            'total_points_won_a', 'total_points_won_b',
+            'service_games_won_a', 'service_games_won_b',
+            'return_games_won_a', 'return_games_won_b',
+            'first_serve_pct_a', 'first_serve_pct_b',
+            'first_serve_points_won_pct_a', 'first_serve_points_won_pct_b',
+            'second_serve_points_won_pct_a', 'second_serve_points_won_pct_b',
+            'break_points_won_a', 'break_points_won_b',
+        )
+        return jsonify({
+            'market_id': match.market_id,
+            'match_history_id': match.match_history_id,
+            'flashscore_match_id': match.flashscore_match_id,
+            'player_a': match.player_a_name,
+            'player_b': match.player_b_name,
+            'probability': ({
+                'tick_id': tick.id,
+                'observed_at': tick.observed_at.isoformat(),
+                'market_price_a': tick.market_price_a,
+                'market_price_b': tick.market_price_b,
+                'model_fair_a': tick.model_fair_a,
+                'model_fair_b': tick.model_fair_b,
+            } if tick else None),
+            'point': ({
+                'snapshot_id': point.id,
+                'tick_id': point.probability_tick_id,
+                'observed_at': point.observed_at.isoformat(),
+                'current_set': point.current_set,
+                'games_observed': point.games_observed,
+                'points_observed': point.points_observed,
+                'break_points_observed': point.break_points_observed,
+                'raw': json.loads(point.raw_point_json),
+            } if point else None),
+            'stats': ({
+                'snapshot_id': stats.id,
+                'tick_id': stats.probability_tick_id,
+                'observed_at': stats.observed_at.isoformat(),
+                **{name: getattr(stats, name) for name in stat_fields},
+            } if stats else None),
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

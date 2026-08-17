@@ -276,7 +276,29 @@ def search_player(name: str) -> tuple[str, str] | None:
 # termina en 2004 (su debut junior) -- cobertura de carrera COMPLETA,
 # no solo los ~144 más recientes de antes.
 _PLAYER_RESULTS_FEED_URL = "https://global.flashscore.ninja/2/x/feed/pr_2_167_{pid}_{page}_-4_en_1_s"
+_DAILY_TENNIS_FEED_URL = "https://global.flashscore.ninja/2/x/feed/f_2_{day}_3_en_1"
 _MAX_RESULTS_PAGES = 45  # cap de seguridad -- Djokovic (carrera larguísima) usó 37
+_daily_feed_cache: dict[int, tuple[float, str]] = {}
+
+
+def _fetch_daily_matches(day: int = 0) -> str | None:
+    """Cartelera global de tenis del día; una request compartida por ciclo."""
+    cached = _daily_feed_cache.get(day)
+    if cached and time.monotonic() - cached[0] < 120:
+        return cached[1]
+    flashscore_throttle.wait()
+    resp = brightdata_proxy.fetch_with_ip_block_fallback(
+        _DAILY_TENNIS_FEED_URL.format(day=day),
+        headers={
+            "X-Fsign": "SW9D1eZo", "Referer": "https://www.flashscore.com/",
+            "Accept": "*/*",
+        },
+        timeout=25,
+    )
+    if resp is None or resp.status_code != 200 or "~AA÷" not in (resp.text or ""):
+        return None
+    _daily_feed_cache[day] = (time.monotonic(), resp.text)
+    return resp.text
 
 
 def _fetch_results_page(
@@ -693,6 +715,7 @@ def find_match_tournament(player_a_name: str, player_b_name: str, match_date: st
 def find_match_identity(
     player_a_name: str, player_b_name: str, match_date: str, tournament: str | None = None,
     expected_score: str | None = None,
+    *, require_final: bool = True,
 ) -> dict[str, Any] | None:
     """Busca el `match_id` real de Flashscore para un partido YA JUGADO,
     por coincidencia de AMBOS nombres + fecha (+ torneo como bonus,
@@ -750,8 +773,8 @@ def find_match_identity(
     best_match: dict[str, Any] | None = None
     best_score = 0.0
     for rec in _parse_all_records_with_tournament(html):
-        if rec.get("status") != 3 or not rec.get("timestamp"):
-            continue  # solo partidos finalizados, con timestamp real
+        if (require_final and rec.get("status") != 3) or not rec.get("timestamp"):
+            continue  # histórico: finalizado; live: cualquier estado real
 
         p1_fs, p2_fs = rec.get("p1_name", ""), rec.get("p2_name", "")
         score_anchor_p1, score_anchor_p2 = _name_score(anchor_name, p1_fs), _name_score(anchor_name, p2_fs)
@@ -796,6 +819,54 @@ def find_match_identity(
             }
 
     return best_match
+
+
+def find_live_match_identity(
+    player_a_name: str, player_b_name: str, match_date: str,
+    tournament: str | None = None,
+) -> dict[str, Any] | None:
+    """Resuelve identidad/orientación incluso si el partido sigue abierto.
+
+    Conserva las mismas validaciones estrictas de ambos nombres y fecha de
+    ``find_match_identity``; únicamente no exige el status de finalizado.
+    """
+    try:
+        target_date = datetime.fromisoformat(match_date).date()
+    except (TypeError, ValueError):
+        return None
+    day_offset = (target_date - datetime.now(UTC).date()).days
+    if day_offset not in (-1, 0, 1):
+        return None
+    feed = _fetch_daily_matches(day_offset)
+    if not feed:
+        return None
+    best = None
+    best_score = 0.0
+    for rec in _parse_all_records_with_tournament(feed):
+        if not rec.get("timestamp"):
+            continue
+        rec_date = datetime.fromtimestamp(rec["timestamp"], tz=UTC).date()
+        if abs((rec_date - target_date).days) > 1:
+            continue
+        p1_name, p2_name = rec.get("p1_name", ""), rec.get("p2_name", "")
+        a1, a2 = _name_score(player_a_name, p1_name), _name_score(player_a_name, p2_name)
+        b1, b2 = _name_score(player_b_name, p1_name), _name_score(player_b_name, p2_name)
+        direct, reverse = a1 + b2, a2 + b1
+        score = max(direct, reverse)
+        if max(a1, a2) < 0.6 or max(b1, b2) < 0.6:
+            continue
+        if tournament and rec.get("tournament"):
+            if _norm_name(tournament) in _norm_name(rec["tournament"]) or \
+                    _norm_name(rec["tournament"]) in _norm_name(tournament):
+                score += 0.5
+        if score > best_score:
+            best_score = score
+            best = {
+                "match_id": rec.get("match_id"),
+                "player_a_is_p1": direct >= reverse,
+                "p1_name": p1_name, "p2_name": p2_name,
+            }
+    return best
 
 
 def find_match_id(

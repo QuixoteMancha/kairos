@@ -170,6 +170,11 @@ class Match(HistoricalBaseModel):
     match_history = DeferredForeignKey(
         "MatchHistory", backref="kalshi_scans", null=True, on_delete="SET NULL",
     )
+    # Identidad de Flashscore resuelta una vez y reutilizada por el
+    # recolector live. Evita repetir búsquedas de jugador en cada ciclo.
+    flashscore_match_id = CharField(null=True)
+    player_a_is_flashscore_p1 = BooleanField(null=True)
+    flashscore_resolved_at = DateTimeField(null=True)
 
 
 class MatchDuration(HistoricalBaseModel):
@@ -438,6 +443,80 @@ class FavouriteShadowDecision(HistoricalBaseModel):
     closing_market_probability = FloatField(null=True)
     clv = FloatField(null=True)
     simulated_pnl_usd = FloatField(null=True)
+
+
+class LivePointSnapshot(HistoricalBaseModel):
+    """Estado punto-a-punto observado junto al precio real de mercado."""
+
+    class Meta:
+        table_name = "tennis_live_point_snapshot"
+        indexes = (
+            (("match", "observed_at"), False),
+            (("match", "probability_tick"), True),
+        )
+
+    match = ForeignKeyField(Match, backref="live_point_snapshots", on_delete="CASCADE")
+    match_history = ForeignKeyField(
+        MatchHistory, backref="live_point_snapshots", null=True, on_delete="SET NULL",
+    )
+    probability_tick = ForeignKeyField(
+        ProbabilityTick, backref="live_point_snapshots", null=True, on_delete="SET NULL",
+    )
+    flashscore_match_id = CharField()
+    player_a_is_flashscore_p1 = BooleanField()
+    observed_at = DateTimeField()
+    current_set = IntegerField(null=True)
+    games_observed = IntegerField(default=0)
+    points_observed = IntegerField(default=0)
+    break_points_observed = IntegerField(default=0)
+    raw_point_json = TextField()
+
+
+class LiveStatsSnapshot(HistoricalBaseModel):
+    """Corte acumulado de estadísticas live, orientado siempre a A/B."""
+
+    class Meta:
+        table_name = "tennis_live_stats_snapshot"
+        indexes = (
+            (("match", "observed_at"), False),
+            (("match", "probability_tick"), True),
+        )
+
+    match = ForeignKeyField(Match, backref="live_stats_snapshots", on_delete="CASCADE")
+    match_history = ForeignKeyField(
+        MatchHistory, backref="live_stats_snapshots", null=True, on_delete="SET NULL",
+    )
+    probability_tick = ForeignKeyField(
+        ProbabilityTick, backref="live_stats_snapshots", null=True, on_delete="SET NULL",
+    )
+    flashscore_match_id = CharField()
+    player_a_is_flashscore_p1 = BooleanField()
+    observed_at = DateTimeField()
+    raw_stats_json = TextField()
+    aces_a = IntegerField(null=True)
+    aces_b = IntegerField(null=True)
+    double_faults_a = IntegerField(null=True)
+    double_faults_b = IntegerField(null=True)
+    total_points_won_a = IntegerField(null=True)
+    total_points_won_b = IntegerField(null=True)
+    service_games_won_a = IntegerField(null=True)
+    service_games_won_b = IntegerField(null=True)
+    return_games_won_a = IntegerField(null=True)
+    return_games_won_b = IntegerField(null=True)
+    first_serve_pct_a = FloatField(null=True)
+    first_serve_pct_b = FloatField(null=True)
+    first_serve_points_won_pct_a = FloatField(null=True)
+    first_serve_points_won_pct_b = FloatField(null=True)
+    second_serve_points_won_pct_a = FloatField(null=True)
+    second_serve_points_won_pct_b = FloatField(null=True)
+    break_points_won_a = IntegerField(null=True)
+    break_points_won_b = IntegerField(null=True)
+    break_points_faced_a = IntegerField(null=True)
+    break_points_faced_b = IntegerField(null=True)
+    break_points_saved_a = IntegerField(null=True)
+    break_points_saved_b = IntegerField(null=True)
+    serve_games_played_a = IntegerField(null=True)
+    serve_games_played_b = IntegerField(null=True)
 
 
 class MatchWeather(HistoricalBaseModel):

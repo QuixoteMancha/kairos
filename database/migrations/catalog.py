@@ -36,6 +36,7 @@ def historical_models():
         TennisHistoricalOdds,
         TennisMatchProbabilityTick, TennisMatchStats, TennisMatchStatsSet,
         TennisFavouriteShadowDecision,
+        TennisLivePointSnapshot, TennisLiveStatsSnapshot,
         TennisMatchWeather, TennisPlayerRanking, TennisPlayerSyncStatus,
         TennisScannedMatch,
         Tournament,
@@ -47,6 +48,7 @@ def historical_models():
         TennisHistoricalOdds, PlayerStats, TennisScannedMatch,
         TennisMatchProbabilityTick, TennisMatchWeather,
         TennisFavouriteShadowDecision,
+        TennisLivePointSnapshot, TennisLiveStatsSnapshot,
         TennisMatchStats, TennisMatchStatsSet, Player, MatchDuration, MatchHistory,
         TennisPlayerSyncStatus, TeamMatchHistory,
         MlbGameHistory, MlbScannedMatch, MlbMatchProbabilityTick,
@@ -316,6 +318,20 @@ def _add_favourite_shadow_decisions(database: Database) -> None:
     """)
 
 
+def _add_tennis_live_snapshots(database: Database) -> None:
+    """Identidad live reutilizable y snapshots enlazados al tick exacto."""
+    for column in (
+        "flashscore_match_id VARCHAR(255)",
+        "player_a_is_flashscore_p1 BOOLEAN",
+        "flashscore_resolved_at TIMESTAMP",
+    ):
+        database.execute_sql(
+            f"ALTER TABLE tennis_scanned_match ADD COLUMN IF NOT EXISTS {column}"
+        )
+    from database.historical.tennis import TennisLivePointSnapshot, TennisLiveStatsSnapshot
+    database.create_tables([TennisLivePointSnapshot, TennisLiveStatsSnapshot], safe=True)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -332,4 +348,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(13, "add_flashscore_stats_orientation_20260817", _add_flashscore_stats_orientation),
     Migration(14, "invalidate_unoriented_ml_experiments_20260817", _invalidate_unoriented_ml_experiments),
     Migration(15, "add_favourite_shadow_decisions_20260817", _add_favourite_shadow_decisions),
+    Migration(16, "add_tennis_live_snapshots_20260817", _add_tennis_live_snapshots),
 )

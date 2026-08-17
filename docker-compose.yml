@@ -390,6 +390,22 @@ services:
     restart: unless-stopped
     networks: [kairos_net]
 
+  tennis_live_data_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_live_data_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_live_data_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      # Independiente del tick de mercado: no lo bloquea y limita la
+      # presión sobre Flashscore/mini-PC a 12 partidos cada 5 minutos.
+      TENNIS_LIVE_DATA_INTERVAL_SECONDS: "300"
+      TENNIS_LIVE_DATA_BATCH_SIZE: "12"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+
   tennis_match_stats_orientation_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_tennis_match_stats_orientation_worker

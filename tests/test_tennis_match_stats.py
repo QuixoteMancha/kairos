@@ -14,7 +14,7 @@ from database.historical.tennis.models import MatchStats as TennisMatchStats
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from outer_apis.scrapers.tennis.flashscore_scraper import (
     _extract_tournament_name, get_match_statistics, find_match_id,
-    find_match_identity, _parse_record,
+    find_match_identity, find_live_match_identity, _parse_record,
     _parse_score_sets, _score_sets_match,
 )
 
@@ -254,6 +254,23 @@ def test_find_match_identity_reports_player_a_orientation():
             "Casper Ruud", "Roberto Bautista Agut", "2026-08-01",
         )
     assert identity["match_id"] == "reverse123"
+    assert identity["player_a_is_p1"] is False
+
+
+def test_find_live_match_identity_accepts_non_final_status():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    ts = int(now.timestamp())
+    raw = _raw_record("live123", ts, "Bautista-Agut R.", "Ruud C.").replace("AB÷3", "AB÷2")
+    html = _fake_results_html(raw)
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_daily_matches",
+        return_value=html,
+    ):
+        identity = find_live_match_identity(
+            "Casper Ruud", "Roberto Bautista Agut", now.date().isoformat(),
+        )
+    assert identity["match_id"] == "live123"
     assert identity["player_a_is_p1"] is False
 
 
