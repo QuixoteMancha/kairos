@@ -232,7 +232,16 @@ def collect_cases(preset: FilterPreset) -> tuple[list[dict[str, Any]], dict[str,
                         "underdog_rank": int(underdog_rank),
                         "rank_gap": abs(int(underdog_rank) - int(favorite_rank)),
                         "favorite_age": _age_on(player_birthdate, played),
-                        "best_of": match.best_of or 3,
+                        # 2026-08-17: `MatchHistory.best_of` ya no existe en el
+                        # modelo (columna legacy sin productor, 0% de cobertura
+                        # incluso cuando existía -- ver `fill_data_gaps.py`).
+                        # Este campo es solo metadata informativa en el caso, no
+                        # se consume en ningún cálculo de esta simulación. 3 es
+                        # el formato real de la inmensa mayoría ATP/WTA tour
+                        # (excepto finales masculinas de Grand Slam, best-of-5,
+                        # que esta constante NO distingue -- honesto, no se
+                        # inventa el dato real).
+                        "best_of": 3,
                         "hit": match.winner_id == favorite_id,
                         "set1_favorite_win": self_won_set1 if favorite_is_a else (None if self_won_set1 is None else not self_won_set1),
                         "set2_favorite_win": self_won_set2 if favorite_is_a else (None if self_won_set2 is None else not self_won_set2),

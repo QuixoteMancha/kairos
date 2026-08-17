@@ -340,12 +340,17 @@ class MatchHistory(HistoricalBaseModel):
     # ganador, nunca se adivina.
     winner = ForeignKeyField(Player, backref="matches_won", null=True, on_delete="SET NULL", column_name="winner_id")
 
-    # 2026-08-09: `winner_age`/`loser_age`/`minutes`/`best_of` -- columnas
-    # históricas, sin productor activo desde la purga de la fuente externa
-    # que las traía (2026-08-10, "usaremos sólo tennisexplorer").
-    # `winner_age`/`loser_age`/`minutes` van atados a GANADOR/PERDEDOR
-    # (no a player_a/player_b). `best_of` es simétrico (no depende de
-    # quién ganó).
+    # 2026-08-09: `winner_age`/`loser_age` -- columnas históricas, sin
+    # productor activo desde la purga de la fuente externa que las traía
+    # (2026-08-10, "usaremos sólo tennisexplorer"), ahora repobladas vía
+    # `scripts/tennis/fill_data_gaps.py::fill_player_ages` (cálculo puro
+    # desde `Player.birthdate` + `match_date`, ver ese script). Van
+    # atados a GANADOR/PERDEDOR (no a player_a/player_b).
+    #
+    # `minutes`/`best_of` -- YA NO son columnas de este modelo (removidas,
+    # 0% de cobertura real incluso cuando existían, sin fuente). Si algún
+    # caller todavía las referencia, es un bug -- ver
+    # `scripts/tennis/fill_data_gaps.py` para el estado real documentado.
     winner_age = FloatField(null=True)
     loser_age = FloatField(null=True)
 
