@@ -39,9 +39,11 @@ from outer_apis.sports.tennis.match_history import set_fetch_allowlist
 from database.historical.tennis import save_next_match, has_real_match_detail_between
 from database.db import init_db, init_db_historical
 from database.accounting.systemhaltstate import is_halted
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_TICK_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 60  # "minuto a minuto", pedido explícito del usuario
+_WORKER_NAME = "tennis_match_tick_worker"
 
 _fmodel = TennisFModel()
 
@@ -230,8 +232,11 @@ if __name__ == "__main__":
         threading.Thread(target=_run_enrichment_loop, daemon=True).start()
         while True:
             try:
-                run_once()
+                mark_cycle_started(_WORKER_NAME)
+                result = run_once()
+                mark_cycle_finished(_WORKER_NAME, result)
             except Exception as e:
+                mark_cycle_failed(_WORKER_NAME, e)
                 print(f"[tennis_match_tick_worker] ciclo con error: {e}")
             time.sleep(interval)
     else:

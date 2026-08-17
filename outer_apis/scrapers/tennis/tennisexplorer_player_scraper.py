@@ -396,6 +396,67 @@ def _parse_year_html(html: str, self_name_hint: str) -> list[dict[str, Any]]:
     return results
 
 
+def parse_player_retirements(html: str) -> list[dict[str, str | None]]:
+    """Parse explicit in-match retirements from a player's Injuries table.
+
+    TennisExplorer does not consistently put ``ret.`` in match-detail scores.
+    The player page is the authoritative source: its ``playerInjuries`` table
+    identifies the start date, tournament, reason and (when available) the
+    partial score.  Walkovers are intentionally excluded because no player
+    retired from a match that had started.
+    """
+    table_match = re.search(
+        r'<table[^>]+id="playerInjuries"[^>]*>(.*?)</table>', html, re.DOTALL | re.IGNORECASE,
+    )
+    if table_match is None:
+        return []
+
+    retirements: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table_match.group(1), re.DOTALL | re.IGNORECASE):
+        date_match = re.search(
+            r'class="[^"]*\btime\b[^"]*"[^>]*>\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})',
+            row,
+        )
+        tournament_match = re.search(
+            r'class="[^"]*\btournament\b[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>',
+            row,
+            re.DOTALL | re.IGNORECASE,
+        )
+        reason_match = re.search(
+            r'<td[^>]+class="reason"(?P<attrs>[^>]*)>(?P<reason>.*?)</td>',
+            row,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if date_match is None or tournament_match is None or reason_match is None:
+            continue
+        reason = re.sub(r"<[^>]+>", "", reason_match.group("reason")).strip()
+        if not re.match(r"^retired\b", reason, re.IGNORECASE):
+            continue
+        raw_date = date_match.group(1)
+        try:
+            start_date = _date(*reversed([int(part) for part in raw_date.split(".")])).isoformat()
+            raw_end_date = date_match.group(2)
+            end_date = _date(*reversed([int(part) for part in raw_end_date.split(".")])).isoformat()
+        except ValueError:
+            continue
+        tournament = tournament_match.group(1).strip()
+        key = (start_date, tournament.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        title_match = re.search(r'\btitle="([^"]*)"', reason_match.group("attrs"), re.IGNORECASE)
+        score = re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else None
+        retirements.append({
+            "start_date": start_date,
+            "end_date": end_date,
+            "tournament": tournament,
+            "reason": reason,
+            "score": score or None,
+        })
+    return retirements
+
+
 def get_player_match_history(
     slug: str, player_display_name: str, years: list[int] | None = None,
 ) -> list[dict[str, Any]]:
@@ -728,17 +789,10 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
     individuales SÍ pueden venir None por separado (fail-closed por
     campo, ver `_bio_row`).
 
-    2026-08-11, pedido explícito del usuario ("hay que agregar los
-    retiros de los players") -- `retired`/`retired_side` se detectan por
-    el marcador "ret."/"w.o." dentro del texto de score (convención
-    ESTÁNDAR de tenis, no específica de TE). Honesto: NO se pudo
-    confirmar en vivo un ejemplo real de retiro en TennisExplorer
-    (revisados 60+ partidos reales de agosto 2026, ninguno tenía el
-    marcador -- retiros son raros, ~1-2% de los partidos, ventana
-    chica) -- el parseo sigue la convención documentada/universal, pero
-    su formato EXACTO en TE queda sin verificar 100% hasta encontrar un
-    caso real. Fail-closed por diseño: si el marcador no aparece,
-    `retired=False` siempre, nunca se asume."""
+    ``ret.`` in the score is retained as a compatible fallback. The
+    reliable source is :func:`parse_player_retirements`, because real TE
+    match-detail pages can omit that marker. Walkovers are not retirements.
+    """
     html = _fetch_match_detail(match_id)
     if html is None:
         return None
@@ -759,12 +813,12 @@ def get_match_detail(match_id: str) -> dict[str, Any] | None:
 
     # 2026-08-11, pedido explícito del usuario ("hay que agregar los
     # retiros de los players") -- convención estándar de tenis, el texto
-    # de score trae "ret."/"w.o." al final cuando el partido terminó por
-    # retiro/walkover (ej. "7-5, 2-6, 6-4 ret."). El jugador retirado es
+    # de score puede traer "ret." al final cuando terminó por retiro
+    # (ej. "7-5, 2-6, 6-4 ret."). El jugador retirado es
     # SIEMPRE el que perdió el partido (`winner_side` ya identifica al
     # ganador por sets, el lado contrario es quien se retiró) -- nunca
     # se adivina si el marcador no aparece en el texto (fail-closed).
-    retired = bool(sets_score) and re.search(r"\bret\.?\b|\bw\.?o\.?\b", sets_score, re.IGNORECASE) is not None
+    retired = bool(sets_score) and re.search(r"\bret\.?\b", sets_score, re.IGNORECASE) is not None
     retired_side = None
     if retired and winner_side is not None:
         retired_side = "b" if winner_side == "a" else "a"

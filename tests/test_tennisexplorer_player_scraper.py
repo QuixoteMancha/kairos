@@ -16,7 +16,28 @@ from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     resolve_player_slug, _extract_href_slug,
     get_match_detail, _bio_row, _parse_birthdate, _parse_int_prefix, get_tour_by_sex,
     _tour_from_tournament_href, get_next_match, _te_native_to_nombre_apellido,
+    parse_player_retirements,
 )
+
+
+def test_parse_player_retirements_excludes_walkovers_and_reads_partial_score():
+    html = '''
+    <table class="result flags injured" id="playerInjuries"><tbody>
+      <tr><td class="first time noWrp tl">22.01.2024 - 19.02.2024</td>
+      <td class="tl tournament"><a href="/australian-open/2024/wta-women/">Australian Open</a></td>
+      <td class="reason" title="0-3">retired</td></tr>
+      <tr><td class="first time noWrp tl">25.06.2026 - 30.06.2026</td>
+      <td class="tl tournament"><a href="/bad-homburg-wta/2026/wta-women/">Bad Homburg WTA</a></td>
+      <td class="reason">walkover</td></tr>
+      <tr><td class="first time noWrp tl">18.09.2019 - 24.09.2019</td>
+      <td class="tl tournament"><a href="/guangzhou/2019/wta-women/">Guangzhou</a></td>
+      <td class="reason" title="4-6, 3-4">retired - right knee</td></tr>
+    </tbody></table>'''
+
+    assert parse_player_retirements(html) == [
+        {"start_date": "2024-01-22", "end_date": "2024-02-19", "tournament": "Australian Open", "reason": "retired", "score": "0-3"},
+        {"start_date": "2019-09-18", "end_date": "2019-09-24", "tournament": "Guangzhou", "reason": "retired - right knee", "score": "4-6, 3-4"},
+    ]
 
 _TITLE_OK = "<title>Alexandra Eala - Tennis Explorer</title>"
 

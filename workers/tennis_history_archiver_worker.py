@@ -11,10 +11,13 @@ cada minuto."""
 import os
 import time
 
+from database.db import init_db_historical
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
 from database.historical.tennis.archiver import run_archiver_cycle
 
 _REFRESH_INTERVAL_S = os.getenv("TENNIS_ARCHIVER_INTERVAL_SECONDS")
 _DEFAULT_INTERVAL_S = 3600  # 1h
+_WORKER_NAME = "tennis_history_archiver_worker"
 
 
 def _run_once() -> dict:
@@ -24,13 +27,17 @@ def _run_once() -> dict:
 
 
 if __name__ == "__main__":
+    init_db_historical()
     if _REFRESH_INTERVAL_S:
         interval = int(_REFRESH_INTERVAL_S) if _REFRESH_INTERVAL_S.strip() else _DEFAULT_INTERVAL_S
         print(f"[tennis_history_archiver] loop mode, refresh_interval={interval}s")
         while True:
             try:
-                _run_once()
+                mark_cycle_started(_WORKER_NAME)
+                result = _run_once()
+                mark_cycle_finished(_WORKER_NAME, result)
             except Exception as e:
+                mark_cycle_failed(_WORKER_NAME, e)
                 print(f"[tennis_history_archiver] error: {e}")
             time.sleep(interval)
     else:

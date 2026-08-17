@@ -1,5 +1,8 @@
+import os
+
 from strategies.limit_arb import LimitArb
 from strategies.market_arb import MarketArb
+from strategies.bet_on_favourite import BetOnFavourite
 from outer_apis.kalshi.client import KalshiAPI
 from outer_apis.kalshi.markets.tennis import build_tennis_markets
 from database.historical.tennis.matchtracking import register_scanned_matches, filter_new_markets
@@ -51,6 +54,10 @@ _TEAM_SPORT_SERIES = ("KXMLBGAME", "KXNBAGAME", "KXNHLGAME", "KXNFLGAME")
 # espera el mismo resultado acá, pero se escanea igual por pedido
 # explícito.
 _CRYPTO_15M_SERIES = ("KXBTC15M", "KXETH15M", "KXSOL15M")
+
+
+def _enabled(name: str) -> bool:
+    return os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Kairos:
@@ -142,9 +149,12 @@ class Kairos:
         # 2026-08-09: usa `tennis_markets_fresh_for_prematch` (filtrada),
         # NO `tennis_markets` -- ver bloque de arriba, pedido explícito
         # del usuario.
-        larb = LimitArb(api=kalshi_api, markets=markets + tennis_markets_fresh_for_prematch + football_markets + team_sport_markets)
-        larb.evaluate_risk_and_return_opportunities()
-        larb.execute_order_placement()
+        limit_arb_opportunities = []
+        if _enabled("ENABLE_LIMIT_ARB"):
+            larb = LimitArb(api=kalshi_api, markets=markets + tennis_markets_fresh_for_prematch + football_markets + team_sport_markets)
+            larb.evaluate_risk_and_return_opportunities()
+            larb.execute_order_placement()
+            limit_arb_opportunities = larb.opportunities
 
         # MarketArb gets the generic scan (covers same-ticket arb on every
         # market, tennis/football/team-sport legs included) PLUS the
@@ -158,11 +168,27 @@ class Kairos:
         # 2026-08-09: acá SÍ va `tennis_markets` completo, sin filtrar --
         # MarketArb no depende de historial/ranking de jugador, pedido
         # explícito del usuario ("para el market arb es irrelevante").
-        market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets + crypto15m_markets)
-        market_arb.evaluate_risk_and_return_opportunities()
-        market_arb.execute_order_placement()
+        market_arb_opportunities = []
+        if _enabled("ENABLE_MARKET_ARB"):
+            market_arb = MarketArb(api=kalshi_api, markets=markets + tennis_markets + team_sport_markets + crypto15m_markets)
+            market_arb.evaluate_risk_and_return_opportunities()
+            market_arb.execute_order_placement()
+            market_arb_opportunities = market_arb.opportunities
+
+        bet_on_favourite_opportunities = []
+        if _enabled("ENABLE_BET_ON_FAVOURITE"):
+            favourite = BetOnFavourite(
+                api=kalshi_api,
+                markets=tennis_markets_fresh_for_prematch,
+            )
+            favourite.evaluate_risk_and_return_opportunities()
+            bet_on_favourite_opportunities = favourite.opportunities
 
         return {
-            'limit_arb_opportunities': larb.opportunities,
-            'market_arb_opportunities': market_arb.opportunities,
+            'limit_arb_enabled': _enabled("ENABLE_LIMIT_ARB"),
+            'market_arb_enabled': _enabled("ENABLE_MARKET_ARB"),
+            'bet_on_favourite_enabled': _enabled("ENABLE_BET_ON_FAVOURITE"),
+            'limit_arb_opportunities': limit_arb_opportunities,
+            'market_arb_opportunities': market_arb_opportunities,
+            'bet_on_favourite_opportunities': bet_on_favourite_opportunities,
         }

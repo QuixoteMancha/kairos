@@ -39,7 +39,6 @@ from typing import Any
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory
 from database.historical.tennis import TennisHistoricalOdds
-from outer_apis.kalshi.fees import leg_fee_fraction
 
 
 def _devig_prob(odds_self: float, odds_opponent: float) -> float | None:
@@ -82,13 +81,16 @@ def _load_priced_matches(
     with db_historical.connection_context():
         # 2026-08-10, `winner_side` (texto "a"/"b") reemplazado por
         # `winner_id` (FK real al `Player` ganador, ver models.py).
-        query = MatchHistory.select().where(MatchHistory.winner_id.is_null(False))
+        query = MatchHistory.select().where(
+            MatchHistory.winner_id.is_null(False)
+            & ~(MatchHistory.match_id.startswith("recentform:"))
+        )
         if start_year:
             query = query.where(MatchHistory.match_date >= f"{start_year}-01-01")
         if end_year:
             query = query.where(MatchHistory.match_date <= f"{end_year}-12-31")
 
-        for row in query:
+        for row in query.order_by(MatchHistory.match_date, MatchHistory.id):
             if row.player_a_id is None or row.player_b_id is None:
                 continue
             perspectives = [
@@ -116,8 +118,12 @@ def _load_priced_matches(
                 self_is_favorite = odds_row.odds_self < odds_row.odds_opponent
                 favorite_fair_price = fair_self if self_is_favorite else (1.0 - fair_self)
                 favorite_won = (match_result == "W") == self_is_favorite
+                favorite_decimal_odds = (
+                    odds_row.odds_self if self_is_favorite else odds_row.odds_opponent
+                )
 
                 result.append({
+                    "match_id": row.match_id,
                     "player_name": player_name, "opponent_name": opponent_name,
                     # 2026-08-11: `MatchHistory.tournament` es FK real
                     # ahora (ver writer.py::_resolve_tournament_id) --
@@ -127,8 +133,12 @@ def _load_priced_matches(
                     "match_date": row.match_date,
                     "tournament": row.tournament.tournament_name if row.tournament else None,
                     "favorite_fair_price": favorite_fair_price, "favorite_won": favorite_won,
+                    "favorite_decimal_odds": favorite_decimal_odds,
                     "odds_self": odds_row.odds_self, "odds_opponent": odds_row.odds_opponent,
                 })
+                # Una fila de MatchHistory representa un partido. La otra
+                # perspectiva produciría exactamente la misma apuesta.
+                break
     return result
 
 
@@ -175,26 +185,33 @@ def run_strategy1_with_real_odds(
     métricas que `_simulate_realistic_all_strategies` para comparar
     directo contra la versión con precio del motor base.
 
-    Secuencial en el orden en que vienen `matches` -- el CALLER es
-    responsable de ordenarlos cronológicamente si eso importa (acá no
-    se ordena por fecha para no asumir que `match_date` siempre viene
-    poblado/parseable, a diferencia del backtest de TML-Database)."""
+    La cuota decimal ofrecida es el precio ejecutable. La probabilidad
+    de-vigged se reserva exclusivamente para calibración."""
     capital = initial_capital
     busted = False
     trade_returns: list[float] = []
     hits = 0
     equity_curve = [initial_capital]
 
-    for m in matches:
+    ordered_matches = sorted(
+        matches,
+        key=lambda m: (str(m.get("match_date") or ""), str(m.get("match_id") or "")),
+    )
+    for m in ordered_matches:
         if busted:
             break
-        price = m["favorite_fair_price"]
-        if price <= 0 or price >= 1:
+        decimal_odds = m.get("favorite_decimal_odds")
+        if decimal_odds is None:
+            # Compatibilidad con datasets anteriores: el campo se interpreta
+            # como precio ofrecido solo cuando no existe la cuota decimal.
+            price = m.get("execution_price", m.get("favorite_fair_price"))
+            decimal_odds = (1.0 / price) if price and 0 < price < 1 else None
+        if decimal_odds is None or decimal_odds <= 1:
             continue
         stake = capital * stake_pct
-        fee_frac = (leg_fee_fraction(price) or 0.0) / price
-        raw_pct = (1 - price) / price if m["favorite_won"] else -1.0
-        net_pct = raw_pct - fee_frac
+        # La cuota de la casa ya contiene el vig. No se añade una comisión
+        # de Kalshi a una operación que no usa un precio histórico de Kalshi.
+        net_pct = (decimal_odds - 1.0) if m["favorite_won"] else -1.0
 
         capital += stake * net_pct
         trade_returns.append(net_pct)
@@ -229,8 +246,8 @@ def run_strategy1_with_real_odds(
         "sharpe_ratio_per_trade": sharpe,
         "busted": busted,
         "caveat": (
-            "Precio de mercado REAL de-vigged (TennisExplorer), neto de "
-            "fees reales de Kalshi. Sin cupo de concurrencia ni techo de "
+            "PnL liquidado con cuota decimal REAL ofrecida por TennisExplorer; "
+            "el de-vig se usa solo para calibración. Sin cupo de concurrencia ni techo de "
             "liquidez (a diferencia de _simulate_realistic_all_strategies) "
             "-- agregar si se necesita comparar apples-to-apples."
         ),

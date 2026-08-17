@@ -16,10 +16,84 @@ from typing import Any
 from database.db import init_db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import MatchHistory
 
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _match_date_from_close_time(close_time: str | None) -> str | None:
+    if not close_time or len(close_time) < 10:
+        return None
+    candidate = close_time[:10]
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return candidate
+
+
+def ensure_match_history_for_scanned_match(match: TennisScannedMatch) -> MatchHistory | None:
+    """Crea o reutiliza la contraparte deportiva del mercado de Kalshi."""
+    try:
+        from database.historical.tennis.writer import _resolve_player_id, _resolve_tournament_id
+
+        player_a_id = _resolve_player_id(match.player_a_name, tour=match.tour)
+        player_b_id = _resolve_player_id(match.player_b_name, tour=match.tour)
+        if player_a_id is None or player_b_id is None:
+            return None
+        match_date = _match_date_from_close_time(match.close_time)
+        condition = (
+            ((MatchHistory.player_a == player_a_id) & (MatchHistory.player_b == player_b_id))
+            | ((MatchHistory.player_a == player_b_id) & (MatchHistory.player_b == player_a_id))
+        )
+        if match_date:
+            condition &= MatchHistory.match_date == match_date
+        existing = MatchHistory.get_or_none(condition)
+        if existing is not None:
+            winner_id = player_a_id if match.winner == "a" else player_b_id if match.winner == "b" else None
+            if winner_id is not None and existing.winner_id is None:
+                existing.winner_id = winner_id
+                existing.updated_at = _now()
+                existing.save(only=[MatchHistory.winner, MatchHistory.updated_at])
+            if match.match_history_id != existing.id:
+                match.match_history_id = existing.id
+                match.save(only=[TennisScannedMatch.match_history])
+            return existing
+        winner_id = player_a_id if match.winner == "a" else player_b_id if match.winner == "b" else None
+        history = MatchHistory.create(
+            match_id=f"kalshi:{match.market_id}", source="kalshi", tour=match.tour,
+            match_date=match_date, tournament_id=_resolve_tournament_id(
+                match.tournament, match_date, tour=match.tour,
+            ),
+            round=match.round, surface=match.surface,
+            player_a_id=player_a_id, player_b_id=player_b_id,
+            player_a_ranking=match.player_a_rank_at_match,
+            player_b_ranking=match.player_b_rank_at_match,
+            winner_id=winner_id,
+            fetched_at=match.detected_at or _now(),
+        )
+        match.match_history_id = history.id
+        match.save(only=[TennisScannedMatch.match_history])
+        return history
+    except Exception:
+        return None
+
+
+def backfill_scanned_matches_to_history() -> dict[str, int]:
+    init_db_historical()
+    created = reused = failed = 0
+    for scanned in TennisScannedMatch.select():
+        before = MatchHistory.select().count()
+        history = ensure_match_history_for_scanned_match(scanned)
+        if history is None:
+            failed += 1
+        elif MatchHistory.select().count() > before:
+            created += 1
+        else:
+            reused += 1
+    return {"created": created, "reused": reused, "failed": failed}
 
 
 def filter_new_markets(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -84,10 +158,11 @@ def register_scanned_match(market: dict[str, Any]) -> None:
 
     try:
         init_db_historical()
-        exists = TennisScannedMatch.select().where(TennisScannedMatch.market_id == market_id).exists()
-        if exists:
+        existing = TennisScannedMatch.get_or_none(TennisScannedMatch.market_id == market_id)
+        if existing is not None:
+            ensure_match_history_for_scanned_match(existing)
             return
-        TennisScannedMatch.create(
+        scanned = TennisScannedMatch.create(
             market_id=market_id, ticker_a=ticker_a, ticker_b=ticker_b, tour=tour,
             surface=market.get("surface"), tournament=market.get("tournament"),
             round=market.get("round"),
@@ -96,6 +171,7 @@ def register_scanned_match(market: dict[str, Any]) -> None:
             player_b_rank_at_match=market.get("player_b_rank"),
             best_of=best_of, close_time=market.get("close_time"), detected_at=_now(),
         )
+        ensure_match_history_for_scanned_match(scanned)
     except Exception:
         pass
 
@@ -152,6 +228,26 @@ def save_probability_tick(market_id: str, market_price_a: float | None, model_fa
         )
     except Exception:
         pass
+
+
+def get_probability_history(match_history_id: int) -> list[dict[str, Any]]:
+    """Trayectoria point-in-time de Kalshi/modelo para un partido histórico."""
+    try:
+        init_db_historical()
+        rows = (
+            TennisMatchProbabilityTick.select(TennisMatchProbabilityTick, TennisScannedMatch.market_id)
+            .join(TennisScannedMatch)
+            .where(TennisScannedMatch.match_history == match_history_id)
+            .order_by(TennisMatchProbabilityTick.observed_at, TennisMatchProbabilityTick.id)
+        )
+        return [{
+            "market_id": row.match.market_id,
+            "observed_at": row.observed_at,
+            "market_probability_a": row.market_price_a,
+            "model_probability_a": row.model_fair_a,
+        } for row in rows]
+    except Exception:
+        return []
 
 
 def backfill_missing_tournaments(fetch_raw_market_fn) -> dict[str, Any]:
@@ -240,5 +336,10 @@ def mark_match_settled(market_id: str, winner: str) -> None:
         match.winner = winner
         match.settled_at = _now()
         match.save()
+        history = ensure_match_history_for_scanned_match(match)
+        if history is not None:
+            history.winner_id = history.player_a_id if winner == "a" else history.player_b_id
+            history.updated_at = _now()
+            history.save(only=[MatchHistory.winner, MatchHistory.updated_at])
     except Exception:
         pass

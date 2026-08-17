@@ -46,10 +46,17 @@ calcula PnL para sus propias paper trades.
 """
 
 import os
+import json
+from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request
 
 from database.db import init_db, db
+from database.db import init_db_historical, db_historical
+from database.historical.workerstate import HistoricalWorkerState, TennisMlExperiment
+from database.historical.tennis.models import (
+    MatchHistory, MatchStats, MatchWeather, Player, TennisHistoricalOdds,
+)
 from database.accounting.limitarbsignal import LimitArbSignal
 from database.accounting.papertrade import PaperTrade
 from database.accounting.paperaccount import PaperAccount
@@ -70,6 +77,95 @@ app = Flask(__name__)
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500  # fail-closed: /api/operations nunca devuelve una lista sin tope
+
+
+@app.route('/api/workers')
+def worker_health():
+    """Estado persistente de los workers históricos, solo lectura."""
+    try:
+        init_db_historical()
+        now = datetime.now(timezone.utc)
+        with db_historical.connection_context():
+            rows = list(HistoricalWorkerState.select().order_by(HistoricalWorkerState.worker_name))
+        result = []
+        for row in rows:
+            updated_at = row.updated_at
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            age_seconds = max(0.0, (now - updated_at).total_seconds())
+            result.append({
+                'worker_name': row.worker_name,
+                'cursor_id': row.cursor_id,
+                'cycle_started_at': row.cycle_started_at.isoformat() if row.cycle_started_at else None,
+                'cycle_finished_at': row.cycle_finished_at.isoformat() if row.cycle_finished_at else None,
+                'updated_at': row.updated_at.isoformat(),
+                'heartbeat_age_seconds': age_seconds,
+                'running_cycle': bool(
+                    row.cycle_started_at
+                    and (row.cycle_finished_at is None or row.cycle_started_at > row.cycle_finished_at)
+                ),
+                'last_error': row.last_error,
+                'last_result': json.loads(row.last_result_json) if row.last_result_json else None,
+            })
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tennis/data-quality')
+def tennis_data_quality():
+    """Métricas agregadas para el dashboard externo de Kairos_Desktop."""
+    try:
+        init_db_historical()
+        with db_historical.connection_context():
+            total = MatchHistory.select().count()
+
+            def coverage(predicate):
+                count = MatchHistory.select().where(predicate).count()
+                return {
+                    'count': count,
+                    'pct': round(100.0 * count / total, 2) if total else 0.0,
+                }
+
+            latest_ml = TennisMlExperiment.select().order_by(
+                TennisMlExperiment.created_at.desc(), TennisMlExperiment.id.desc(),
+            ).first()
+            payload = {
+                'generated_at': datetime.now(timezone.utc).isoformat(),
+                'matches_total': total,
+                'players_total': Player.select().count(),
+                'historical_odds_total': TennisHistoricalOdds.select().count(),
+                'match_stats_total': MatchStats.select().count(),
+                'match_weather_total': MatchWeather.select().count(),
+                'coverage': {
+                    'both_players': coverage(
+                        MatchHistory.player_a.is_null(False) & MatchHistory.player_b.is_null(False)
+                    ),
+                    'winner': coverage(MatchHistory.winner.is_null(False)),
+                    'tournament': coverage(MatchHistory.tournament.is_null(False)),
+                    'duration': coverage(MatchHistory.duration.is_null(False)),
+                    'surface_elo_both': coverage(
+                        MatchHistory.player_a_surface_elo.is_null(False)
+                        & MatchHistory.player_b_surface_elo.is_null(False)
+                    ),
+                    'retirement_identified': coverage(
+                        MatchHistory.retired & MatchHistory.player_retired.is_null(False)
+                    ),
+                },
+                'latest_ml_experiment': ({
+                    'algorithm': latest_ml.algorithm,
+                    'dataset_sha256': latest_ml.dataset_sha256,
+                    'sample_count': latest_ml.sample_count,
+                    'training_through': latest_ml.training_through,
+                    'eligible_for_review': latest_ml.eligible_for_review,
+                    'promotion_status': latest_ml.promotion_status,
+                    'metrics': json.loads(latest_ml.metrics_json),
+                    'created_at': latest_ml.created_at.isoformat(),
+                } if latest_ml else None),
+            }
+        return jsonify(payload), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 def _papertrade_to_dict(t: PaperTrade) -> dict:

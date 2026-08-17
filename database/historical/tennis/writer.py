@@ -12,9 +12,12 @@ writing the historical record failed).
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any
 
-from peewee import IntegrityError
+from peewee import IntegrityError, JOIN
+
+logger = logging.getLogger(__name__)
 
 # Ventana por default para get_all_surface_matches -- más amplia que los
 # 6 meses de surface_form.py (LOOKBACK_DAYS=183) a propósito: el stat de
@@ -22,12 +25,12 @@ from peewee import IntegrityError
 # la mayor muestra real posible, no solo forma reciente.
 LOOKBACK_DAYS_DEFAULT = 365.0
 
-from database.db import init_db_historical
+from database.db import DB_BACKEND, db_historical, init_db_historical
 from database.historical.tennis.models import (
     TennisPlayerRanking,
     TennisAbstractElo,
     PlayerStats,
-    TennisRecentResult, MatchHistory, MatchDuration, Player, Tournament,
+    MatchHistory, MatchDuration, Player, Tournament,
 )
 
 # 2026-08-09, pedido explícito del usuario -- "cualquier tabla de matches
@@ -82,19 +85,51 @@ def _names_confirm_identity(name_a: str, name_b: str) -> bool:
     tokens_a, tokens_b = _tokens(name_a), _tokens(name_b)
     if not tokens_a or not tokens_b:
         return False
-    surname_a = max(tokens_a, key=len).lower()
-    surname_b = max(tokens_b, key=len).lower()
-    if surname_a != surname_b:
-        return False
-    given_a = [t.lower() for t in tokens_a if t.lower() != surname_a]
-    given_b = [t.lower() for t in tokens_b if t.lower() != surname_b]
-    if not given_a or not given_b:
-        return False
-    for ga in given_a:
-        for gb in given_b:
-            if ga == gb or (len(ga) == 1 and gb.startswith(ga)) or (len(gb) == 1 and ga.startswith(gb)):
-                return True
+    normalized_a = [token.lower() for token in tokens_a]
+    normalized_b = [token.lower() for token in tokens_b]
+    if sorted(normalized_a) == sorted(normalized_b):
+        return True
+
+    # El apellido no siempre es el token más largo: ``Gabriela Andrea
+    # Knutson`` frente a ``Knutson G.`` hacía que la heurística anterior
+    # eligiera "gabriela" como supuesto apellido y duplicara el partido.
+    # Se toma cada token compartido como posible ancla y se exige además
+    # coincidencia real del nombre, o inicial explícita en uno de los lados.
+    for anchor in set(normalized_a) & set(normalized_b):
+        if len(anchor) < 3:
+            continue
+        given_a = [token for token in normalized_a if token != anchor]
+        given_b = [token for token in normalized_b if token != anchor]
+        for ga in given_a:
+            for gb in given_b:
+                if ga == gb:
+                    return True
+                if len(ga) == 1 and len(gb) > 1 and gb.startswith(ga):
+                    return True
+                if len(gb) == 1 and len(ga) > 1 and ga.startswith(gb):
+                    return True
     return False
+
+
+def _find_synthetic_match_history_row(name_a: str, name_b: str, match_date: str):
+    """Devuelve un único provisional inequívoco del mismo partido."""
+    candidates = []
+    rows = MatchHistory.select().where(
+        (MatchHistory.match_date == match_date)
+        & MatchHistory.match_id.startswith("recentform:")
+    )
+    for row in rows:
+        direct = (
+            _names_confirm_identity(row.player_a.canonical_name, name_a)
+            and _names_confirm_identity(row.player_b.canonical_name, name_b)
+        )
+        reverse = (
+            _names_confirm_identity(row.player_a.canonical_name, name_b)
+            and _names_confirm_identity(row.player_b.canonical_name, name_a)
+        )
+        if direct or reverse:
+            candidates.append(row)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _find_existing_match_history_row(name_a: str, name_b: str, match_date: str):
@@ -292,20 +327,15 @@ def _resolve_tournament_id(name: str | None, match_date: str | None, tour: str |
                 break
         if existing is not None:
             return existing.id
-        try:
-            row = Tournament.create(
-                year=year, tournament_name=name, tour=tour, city="", fetched_at=_now(),
-            )
-            return row.id
-        except IntegrityError:
-            # 2026-08-16: carrera entre threads sobre el mismo (year,
-            # tournament_name) -- índice único real, el otro thread ya
-            # creó la fila; se re-busca en vez de perder el FK (mismo
-            # criterio que `_resolve_player_id`).
-            existing = Tournament.get_or_none(
-                (Tournament.year == year) & (Tournament.tournament_name == name)
-            )
-            return existing.id if existing is not None else None
+        Tournament.insert(
+            year=year, tournament_name=name, tour=tour, city="", fetched_at=_now(),
+        ).on_conflict_ignore().execute()
+        # Otro thread puede haber ganado la carrera; ON CONFLICT evita
+        # ensuciar el log de PostgreSQL con una excepción esperada.
+        existing = Tournament.get_or_none(
+            (Tournament.year == year) & (Tournament.tournament_name == name)
+        )
+        return existing.id if existing is not None else None
     except Exception:
         return None
 
@@ -380,7 +410,7 @@ def harvest_slug_into_player(name: str, slug: str | None) -> None:
                 p.save()
                 return
     except Exception:
-        pass
+        logger.exception("player slug cache update failed", extra={"player_name": name})
 
 
 # Campos comparables de `MatchHistory` para detectar cambios reales
@@ -409,18 +439,43 @@ def _now():
 
 
 def save_rankings_snapshot(tour: str, players: list[dict[str, Any]]) -> None:
-    """One new row per player, per fresh fetch -- deliberately NOT
-    deduped: this is a time series (ranking history), each fetch is a
-    real new data point. Bounded naturally by the 1h cache TTL in
-    outer_apis/tennis_rankings.py (a fresh fetch only happens that often)."""
+    """Guarda como máximo un snapshot oficial por tour y día UTC.
+
+    La caché de rankings es por proceso; el advisory lock evita que varios
+    contenedores inserten miles de copias idénticas del mismo ranking.
+    """
     if not players:
         return
+    lock_acquired = False
     try:
         init_db_historical()
         fetched_at = _now()
+        # Rankings oficiales cambian semanalmente. Una caché por proceso no
+        # evita que muchos contenedores persistan el mismo snapshot. El lock
+        # transaccional hace atómico el chequeo y limita la serie a un snapshot
+        # diario por tour, aun con workers concurrentes.
+        if DB_BACKEND != "sqlite":
+            db_historical.execute_sql(
+                "SELECT pg_advisory_lock(hashtext(%s))",
+                (f"kairos-ranking-snapshot:{tour}",),
+            )
+            lock_acquired = True
+        latest = (
+            TennisPlayerRanking.select(TennisPlayerRanking.fetched_at)
+            .where(TennisPlayerRanking.tour == tour)
+            .order_by(TennisPlayerRanking.fetched_at.desc())
+            .first()
+        )
+        if latest is not None:
+            latest_at = latest.fetched_at
+            if latest_at.tzinfo is None:
+                latest_at = latest_at.replace(tzinfo=timezone.utc)
+            if latest_at.date() == fetched_at.date():
+                return
         rows = [
             {
                 "player_name": p["nombre"],
+                "player": _resolve_player_id(p["nombre"], tour=tour),
                 "tour": tour,
                 "ranking": p["ranking"],
                 "country": p.get("pais"),
@@ -432,7 +487,16 @@ def save_rankings_snapshot(tour: str, players: list[dict[str, Any]]) -> None:
         if rows:
             TennisPlayerRanking.insert_many(rows).execute()
     except Exception:
-        pass
+        logger.exception("save_rankings_snapshot failed", extra={"tour": tour})
+    finally:
+        if lock_acquired:
+            try:
+                db_historical.execute_sql(
+                    "SELECT pg_advisory_unlock(hashtext(%s))",
+                    (f"kairos-ranking-snapshot:{tour}",),
+                )
+            except Exception:
+                logger.exception("ranking advisory unlock failed", extra={"tour": tour})
 
 
 def _identity_matches_detail_side(known_name: str, detail_name: str) -> bool:
@@ -492,23 +556,9 @@ def save_match_history(player_name: str, matches: list[dict[str, Any]]) -> None:
             if match_id and _resolve_and_save_via_match_detail(player_name, match_id):
                 continue  # identidad completa ya resuelta y persistida
 
-            synthetic_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
-            player_a_id = _resolve_player_id(player_name)
-            player_b_id = _resolve_player_id(opponent)
-            winner_id = player_a_id if result == "W" else player_b_id
-            try:
-                MatchHistory.create(
-                    match_id=synthetic_id,
-                    source=m.get("source", "tennisexplorer"),
-                    match_date=match_date,
-                    score=score,
-                    winner_id=winner_id,
-                    player_a_id=player_a_id,
-                    player_b_id=player_b_id,
-                    fetched_at=fetched_at,
-                )
-            except Exception:
-                pass  # carrera real: el otro jugador/save_match_detail lo creó justo antes -- no duplicar
+            # Sin ID real no existe identidad canónica suficiente para
+            # persistir. El worker de detalle lo completará posteriormente.
+            continue
     except Exception:
         pass
 
@@ -750,6 +800,10 @@ def save_match_detail(detail: dict[str, Any]) -> str:
                         | ((MatchHistory.player_a == player_b_id) & (MatchHistory.player_b == player_a_id))
                     )
                 )
+                if candidate is None:
+                    candidate = _find_synthetic_match_history_row(
+                        detail["player_a_name"], detail["player_b_name"], match_date,
+                    )
                 if candidate is not None:
                     existing = candidate
                     upgraded_identity = existing.match_id != match_id
@@ -1019,29 +1073,9 @@ def save_surface_match_history(player_name: str, matches: list[dict[str, Any]]) 
                     existing.updated_at = fetched_at
                     existing.save()
                 continue
-            result = m.get("result")
-            player_a_id = _resolve_player_id(player_name)
-            player_b_id = _resolve_player_id(opponent)
-            winner_id = (
-                (player_a_id if result == "W" else player_b_id)
-                if result in ("W", "L") else None
-            )
-            match_id = _synthetic_recentform_match_id(player_name, opponent, match_date)
-            try:
-                MatchHistory.create(
-                    match_id=match_id,
-                    source="tennisexplorer",
-                    match_date=match_date,
-                    surface=surface,
-                    tournament_id=_resolve_tournament_id(m.get("tournament"), match_date),
-                    score=m.get("score"),
-                    winner_id=winner_id,
-                    player_a_id=player_a_id,
-                    player_b_id=player_b_id,
-                    fetched_at=fetched_at,
-                )
-            except Exception:
-                pass  # carrera real -- el otro jugador/save_match_detail lo creó justo antes
+            # Un agregado por jugador no identifica un partido de forma
+            # inequívoca. Solo se enriquece una fila canónica existente.
+            continue
     except Exception:
         pass
 
@@ -1187,9 +1221,10 @@ def save_tennisabstract_career_splits(player_name: str, rows: list[dict[str, Any
     try:
         init_db_historical()
         fetched_at = _now()
+        player_id = _resolve_player_id(player_name)
         to_insert = [
             {
-                "player_name": player_name, "surface": r["surface"],
+                "player_name": player_name, "player": player_id, "surface": r["surface"],
                 "matches": r.get("matches"), "wins": r.get("wins"), "losses": r.get("losses"),
                 "win_pct": r.get("win_pct"), "hold_pct": r.get("hold_pct"),
                 "break_pct": r.get("break_pct"), "ace_pct": r.get("ace_pct"), "df_pct": r.get("df_pct"),
@@ -1211,10 +1246,15 @@ def get_current_career_splits(player_name: str, max_age_hours: float = _TA_PLAYE
     ESTE jugador o están stale."""
     try:
         init_db_historical()
+        player_id = _lookup_player_id(player_name)
+        identity_filter = (
+            (PlayerStats.player == player_id) if player_id is not None
+            else (PlayerStats.player_name == player_name)
+        )
         latest = (
             PlayerStats
             .select(PlayerStats.fetched_at)
-            .where(PlayerStats.player_name == player_name)
+            .where(identity_filter)
             .order_by(PlayerStats.fetched_at.desc())
             .limit(1)
             .first()
@@ -1230,7 +1270,7 @@ def get_current_career_splits(player_name: str, max_age_hours: float = _TA_PLAYE
         rows = (
             PlayerStats
             .select()
-            .where((PlayerStats.player_name == player_name)
+            .where(identity_filter
                    & (PlayerStats.fetched_at == latest.fetched_at))
         )
         return [
@@ -1271,16 +1311,18 @@ def get_all_career_splits_for_surface(surface: str, max_age_days: float = 30.0) 
         cutoff = _now() - timedelta(days=max_age_days)
         rows = (
             PlayerStats
-            .select()
+            .select(PlayerStats, Player.canonical_name)
+            .join(Player, on=(PlayerStats.player == Player.id), join_type=JOIN.LEFT_OUTER)
             .where((PlayerStats.surface == surface)
                    & (PlayerStats.fetched_at >= cutoff))
             .order_by(PlayerStats.fetched_at.desc())
         )
         result: dict[str, dict[str, Any]] = {}
         for r in rows:
-            if r.player_name in result:
+            name = r.player.canonical_name if r.player_id else r.player_name
+            if name in result:
                 continue  # ya se guardó la fila más reciente de este jugador (orden desc)
-            result[r.player_name] = {
+            result[name] = {
                 "surface": r.surface, "matches": r.matches, "wins": r.wins, "losses": r.losses,
                 "win_pct": r.win_pct, "hold_pct": r.hold_pct, "break_pct": r.break_pct,
                 "ace_pct": r.ace_pct, "df_pct": r.df_pct,
@@ -1321,10 +1363,11 @@ def get_latest_rankings(tour: str, max_age_days: float = 14.0) -> dict[str, int]
 
         rows = (
             TennisPlayerRanking
-            .select()
+            .select(TennisPlayerRanking, Player.canonical_name)
+            .join(Player, on=(TennisPlayerRanking.player == Player.id), join_type=JOIN.LEFT_OUTER)
             .where((TennisPlayerRanking.tour == tour) & (TennisPlayerRanking.fetched_at == latest.fetched_at))
         )
-        return {r.player_name: r.ranking for r in rows}
+        return {(r.player.canonical_name if r.player_id else r.player_name): r.ranking for r in rows}
     except Exception:
         return {}
 
@@ -1360,77 +1403,6 @@ def get_all_surface_matches(player_name: str, surface: str, lookback_days: float
         return result
     except Exception:
         return []
-
-
-_TA_RECENT_RESULTS_FRESHNESS_HOURS = 24  # 1 día -- señal de lesión debe estar razonablemente al día, no 1 semana
-
-
-def save_recent_results(player_name: str, rows: list[dict[str, Any]]) -> None:
-    """Dedupe por (player_name, match_date, opponent_name) -- un partido
-    real no cambia una vez jugado, evita duplicar en cada refresh."""
-    if not rows:
-        return
-    try:
-        init_db_historical()
-        fetched_at = _now()
-        for r in rows:
-            date = r.get("date")
-            opponent = r.get("opponent")
-            if not date or not opponent:
-                continue
-            exists = TennisRecentResult.select().where(
-                (TennisRecentResult.player_name == player_name)
-                & (TennisRecentResult.match_date == date)
-                & (TennisRecentResult.opponent_name == opponent)
-            ).exists()
-            if exists:
-                continue
-            TennisRecentResult.create(
-                player_name=player_name, match_date=date, tournament=r.get("tournament"),
-                round=r.get("round"), opponent_name=opponent, subject_won=r.get("subject_won", False),
-                retired_or_walkover=r.get("retired_or_walkover", False), fetched_at=fetched_at,
-            )
-    except Exception:
-        pass
-
-
-def get_recent_results(player_name: str, max_age_hours: float = _TA_RECENT_RESULTS_FRESHNESS_HOURS) -> list[dict[str, Any]] | None:
-    """DB-first, frescura POR JUGADOR. Fail-closed: None si no hay filas
-    para este jugador o la más reciente está stale (fuerza fetch en vivo)."""
-    try:
-        init_db_historical()
-        latest = (
-            TennisRecentResult
-            .select(TennisRecentResult.fetched_at)
-            .where(TennisRecentResult.player_name == player_name)
-            .order_by(TennisRecentResult.fetched_at.desc())
-            .limit(1)
-            .first()
-        )
-        if latest is None:
-            return None
-        fetched_at = latest.fetched_at
-        if fetched_at.tzinfo is None:
-            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-        if (_now() - fetched_at).total_seconds() / 3600.0 > max_age_hours:
-            return None
-
-        rows = (
-            TennisRecentResult
-            .select()
-            .where(TennisRecentResult.player_name == player_name)
-            .order_by(TennisRecentResult.match_date.desc())
-        )
-        return [
-            {
-                "date": r.match_date, "tournament": r.tournament, "round": r.round,
-                "opponent": r.opponent_name,
-                "subject_won": r.subject_won, "retired_or_walkover": r.retired_or_walkover,
-            }
-            for r in rows
-        ]
-    except Exception:
-        return None
 
 
 # ── Duración del partido (`MatchDuration`, enriquecimiento posterior) ──────

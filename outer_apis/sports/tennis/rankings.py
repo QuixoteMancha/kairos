@@ -22,6 +22,7 @@ confirmed working vs. dead.
 """
 
 import time
+import logging
 from typing import Any
 
 from outer_apis.scrapers.tennis import atp_scraper, wta_scraper
@@ -29,6 +30,7 @@ from database.historical.tennis.writer import save_rankings_snapshot
 
 _CACHE_TTL_S = 3600  # 1h — rankings update weekly, no need to re-scrape often.
 _rankings_cache: dict[str, tuple[float, list[dict]]] = {}
+logger = logging.getLogger(__name__)
 
 
 def get_top_rankings(n: int = 200, tour: str = "both") -> list[dict[str, Any]]:
@@ -58,13 +60,13 @@ def get_top_rankings(n: int = 200, tour: str = "both") -> list[dict[str, Any]]:
         except Exception:
             # fail-closed: a scraper bug/unexpected exception must not take
             # down the whole call, just contributes nothing for this tour.
-            pass
+            logger.exception("ATP rankings fetch failed")
 
     if rt in ("WTA", "BOTH"):
         try:
             result.extend(wta_scraper.get_top_rankings(n))
         except Exception:
-            pass
+            logger.exception("WTA rankings fetch failed")
 
     _rankings_cache[cache_key] = (time.monotonic(), result)
 

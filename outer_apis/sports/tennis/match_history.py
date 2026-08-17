@@ -78,9 +78,12 @@ sobrevive a cualquier reinicio.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+# Import conservado como superficie de compatibilidad para callers/tests que
+# verifican que esta ruta de consulta NO toca el scraper.
 from outer_apis.scrapers.tennis import tennisexplorer_player_scraper
-from database.historical.tennis.writer import (
-    save_match_history, get_recent_match_history, get_any_match_history,
+from database.historical.tennis.queries import (
+    get_head_to_head as query_head_to_head,
+    get_player_matches,
 )
 
 # Allowlist de fetch en vivo (2026-08-01, pedido explícito del usuario):
@@ -132,36 +135,7 @@ DEFAULT_PREFETCH_WORKERS = 16
 
 
 def _fetch_and_cache(player_name: str) -> list[dict]:
-    db_matches = get_recent_match_history(player_name, limit=_MAX_DEPTH)
-    if db_matches is not None:
-        return db_matches
-
-    if _fetch_allowlist is not None and player_name not in _fetch_allowlist:
-        # No autorizado a fetch en vivo este ciclo (no está en un partido
-        # nuevo, ver set_fetch_allowlist) -- servir lo último que haya en
-        # DB aunque esté stale, en vez de pegarle a TennisExplorer en vivo.
-        stale = get_any_match_history(player_name, limit=_MAX_DEPTH)
-        return stale if stale is not None else []
-
-    try:
-        matches = tennisexplorer_player_scraper.get_player_recent_matches(player_name, n=_MAX_DEPTH)
-    except Exception:
-        matches = []
-
-    # Persiste al historial SOLO en fetch fresco. Dedupe real vs.
-    # redundante lo hace save_match_history (un partido no cambia, no
-    # tiene sentido duplicarlo cada refresh). NOTA 2026-08-09 (pedido
-    # explícito del usuario): la resolución del PRÓXIMO partido (aún no
-    # jugado, sección "Next match" de TennisExplorer) NO vive acá --
-    # este es el path SÍNCRONO del ciclo de scan de engine.py, que debe
-    # seguir rápido. Esa resolución corre ASÍNCRONA, con delay real,
-    # como hilo aparte dentro de `workers/tennis_match_tick_worker.py`
-    # (`run_enrichment_once`/`save_next_match`), separada del guardado
-    # de ticks de precio real de Kalshi en el mismo worker.
-    if matches:
-        save_match_history(player_name, matches)
-
-    return matches
+    return get_player_matches(player_name, limit=_MAX_DEPTH)
 
 
 def prefetch_player_histories(names: list[str], max_workers: int = DEFAULT_PREFETCH_WORKERS) -> None:
@@ -228,26 +202,4 @@ def get_head_to_head(player_a: str, player_b: str, lookback: int = 40) -> dict[s
         distinct from "0-0" wins, which would misleadingly suggest they've
         played and split evenly -- None means "no data", not "even record").
     """
-    matches = get_recent_matches(player_a, n=lookback)
-    if not matches:
-        return None
-
-    b_norm = player_b.lower().strip()
-    b_tokens = {t for t in b_norm.split() if len(t) > 1}
-
-    a_wins = b_wins = 0
-    for m in matches:
-        opponent = (m.get("oponente") or "").lower().strip()
-        opponent_tokens = {t.rstrip(".") for t in opponent.split() if len(t) > 1}
-        if not (b_tokens & opponent_tokens):
-            continue
-        if m.get("resultado") == "W":
-            a_wins += 1
-        else:
-            b_wins += 1
-
-    total = a_wins + b_wins
-    if total == 0:
-        return None
-    result = {"a_wins": a_wins, "b_wins": b_wins, "n_matches": total}
-    return result
+    return query_head_to_head(player_a, player_b, limit=lookback)

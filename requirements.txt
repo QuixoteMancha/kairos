@@ -11,3 +11,6 @@ websockets>=13.0
 # SportsbookReviewsOnline (odds históricas pre-partido MLB), ver
 # outer_apis/scrapers/baseball/sportsbookreviewsonline_scraper.py.
 openpyxl>=3.1
+# Laboratorio offline champion/challenger para tenis. Los modelos corren
+# secuencialmente con un solo core; nunca participan del path de ejecución.
+scikit-learn>=1.8,<2

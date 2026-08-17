@@ -21,10 +21,12 @@ from outer_apis.sports.tennis.match_weather import (
     populate_weather_for_match_history,
     populate_weather_for_match_history_row,
 )
+import outer_apis.sports.tennis.match_weather as weather_module
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
+    weather_module._match_history_batch_cursor_id = 0
     init_db_historical()
     with db_historical.connection_context():
         MatchWeather.delete().execute()
@@ -32,6 +34,7 @@ def clean_db():
         Tournament.delete().execute()
         Player.delete().execute()
     yield
+    weather_module._match_history_batch_cursor_id = 0
     with db_historical.connection_context():
         MatchWeather.delete().execute()
         MatchHistory.delete().execute()
@@ -174,3 +177,30 @@ def test_batch_stops_cleanly_when_daily_budget_exhausted():
 
     assert result["budget_exhausted"] is True
     assert MatchWeather.select().count() == 0
+
+
+def test_unresolvable_first_batch_does_not_block_later_matches():
+    unknown = _tournament(
+        tournament_name="Torneo Inexistente XYZ", lat=None, lon=None,
+    )
+    known = _tournament(
+        year=2025, tournament_name="Known", lat=-33.45, lon=-70.66,
+    )
+    _match(match_id="blocked1", tournament=unknown)
+    _match(match_id="blocked2", tournament=unknown)
+    _match(match_id="reachable", tournament=known)
+
+    with patch(
+        "outer_apis.sports.tennis.match_weather.get_location", return_value=None,
+    ), patch(
+        "outer_apis.sports.tennis.match_weather.open_meteo.get_daily_weather",
+        return_value=_REAL_WEATHER,
+    ), patch("outer_apis.sports.tennis.match_weather.open_meteo.throttle_sleep"):
+        first = populate_weather_for_match_history(limit=2)
+        second = populate_weather_for_match_history(limit=2)
+
+    assert first["skipped"] == 2
+    assert second["processed"] == 1
+    assert MatchWeather.get().match_history_id == MatchHistory.get(
+        MatchHistory.match_id == "reachable"
+    ).id

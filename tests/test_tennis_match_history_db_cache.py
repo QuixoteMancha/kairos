@@ -57,7 +57,7 @@ def _insert_match(player: str, fetched_at, opponent="Opponent A", match_date="20
     with db_historical.connection_context():
         p_a, p_b = _make_player(player), _make_player(opponent)
         MatchHistory.create(
-            match_id=_synthetic_recentform_match_id(player, opponent, match_date),
+            match_id=f"real:{player}:{opponent}:{match_date}",
             player_a=p_a, player_b=p_b, match_date=match_date,
             winner=p_a, score="6-4 6-3", source="tennisexplorer", fetched_at=fetched_at,
         )
@@ -107,7 +107,7 @@ def test_fetch_and_cache_skips_live_fetch_when_db_is_fresh():
     assert result[0]["oponente"] == "Opponent A"
 
 
-def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
+def test_fetch_and_cache_returns_empty_without_canonical_db_rows():
     """Sin nada en DB, sí debe llamar al scraper -- y el resultado fresco
     debe persistirse (para que la PRÓXIMA llamada, incluso tras un
     restart, ya no necesite red)."""
@@ -118,15 +118,14 @@ def test_fetch_and_cache_calls_live_fetch_when_db_empty_and_persists_result():
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("Medvedev D.")
 
-    mock_fetch.assert_called_once()
-    assert result == fake_matches
+    mock_fetch.assert_not_called()
+    assert result == []
 
     # Verifica que quedó persistido -- una llamada posterior ya no debería tocar la red.
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches") as mock_fetch2:
         result2 = match_history._fetch_and_cache("Medvedev D.")
     mock_fetch2.assert_not_called()
-    assert len(result2) == 1
-    assert result2[0]["oponente"] == "Zverev A."
+    assert result2 == []
 
 
 def test_get_recent_match_history_fresh_when_todays_match_already_stored_even_if_checked_yesterday():
@@ -153,7 +152,7 @@ def test_get_recent_match_history_stale_when_neither_checked_today_nor_have_toda
     assert get_recent_match_history("Rybakina E.") is None
 
 
-def test_fetch_and_cache_refetches_when_db_stale():
+def test_fetch_and_cache_uses_canonical_db_even_when_fetched_at_is_old():
     """Dato en DB pero de ayer (antes del borde de medianoche UTC de hoy)
     -- sí debe volver a pegarle a Flashscore, no queda pegado a un dato
     de un día natural anterior para siempre."""
@@ -165,5 +164,6 @@ def test_fetch_and_cache_refetches_when_db_stale():
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("Swiatek I.")
 
-    mock_fetch.assert_called_once()
-    assert result == fake_matches
+    mock_fetch.assert_not_called()
+    assert len(result) == 1
+    assert result[0]["oponente"] == "Opponent A"

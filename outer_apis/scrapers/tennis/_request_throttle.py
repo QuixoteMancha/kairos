@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import threading
 import time
+import zlib
 
 
 class RequestThrottle:
@@ -32,8 +33,9 @@ class RequestThrottle:
     instancia) -- simple pero suficiente para un volumen de tenis en
     vivo (decenas de requests por ciclo, no miles)."""
 
-    def __init__(self, min_interval_s: float):
+    def __init__(self, min_interval_s: float, distributed_key: str | None = None):
         self._min_interval_s = min_interval_s
+        self._distributed_key = distributed_key
         self._lock = threading.Lock()
         self._last_call_monotonic: float | None = None
 
@@ -46,6 +48,28 @@ class RequestThrottle:
                 if remaining > 0:
                     time.sleep(remaining)
             self._last_call_monotonic = time.monotonic()
+        if self._distributed_key:
+            self._wait_across_containers()
+
+    def _wait_across_containers(self) -> None:
+        """Serializa procesos distintos mediante PostgreSQL.
+
+        El lock en memoria solo coordina threads del mismo contenedor. En
+        producción todos los scrapers comparten PostgreSQL, por lo que un
+        advisory lock por proveedor evita ráfagas entre workers separados.
+        SQLite (tests) conserva únicamente el throttle local.
+        """
+        from database.db import DB_BACKEND, db_historical
+
+        if DB_BACKEND == "sqlite":
+            return
+        lock_id = zlib.crc32(f"kairos:{self._distributed_key}".encode())
+        db_historical.connect(reuse_if_open=True)
+        db_historical.execute_sql("SELECT pg_advisory_lock(%s)", (lock_id,))
+        try:
+            time.sleep(self._min_interval_s)
+        finally:
+            db_historical.execute_sql("SELECT pg_advisory_unlock(%s)", (lock_id,))
 
 
 # Sin cifra oficial de límite confirmada para ninguno de los 2 sitios
@@ -53,13 +77,13 @@ class RequestThrottle:
 # 0.5s mínimo entre requests reales a cada uno, suficiente para no
 # generar ráfagas visibles de bot incluso con el thread pool de
 # `prefetch_player_histories` (16 workers) sincronizado por este lock.
-flashscore_throttle = RequestThrottle(min_interval_s=0.5)
+flashscore_throttle = RequestThrottle(min_interval_s=0.5, distributed_key="flashscore")
 # 2026-08-09, pedido explícito del usuario: bajar el piso de
 # TennisExplorer de 0.5s a 0.3s (~3.3 req/s techo) para acelerar el
 # vaciado de la cola de 318K candidatos (`TennisMatchHistoryUnvalidated`)
 # -- no hay cifra oficial de límite de ninguno de los 2 sitios, este es
 # un ajuste puntual del usuario, no una re-evaluación de riesgo.
-tennisexplorer_throttle = RequestThrottle(min_interval_s=0.3)
+tennisexplorer_throttle = RequestThrottle(min_interval_s=0.3, distributed_key="tennisexplorer")
 # 2026-08-10, pedido explícito del usuario: verificar sexo/género de
 # jugadores contra Wikidata en vez de seguir hiteando TennisExplorer.
 # Wikidata NO publica un límite numérico duro para su API REST/Action
@@ -72,4 +96,4 @@ tennisexplorer_throttle = RequestThrottle(min_interval_s=0.3)
 # https://www.wikidata.org/wiki/Wikidata:SPARQL_query_service/query_limits).
 # 1s mínimo entre requests (1 req/s) es MUY conservador frente a ese
 # presupuesto real.
-wikidata_throttle = RequestThrottle(min_interval_s=1.0)
+wikidata_throttle = RequestThrottle(min_interval_s=1.0, distributed_key="wikidata")

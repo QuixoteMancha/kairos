@@ -13,20 +13,30 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis import MatchHistory, Player
+from database.historical.tennis import MatchDuration, MatchHistory, Player
 from scripts.tennis.enrich_match_stats import enrich_match_stats
+import scripts.tennis.enrich_match_stats as stats_module
+from database.historical.workerstate import HistoricalEnrichmentAttempt
 
 _MOD = "scripts.tennis.enrich_match_stats"
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
+    stats_module._batch_cursor_id = 0
     init_db_historical()
     with db_historical.connection_context():
+        HistoricalEnrichmentAttempt.delete().where(
+            HistoricalEnrichmentAttempt.job_name == "tennis_match_stats"
+        ).execute()
         MatchHistory.delete().execute()
         Player.delete().execute()
     yield
+    stats_module._batch_cursor_id = 0
     with db_historical.connection_context():
+        HistoricalEnrichmentAttempt.delete().where(
+            HistoricalEnrichmentAttempt.job_name == "tennis_match_stats"
+        ).execute()
         MatchHistory.delete().execute()
         Player.delete().execute()
 
@@ -76,6 +86,24 @@ def test_resolves_and_saves_stats_for_finished_match():
     assert result["resolved"] == 1
     save.assert_called_once()
     assert save.call_args[0][1] == "fsid"
+
+
+def test_reuses_flashscore_id_from_existing_duration():
+    duration = MatchDuration.create(
+        flashscore_match_id="shared-id", total_minutes=90,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    _match(duration=duration)
+    with patch(f"{_MOD}.find_match_id") as find, patch(
+        f"{_MOD}.get_match_statistics", return_value=_STATS,
+    ) as fetch, patch(
+        f"{_MOD}.save_match_stats_for_history", return_value=True,
+    ), patch(f"{_MOD}.time.sleep"):
+        result = enrich_match_stats(limit=10)
+
+    find.assert_not_called()
+    fetch.assert_called_once_with("shared-id")
+    assert result["resolved"] == 1
 
 
 def test_skips_matches_still_in_progress():
@@ -169,3 +197,22 @@ def test_respects_limit():
 
     assert find.call_count == 2
     assert result["processed"] == 2
+
+
+def test_unresolvable_first_batch_does_not_block_later_matches():
+    for i in range(3):
+        a, b = _players()
+        _match(match_id=f"rotate{i}", players=(a, b))
+
+    with patch(
+        f"{_MOD}.find_match_id", side_effect=[None, None, "fsid"],
+    ), patch(
+        f"{_MOD}.get_match_statistics", return_value=_STATS,
+    ), patch(
+        f"{_MOD}.save_match_stats_for_history", return_value=True,
+    ), patch(f"{_MOD}.time.sleep"):
+        first = enrich_match_stats(limit=2)
+        second = enrich_match_stats(limit=2)
+
+    assert first["not_found"] == 2
+    assert second["resolved"] == 1

@@ -14,20 +14,33 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory, MatchDuration, Player
+from database.historical.tennis.models import MatchStats
 from scripts.tennis.enrich_match_durations import enrich_match_durations
+import scripts.tennis.enrich_match_durations as durations_module
+from database.historical.workerstate import HistoricalEnrichmentAttempt
 
 _next_id = iter(range(1, 100_000))
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
+    durations_module._batch_cursor_id = 0
     init_db_historical()
     with db_historical.connection_context():
+        HistoricalEnrichmentAttempt.delete().where(
+            HistoricalEnrichmentAttempt.job_name == "tennis_match_durations"
+        ).execute()
+        MatchStats.delete().execute()
         MatchHistory.delete().execute()
         MatchDuration.delete().execute()
         Player.delete().execute()
     yield
+    durations_module._batch_cursor_id = 0
     with db_historical.connection_context():
+        HistoricalEnrichmentAttempt.delete().where(
+            HistoricalEnrichmentAttempt.job_name == "tennis_match_durations"
+        ).execute()
+        MatchStats.delete().execute()
         MatchHistory.delete().execute()
         MatchDuration.delete().execute()
         Player.delete().execute()
@@ -59,6 +72,23 @@ def test_resolves_duration_for_eligible_match():
     assert result == {"processed": 1, "resolved": 1, "not_found": 0, "errors": 0}
     row = MatchHistory.get(MatchHistory.id == match.id)
     assert row.duration.total_minutes == 100
+
+
+def test_reuses_flashscore_id_from_existing_stats():
+    match = _make_match()
+    MatchStats.create(
+        match_history=match, source="flashscore",
+        flashscore_match_id="shared-id", raw_stats_json="{}",
+        fetched_at=datetime.now(timezone.utc), is_usable=True,
+    )
+    with patch("scripts.tennis.enrich_match_durations.find_match_id") as find, patch(
+        "scripts.tennis.enrich_match_durations.get_match_duration", return_value=_DURATION,
+    ) as fetch:
+        result = enrich_match_durations()
+
+    find.assert_not_called()
+    fetch.assert_called_once_with("shared-id")
+    assert result["resolved"] == 1
 
 
 def test_skips_matches_that_already_have_duration():
@@ -123,6 +153,28 @@ def test_one_match_error_does_not_block_the_rest():
     assert result["processed"] == 2
     assert result["errors"] == 1
     assert result["resolved"] == 1
+
+
+def test_unresolvable_first_batch_does_not_block_later_matches():
+    _make_match()
+    _make_match()
+    _make_match()
+
+    with patch(
+        "scripts.tennis.enrich_match_durations.find_match_id",
+        side_effect=[None, None, "fs123"],
+    ), patch(
+        "scripts.tennis.enrich_match_durations.get_match_duration",
+        return_value=_DURATION,
+    ):
+        first = enrich_match_durations(limit=2)
+        # Simula reinicio del proceso: el cursor persistente en PostgreSQL/
+        # SQLite debe conservar el avance aunque el global vuelva a cero.
+        durations_module._batch_cursor_id = 0
+        second = enrich_match_durations(limit=2)
+
+    assert first["not_found"] == 2
+    assert second["resolved"] == 1
 
 
 def test_uses_tournament_name_and_score_from_match_history():

@@ -49,6 +49,9 @@ from itertools import islice
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisHistoricalOdds
 from database.historical.tennis import MatchHistory
+from database.historical.workerstate import (
+    clear_enrichment_failure, enrichment_can_attempt, record_enrichment_failure,
+)
 from database.historical.tennis.writer import (
     get_candidate_slugs_from_player, harvest_slug_into_player,
 )
@@ -67,7 +70,7 @@ from database.historical.tennis.writer import _resolve_and_save_via_match_detail
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
     guess_player_slug, resolve_player_slug, _fetch, _parse_year_html,
-    _te_native_to_nombre_apellido,
+    _te_native_to_nombre_apellido, parse_player_retirements,
 )
 from outer_apis.scrapers.tennis.tennisexplorer_scraper import (
     get_all_player_country_links, iter_all_player_pages,
@@ -132,6 +135,7 @@ def backfill_player(
 
     year_list = years if years is not None else _YEARS
     matches_by_year: list[tuple[int, dict]] = []
+    retirements_by_key: dict[tuple[str, str], dict] = {}
     for year in year_list:
         html = (prefetched_pages or {}).get(year)
         if html is None:
@@ -139,6 +143,9 @@ def backfill_player(
             time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
         if html is None:
             continue
+        for retirement in parse_player_retirements(html):
+            key = (retirement["start_date"], _normalized_tournament(retirement["tournament"]))
+            retirements_by_key[key] = retirement
         for m in _parse_year_html(html, player_name):
             matches_by_year.append((year, m))
 
@@ -166,17 +173,82 @@ def backfill_player(
     unique_match_ids = {m["match_id"] for _year, m in matches_by_year if m.get("match_id")}
     details_resolved = details_error = 0
     with db_historical.connection_context():
-        already_have = {
-            r.match_id for r in MatchHistory.select(MatchHistory.match_id)
-            .where(MatchHistory.match_id.in_(list(unique_match_ids)))
+        complete_match_ids = {
+            r.match_id for r in MatchHistory.select(
+                MatchHistory.match_id, MatchHistory.tournament,
+                MatchHistory.player_a, MatchHistory.player_b, MatchHistory.winner,
+            ).where(
+                MatchHistory.match_id.in_(list(unique_match_ids))
+                & MatchHistory.tournament.is_null(False)
+                & MatchHistory.player_a.is_null(False)
+                & MatchHistory.player_b.is_null(False)
+                & MatchHistory.winner.is_null(False)
+            )
         }
-    for match_id in unique_match_ids - already_have:
+    for match_id in unique_match_ids - complete_match_ids:
+        existing = MatchHistory.get_or_none(MatchHistory.match_id == match_id)
+        attempt_record_id = existing.id if existing is not None else None
+        if attempt_record_id is not None and not enrichment_can_attempt(
+            "tennis_match_detail", attempt_record_id,
+        ):
+            continue
         ok = _resolve_and_save_via_match_detail(player_name, match_id)
         time.sleep(_PAUSE_BETWEEN_REQUESTS_S)
         if ok:
             details_resolved += 1
+            if attempt_record_id is not None:
+                clear_enrichment_failure("tennis_match_detail", attempt_record_id)
         else:
             details_error += 1
+            if attempt_record_id is not None:
+                record_enrichment_failure(
+                    "tennis_match_detail", attempt_record_id,
+                    "match-detail no disponible o identidad no confirmada",
+                )
+
+    # A retirement belongs to this player page. Link it only when date,
+    # tournament and a real match_id all agree; ambiguity is left untouched.
+    # This also enriches MatchHistory rows that predate this parser.
+    retirement_matches: dict[str, dict] = {}
+    for year, match in matches_by_year:
+        match_id = match.get("match_id")
+        iso_date = _to_iso_date(match.get("date", ""), year)
+        key = (iso_date, _normalized_tournament(match.get("tournament")))
+        if match_id and key in retirements_by_key:
+            retirement_matches[match_id] = retirements_by_key[key]
+    retirements_updated = 0
+    if retirement_matches:
+        from database.historical.tennis.writer import _lookup_player_id
+
+        player_id = _lookup_player_id(player_name)
+        if player_id is not None:
+            with db_historical.connection_context():
+                for row in MatchHistory.select().where(
+                    MatchHistory.match_id.in_(list(retirement_matches))
+                ):
+                    if player_id not in (row.player_a_id, row.player_b_id):
+                        continue
+                    retirement = retirement_matches[row.match_id]
+                    new_values = {
+                        "retired": True,
+                        "player_retired_id": player_id,
+                        "retirement_reason": retirement.get("reason"),
+                        "retirement_score": retirement.get("score"),
+                        "injury_end_date": retirement.get("end_date"),
+                        "retirement_source": "tennisexplorer_player_injuries",
+                    }
+                    changed = any(getattr(row, key) != value for key, value in new_values.items())
+                    if changed:
+                        for key, value in new_values.items():
+                            setattr(row, key, value)
+                        row.updated_at = now
+                        row.save(only=[
+                            MatchHistory.retired, MatchHistory.player_retired,
+                            MatchHistory.retirement_reason, MatchHistory.retirement_score,
+                            MatchHistory.injury_end_date, MatchHistory.retirement_source,
+                            MatchHistory.updated_at,
+                        ])
+                        retirements_updated += 1
 
     # 2026-08-10, pedido explícito del usuario: "que integre lo de los
     # nombres que estén normalizados como nombre y apellido" -- ahora
@@ -236,7 +308,14 @@ def backfill_player(
         "matches_found": len(matches_by_year),
         "odds_inserted": inserted_odds,
         "match_details_resolved": details_resolved, "match_details_error": details_error,
+        "retirements_updated": retirements_updated,
     }
+
+
+def _normalized_tournament(value: str | None) -> str:
+    """Comparable tournament key without tour labels or punctuation."""
+    normalized = re.sub(r"\b(?:atp|wta|men|women)\b", " ", value or "", flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]+", "", normalized.casefold())
 
 
 def _catalog_display_name(display_name: str) -> str:

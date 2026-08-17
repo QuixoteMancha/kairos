@@ -362,7 +362,7 @@ def test_backfill_player_resolves_match_detail_via_shared_writer_helper():
     assert result["match_details_error"] == 0
 
 
-def test_backfill_player_skips_match_detail_already_in_match_history():
+def test_backfill_player_reenriches_incomplete_match_already_in_history():
     from datetime import datetime, timezone
 
     MatchHistory.delete().execute()
@@ -390,7 +390,7 @@ def test_backfill_player_skips_match_detail_already_in_match_history():
     ):
         backfill_player("Test Player")
 
-    mock_resolve.assert_not_called()
+    mock_resolve.assert_called_once_with("Test Player", "999")
 
 
 def test_cli_top_n_reads_explicit_flag():

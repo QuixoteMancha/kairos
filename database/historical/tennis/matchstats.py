@@ -27,6 +27,14 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def stats_are_usable(stats: dict[str, Any]) -> bool:
+    return any(
+        typed_columns_from_stats(section or {})
+        for key, section in (stats or {}).items()
+        if key == "match" or set_number_from_key(key) is not None
+    )
+
+
 def has_match_stats(market_id: str) -> bool:
     """Fail-closed: False si falla la query (nunca fuerza un re-fetch
     accidental por asumir 'sí existe' ante un error de DB -- ante la
@@ -68,7 +76,7 @@ def _save_set_rows(
             if match_history_id is not None:
                 fields["match_history"] = match_history_id
             elif match_stats_row is not None:
-                fields["match"] = match_stats_row.match_id
+                continue  # sin MatchHistory canónico no se persisten sets huérfanos
             TennisMatchStatsSet.create(**fields)
             saved += 1
         except Exception:
@@ -77,20 +85,8 @@ def _save_set_rows(
 
 
 def save_match_stats(market_id: str, flashscore_match_id: str, stats: dict[str, Any]) -> None:
-    """Fail-closed: no hace nada si `stats` está vacío (nunca guarda una
-    fila con estadísticas fantasma) o si falla la escritura."""
-    if not stats:
-        return
-    try:
-        init_db_historical()
-        row = TennisMatchStats.create(
-            market_id=market_id, flashscore_match_id=flashscore_match_id,
-            raw_stats_json=json.dumps(stats), fetched_at=_now(),
-            **typed_columns_from_stats(stats.get("match") or {}),
-        )
-        _save_set_rows(stats, match_stats_row=row)
-    except Exception:
-        pass
+    """API legacy: los stats solo se guardan con un ``MatchHistory`` real."""
+    return None
 
 
 def has_match_stats_for_history(match_history_id: int) -> bool:
@@ -101,7 +97,10 @@ def has_match_stats_for_history(match_history_id: int) -> bool:
     falla la query."""
     try:
         init_db_historical()
-        return TennisMatchStats.select().where(TennisMatchStats.match_history == match_history_id).exists()
+        return TennisMatchStats.select().where(
+            (TennisMatchStats.match_history == match_history_id)
+            & (TennisMatchStats.is_usable == True)
+        ).exists()
     except Exception:
         return False
 
@@ -121,17 +120,37 @@ def save_match_stats_for_history(match_history_id: int, flashscore_match_id: str
         return False
     try:
         init_db_historical()
-        if has_match_stats_for_history(match_history_id):
-            return False
-        TennisMatchStats.create(
-            match_history=match_history_id, source="flashscore",
-            market_id=f"history:{match_history_id}", flashscore_match_id=flashscore_match_id,
-            raw_stats_json=json.dumps(stats), fetched_at=_now(),
-            # 2026-08-16: columnas TIPADAS pobladas de verdad -- antes
-            # solo se guardaba el JSON crudo y las ~40 columnas del
-            # modelo quedaban NULL en el 100% de las filas.
-            **typed_columns_from_stats(stats.get("match") or {}),
+        existing = TennisMatchStats.get_or_none(
+            TennisMatchStats.match_history == match_history_id
         )
+        if existing is not None and existing.is_usable:
+            return False
+        if not stats_are_usable(stats):
+            if existing is not None:
+                existing.is_usable = False
+                existing.invalid_reason = "Flashscore no entregó métricas tipables"
+                existing.raw_stats_json = json.dumps(stats)
+                existing.fetched_at = _now()
+                existing.save()
+            return False
+        fields = {
+            "flashscore_match_id": flashscore_match_id,
+            "raw_stats_json": json.dumps(stats), "fetched_at": _now(),
+            "is_usable": True, "invalid_reason": None,
+            **typed_columns_from_stats(stats.get("match") or {}),
+        }
+        if existing is None:
+            TennisMatchStats.create(
+                match_history=match_history_id, source="flashscore",
+                market_id=f"history:{match_history_id}", **fields,
+            )
+        else:
+            TennisMatchStatsSet.delete().where(
+                TennisMatchStatsSet.match_history == match_history_id
+            ).execute()
+            for key, value in fields.items():
+                setattr(existing, key, value)
+            existing.save()
         _save_set_rows(stats, match_history_id=match_history_id)
         return True
     except Exception:

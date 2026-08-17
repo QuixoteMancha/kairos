@@ -12,8 +12,10 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.models import MatchWeather as TennisMatchWeather
+from database.historical.tennis.models import MatchHistory
 from outer_apis.scrapers.tennis.tournament_location import get_location
 from outer_apis.sports.tennis.match_weather import populate_weather_for_match, populate_weather_for_all_resolved_matches
+from database.historical.tennis.matchtracking import ensure_match_history_for_scanned_match
 
 
 @pytest.fixture(autouse=True)
@@ -22,11 +24,13 @@ def clean_db():
     with db_historical.connection_context():
         TennisMatchWeather.delete().execute()
         TennisMatchProbabilityTick.delete().execute()
+        MatchHistory.delete().execute()
         TennisScannedMatch.delete().execute()
     yield
     with db_historical.connection_context():
         TennisMatchWeather.delete().execute()
         TennisMatchProbabilityTick.delete().execute()
+        MatchHistory.delete().execute()
         TennisScannedMatch.delete().execute()
 
 
@@ -71,7 +75,8 @@ def test_populate_weather_creates_3_phases_with_real_fetch_mocked():
     assert result["skipped"] is False
     assert set(result["populated_phases"]) == {"before", "during", "end"}
     assert mock_fetch.call_count == 3
-    rows = list(TennisMatchWeather.select().where(TennisMatchWeather.match == m))
+    history = ensure_match_history_for_scanned_match(m)
+    rows = list(TennisMatchWeather.select().where(TennisMatchWeather.match_history == history))
     assert len(rows) == 3
     assert {r.phase for r in rows} == {"before", "during", "end"}
     assert all(r.temperature_c == 28.5 for r in rows)
@@ -85,7 +90,8 @@ def test_populate_weather_is_idempotent():
         result2 = populate_weather_for_match(m)
 
     assert result2["populated_phases"] == []  # ya estaban todas, no reintenta
-    assert TennisMatchWeather.select().where(TennisMatchWeather.match == m).count() == 3
+    history = ensure_match_history_for_scanned_match(m)
+    assert TennisMatchWeather.select().where(TennisMatchWeather.match_history == history).count() == 3
 
 
 def test_populate_weather_handles_partial_fetch_failure():
@@ -96,7 +102,8 @@ def test_populate_weather_handles_partial_fetch_failure():
         result = populate_weather_for_match(m)
 
     assert result["skipped"] is False
-    rows = list(TennisMatchWeather.select().where(TennisMatchWeather.match == m))
+    history = ensure_match_history_for_scanned_match(m)
+    rows = list(TennisMatchWeather.select().where(TennisMatchWeather.match_history == history))
     assert len(rows) == 3
     assert all(r.temperature_c is None for r in rows)
 

@@ -9,7 +9,11 @@ from unittest.mock import patch
 from outer_apis.scrapers.tennis.tennisexplorer_scraper import (
     _extract_names, _parse_singles_table, _norm,
 )
-from outer_apis.sports.tennis.surface_form import get_recent_form_by_surface
+from outer_apis.sports.tennis.surface_form import (
+    LOOKBACK_DAYS,
+    get_recent_form,
+    get_recent_form_by_surface,
+)
 
 # Fragmento real (simplificado) capturado en vivo de tennisexplorer.com,
 # 2026-07-30 -- ver kairos-tennis-surface-form-2026-07-30 memory.
@@ -89,3 +93,31 @@ def test_get_recent_form_by_surface_computes_win_rate_with_enough_sample():
         result = get_recent_form_by_surface("Jugadora Test", surface="Hard")
 
     assert result == {"win_rate": round(2 / 3, 4), "n_matches": 3}  # solo las 3 de Hard cuentan
+
+
+def test_surface_form_uses_52_week_window():
+    assert LOOKBACK_DAYS == 365
+
+
+def test_recent_form_uses_only_latest_10_matches():
+    fake_matches = [
+        {
+            "match_date": f"2026-07-{day:02d}",
+            "surface": "Hard",
+            "result": "W" if day >= 3 else "L",
+        }
+        for day in range(1, 13)
+    ]
+    with patch("outer_apis.sports.tennis.surface_form._fetch_and_cache", return_value=fake_matches):
+        result = get_recent_form("Jugador Test", tour="ATP")
+
+    assert result == {"win_rate": 1.0, "n_matches": 10}
+
+
+def test_recent_form_fails_closed_below_minimum_sample():
+    fake_matches = [
+        {"match_date": f"2026-07-0{day}", "surface": "Hard", "result": "W"}
+        for day in range(1, 5)
+    ]
+    with patch("outer_apis.sports.tennis.surface_form._fetch_and_cache", return_value=fake_matches):
+        assert get_recent_form("Jugador Test", tour="ATP") is None

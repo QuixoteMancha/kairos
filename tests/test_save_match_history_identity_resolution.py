@@ -109,22 +109,20 @@ def test_save_match_history_resolves_full_names_via_match_detail():
     assert row.tournament.tournament_name == "Toronto WTA"
 
 
-def test_save_match_history_falls_back_to_abbreviated_when_match_id_missing():
+def test_save_match_history_skips_row_when_match_id_missing():
     save_match_history("Amanda Anisimova", [_match(match_id=None)])
-    row = _get_row_for_player("Amanda Anisimova")
-    assert row.player_b.canonical_name == "Sabalenka A."  # abreviado, comportamiento previo intacto
+    assert MatchHistory.select().count() == 0
 
 
-def test_save_match_history_falls_back_when_match_detail_fetch_fails():
+def test_save_match_history_skips_when_match_detail_fetch_fails():
     with patch(
         "outer_apis.scrapers.tennis.tennisexplorer_player_scraper.get_match_detail", return_value=None,
     ):
         save_match_history("Amanda Anisimova", [_match()])
-    row = _get_row_for_player("Amanda Anisimova")
-    assert row.player_b.canonical_name == "Sabalenka A."
+    assert MatchHistory.select().count() == 0
 
 
-def test_save_match_history_falls_back_when_identity_does_not_confirm():
+def test_save_match_history_skips_when_identity_does_not_confirm():
     # match_id apunta a un partido REAL, pero de otros 2 jugadores --
     # nunca se debe confiar ciegamente en el match_id.
     with patch(
@@ -132,8 +130,7 @@ def test_save_match_history_falls_back_when_identity_does_not_confirm():
         return_value=_detail(player_a_name="Someone Else", player_b_name="Another Person"),
     ):
         save_match_history("Amanda Anisimova", [_match()])
-    row = _get_row_for_player("Amanda Anisimova")
-    assert row.player_b.canonical_name == "Sabalenka A."
+    assert MatchHistory.select().count() == 0
 
 
 def test_find_existing_match_history_row_root_cause_fix_2026_08_10():
@@ -166,7 +163,14 @@ def test_find_existing_match_history_row_does_not_collide_same_surname_different
     assert _find_existing_match_history_row("Casper Ruud", "Someone Rival", "2026-08-11") is None
 
 
-def test_save_match_history_no_longer_triplicates_across_name_formats():
+def test_names_confirm_identity_handles_compound_name_and_initial():
+    assert _names_confirm_identity("Knutson G.", "Gabriela Andrea Knutson")
+    assert _names_confirm_identity("Day K.", "Kayla Day")
+    assert _names_confirm_identity("Cirstea S.", "Sorana-Mihaela Cirstea")
+    assert not _names_confirm_identity("Casper Ruud", "Christian Ruud")
+
+
+def test_save_match_history_does_not_persist_rows_without_real_ids():
     # test end-to-end del fix real: 2 llamadas a save_match_history con
     # el MISMO partido real, cada una desde la perspectiva de un
     # jugador distinto (formato de nombre distinto) -- antes del fix
@@ -179,4 +183,4 @@ def test_save_match_history_no_longer_triplicates_across_name_formats():
         {"oponente": "Svitolina E.", "fecha": "2026-08-11", "resultado": "L", "score": "4-6, 2-6",
          "source": "tennisexplorer", "match_id": None},
     ])
-    assert MatchHistory.select().count() == 1
+    assert MatchHistory.select().count() == 0

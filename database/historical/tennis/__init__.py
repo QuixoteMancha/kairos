@@ -42,7 +42,8 @@ from database.historical.tennis.models import (
     TennisPlayerWikidataReference,
     TennisAbstractElo,
     PlayerStats,
-    TennisRecentResult,
+    TennisPlayerStrength,
+    TennisEloCalibration,
 )
 from database.historical.tennis.matchstats import has_match_stats, save_match_stats, get_match_stats
 from database.historical.tennis.player_sync_status import (
@@ -62,9 +63,10 @@ from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled, backfill_missing_tournaments,
     backfill_missing_rounds, filter_new_markets,
+    ensure_match_history_for_scanned_match, backfill_scanned_matches_to_history,
+    get_probability_history,
 )
 from database.historical.tennis.writer import (
-    save_recent_results, get_recent_results,
     save_rankings_snapshot,
     save_match_history,
     save_surface_match_history, get_recent_surface_match_history,
@@ -93,9 +95,11 @@ __all__ = [
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
     "save_probability_tick", "mark_match_settled", "backfill_missing_tournaments",
     "backfill_missing_rounds", "filter_new_markets",
-    "TennisRecentResult", "save_recent_results", "get_recent_results",
+    "ensure_match_history_for_scanned_match", "backfill_scanned_matches_to_history",
+    "get_probability_history",
     "TennisMatchWeather", "TennisMatchStatsSet",
     "TennisMatchStats", "has_match_stats", "save_match_stats", "get_match_stats",
     "TennisPlayerSyncStatus", "request_priority_sync", "is_player_data_fresh",
     "get_pending_priority_requests", "mark_player_synced",
+    "TennisPlayerStrength", "TennisEloCalibration",
 ]

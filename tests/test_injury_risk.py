@@ -9,22 +9,10 @@ from unittest.mock import patch
 
 import pytest
 
-from database.db import init_db_historical, db_historical
-from database.historical.tennis import TennisRecentResult
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
     _parse_date, get_recent_results as scraper_get_recent_results,
 )
 from outer_apis.sports.tennis.injury_risk import get_injury_risk_flag, INJURY_LOOKBACK_DAYS
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    init_db_historical()
-    with db_historical.connection_context():
-        TennisRecentResult.delete().execute()
-    yield
-    with db_historical.connection_context():
-        TennisRecentResult.delete().execute()
 
 
 def test_parse_date_iso_conversion():

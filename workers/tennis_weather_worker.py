@@ -38,6 +38,8 @@ de a tandas horarias respetando el cupo real de la API."""
 import os
 import time
 
+from database.db import init_db_historical
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
 from outer_apis.sports.tennis.match_weather import (
     populate_weather_for_all_resolved_matches,
     populate_weather_for_match_history,
@@ -45,6 +47,7 @@ from outer_apis.sports.tennis.match_weather import (
 
 _INTERVAL_S = int(os.getenv("TENNIS_WEATHER_INTERVAL_SECONDS", "3600"))
 _BATCH_LIMIT = int(os.getenv("TENNIS_WEATHER_BATCH_LIMIT", "500"))
+_WORKER_NAME = "tennis_weather_worker"
 
 
 def _run_once() -> dict:
@@ -69,13 +72,17 @@ def _run_once() -> dict:
 
 
 if __name__ == "__main__":
+    init_db_historical()
     print(
         f"[tennis_weather] loop mode, interval={_INTERVAL_S}s, batch_limit={_BATCH_LIMIT}",
         flush=True,
     )
     while True:
         try:
-            _run_once()
+            mark_cycle_started(_WORKER_NAME)
+            result = _run_once()
+            mark_cycle_finished(_WORKER_NAME, result)
         except Exception as e:
+            mark_cycle_failed(_WORKER_NAME, e)
             print(f"[tennis_weather] error: {e}", flush=True)
         time.sleep(_INTERVAL_S)

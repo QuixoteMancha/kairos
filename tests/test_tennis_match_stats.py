@@ -30,11 +30,11 @@ def clean_db():
 
 # ── database/historical/tennis/matchstats.py ────────────────────────────
 
-def test_save_and_get_match_stats_roundtrip():
+def test_legacy_market_stats_are_not_persisted_without_match_history():
     stats = {"match": {"Aces": ["3", "0"], "Double Faults": ["5", "2"]}}
     save_match_stats("KXATPMATCH-X", "fs123", stats)
-    assert has_match_stats("KXATPMATCH-X") is True
-    assert get_match_stats("KXATPMATCH-X") == stats
+    assert has_match_stats("KXATPMATCH-X") is False
+    assert get_match_stats("KXATPMATCH-X") is None
 
 
 def test_save_match_stats_skips_empty():

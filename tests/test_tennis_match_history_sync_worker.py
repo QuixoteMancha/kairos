@@ -139,7 +139,9 @@ def test_fill_missing_stats_skips_matches_without_score():
 
 def test_fill_missing_stats_respects_limit():
     from database.historical.tennis import Player
-    djokovic = Player.create(canonical_name="Novak Djokovic", created_at=_now())
+    djokovic, _ = Player.get_or_create(
+        canonical_name="Novak Djokovic", defaults={"created_at": _now()},
+    )
     for i in range(10):
         rival = Player.create(canonical_name=f"Rival {i}", created_at=_now())
         MatchHistory.create(
@@ -151,6 +153,27 @@ def test_fill_missing_stats_respects_limit():
         result = fill_missing_stats_for_player("Novak Djokovic", limit=3)
     assert mock_find.call_count == 3
     assert result["attempted"] == 3
+
+
+def test_fill_missing_stats_passes_tournament_name_not_fk_model():
+    from database.historical.tennis import Player, Tournament
+
+    a = Player.create(canonical_name="Player A", created_at=_now())
+    b = Player.create(canonical_name="Player B", created_at=_now())
+    tournament = Tournament.create(
+        year=2024, tournament_name="Cincinnati", city="Cincinnati", fetched_at=_now(),
+    )
+    MatchHistory.create(
+        match_id="test:tournament", match_date="2024-08-10",
+        player_a=a, player_b=b, tournament=tournament,
+        score="6-4 6-2", fetched_at=_now(),
+    )
+    with patch(
+        "workers.tennis_match_history_sync_worker.find_match_id", return_value=None,
+    ) as find:
+        fill_missing_stats_for_player("Player A", limit=1)
+
+    assert find.call_args.args[3] == "Cincinnati"
 
 
 def test_fill_missing_stats_skips_already_covered_matches():

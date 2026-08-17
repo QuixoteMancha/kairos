@@ -37,11 +37,14 @@ casi completo, quedan pocos jugadores nuevos)."""
 import os
 import time
 
+from database.db import init_db_historical
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
 from scripts.tennis.wta_top200_historical_backfill import run_country_catalog_backfill
 
 _MAX_WORKERS = int(os.getenv("TENNIS_CATALOG_BACKFILL_MAX_WORKERS", "4"))
 _INTERVAL_S = int(os.getenv("TENNIS_CATALOG_BACKFILL_INTERVAL_SECONDS", "3600"))
 _MAX_PLAYERS = os.getenv("TENNIS_CATALOG_BACKFILL_MAX_PLAYERS")
+_WORKER_NAME = "tennis_player_catalog_backfill_worker"
 
 
 def _run_once() -> dict:
@@ -52,6 +55,7 @@ def _run_once() -> dict:
 
 
 if __name__ == "__main__":
+    init_db_historical()
     print(
         f"[tennis_player_catalog_backfill] loop mode, "
         f"max_workers={_MAX_WORKERS}, interval_between_passes={_INTERVAL_S}s",
@@ -59,7 +63,10 @@ if __name__ == "__main__":
     )
     while True:
         try:
-            _run_once()
+            mark_cycle_started(_WORKER_NAME)
+            result = _run_once()
+            mark_cycle_finished(_WORKER_NAME, result)
         except Exception as e:
+            mark_cycle_failed(_WORKER_NAME, e)
             print(f"[tennis_player_catalog_backfill] error: {e}", flush=True)
         time.sleep(_INTERVAL_S)

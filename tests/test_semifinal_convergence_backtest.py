@@ -111,6 +111,9 @@ def test_hit_when_price_converges_past_target():
     assert result["hits"] == 1
     assert result["cases"][0]["hit"] is True
     assert result["cases"][0]["target"] == pytest.approx(0.40)
+    assert result["cases"][0]["target_touched"] is True
+    assert result["cases"][0]["simulated_fill"] is None
+    assert result["fill_rate"] is None
 
 
 def test_miss_when_price_never_converges():

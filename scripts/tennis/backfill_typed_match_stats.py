@@ -22,6 +22,7 @@ from database.db import init_db_historical, db_historical
 from database.historical.tennis.matchstats_parser import (
     set_number_from_key, typed_columns_from_stats,
 )
+from database.historical.tennis.matchstats import stats_are_usable
 from database.historical.tennis.models import MatchStats, MatchStatsSet
 
 
@@ -42,8 +43,17 @@ def backfill_typed_match_stats(limit: int | None = None) -> dict[str, Any]:
             skipped += 1
             continue
         if not isinstance(stats, dict):
+            row.is_usable = False
+            row.invalid_reason = "raw_stats_json no es un objeto"
+            row.save()
             skipped += 1
             continue
+
+        usable = stats_are_usable(stats)
+        if row.is_usable != usable or (not usable and row.invalid_reason is None):
+            row.is_usable = usable
+            row.invalid_reason = None if usable else "sin métricas tipables"
+            row.save()
 
         # --- columnas tipadas de la sección "match" ---
         columns = typed_columns_from_stats(stats.get("match") or {})

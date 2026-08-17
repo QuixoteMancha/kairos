@@ -119,6 +119,7 @@ def run_elo_backfill(tours: tuple[str, ...] = ("ATP", "WTA")) -> dict:
                     & (MatchHistory.player_a.is_null(False))
                     & (MatchHistory.player_b.is_null(False))
                     & (MatchHistory.winner.is_null(False))
+                    & ~(MatchHistory.match_id.startswith("recentform:"))
                 )
                 .order_by(MatchHistory.match_date, MatchHistory.id)
             )

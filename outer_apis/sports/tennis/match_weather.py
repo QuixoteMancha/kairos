@@ -47,6 +47,7 @@ from database.historical.tennis.models import ProbabilityTick as TennisMatchProb
 from database.historical.tennis.models import MatchWeather as TennisMatchWeather
 from outer_apis.scrapers.tennis.tournament_location import get_location
 from outer_apis.scrapers.weather import open_meteo
+from scripts.tennis.rotating_batch import take_rotating_batch
 
 
 _DB_LOCK_RETRIES = 3
@@ -142,18 +143,22 @@ def populate_weather_for_match(match: TennisScannedMatch) -> dict[str, Any]:
 
     lat, lon = location
     init_db_historical()
+    from database.historical.tennis.matchtracking import ensure_match_history_for_scanned_match
+    history = ensure_match_history_for_scanned_match(match)
+    if history is None:
+        return {"skipped": True, "reason": "sin MatchHistory canónico"}
     fetched_at = _now()
     populated = []
     for phase, when in timestamps.items():
         exists = TennisMatchWeather.select().where(
-            (TennisMatchWeather.match == match) & (TennisMatchWeather.phase == phase)
+            (TennisMatchWeather.match_history == history) & (TennisMatchWeather.phase == phase)
         ).exists()
         if exists:
             continue
 
         weather = open_meteo.get_weather_at(lat, lon, when)
         _create_weather_row_with_retry(
-            match=match, phase=phase, observed_at=when,
+            match_history=history, phase=phase, observed_at=when,
             temperature_c=(weather or {}).get("temperature_c"),
             humidity_pct=(weather or {}).get("humidity_pct"),
             wind_kmh=(weather or {}).get("wind_kmh"),
@@ -211,6 +216,7 @@ def populate_weather_for_all_resolved_matches() -> dict[str, Any]:
 # `match_day` -- nunca se confunde con las fases horarias reales.
 
 _MATCH_HISTORY_WEATHER_PHASE = "match_day"
+_match_history_batch_cursor_id = 0
 
 
 def _match_history_location(match) -> tuple[float, float] | None:
@@ -295,12 +301,12 @@ def populate_weather_for_match_history(limit: int | None = None) -> dict[str, An
     init_db_historical()
     batch_limit = 500 if limit is None else limit
 
-    already = {
-        w.match_history_id
-        for w in TennisMatchWeather
-        .select(TennisMatchWeather.match_history)
+    global _match_history_batch_cursor_id
+
+    histories_with_weather = (
+        TennisMatchWeather.select(TennisMatchWeather.match_history)
         .where(TennisMatchWeather.match_history.is_null(False))
-    }
+    )
 
     query = (
         MatchHistory
@@ -308,18 +314,20 @@ def populate_weather_for_match_history(limit: int | None = None) -> dict[str, An
         .where(
             MatchHistory.match_date.is_null(False)
             & MatchHistory.tournament.is_null(False)
+            & MatchHistory.id.not_in(histories_with_weather)
         )
-        .order_by(MatchHistory.match_date.desc())
+    )
+    matches, _match_history_batch_cursor_id = take_rotating_batch(
+        query, MatchHistory.id,
+        after_id=_match_history_batch_cursor_id,
+        limit=batch_limit,
+        cursor_key="tennis_match_weather",
     )
 
     processed = skipped = errors = 0
     reasons: dict[str, int] = {}
     budget_exhausted = False
-    for match in query:
-        if processed + skipped >= batch_limit:
-            break
-        if match.id in already:
-            continue
+    for match in matches:
         try:
             result = populate_weather_for_match_history_row(match)
         except open_meteo.DailyBudgetExhausted:
@@ -341,4 +349,3 @@ def populate_weather_for_match_history(limit: int | None = None) -> dict[str, An
         "processed": processed, "skipped": skipped, "errors": errors,
         "budget_exhausted": budget_exhausted, "skip_reasons": reasons,
     }
-

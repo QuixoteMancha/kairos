@@ -7,8 +7,23 @@ fuente de datos real (DB-first splits + Kalshi portfolio)."""
 from __future__ import annotations
 
 from unittest.mock import patch
+import pytest
 
-from strategies.bet_on_favourite import bet_on_favourite, _rank_difference_ok, _player_surface_winpct
+from strategies.bet_on_favourite import (
+    BetOnFavourite,
+    bet_on_favourite,
+    _rank_difference_ok,
+    _player_surface_winpct,
+)
+
+
+@pytest.fixture(autouse=True)
+def strategy_signals():
+    default_form = _mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4})
+    with patch("strategies.bet_on_favourite._model_probability", return_value=0.80), \
+         patch("strategies.bet_on_favourite.get_recent_form_by_surface", side_effect=default_form), \
+         patch("strategies.bet_on_favourite.get_recent_form", side_effect=default_form):
+        yield
 
 
 def _match(**overrides) -> dict:
@@ -30,11 +45,11 @@ def _match(**overrides) -> dict:
     return base
 
 
-def _mock_splits(win_pcts: dict[str, float]):
-    def _get(player_name):
+def _mock_form(win_pcts: dict[str, float]):
+    def _get(player_name, *args, **kwargs):
         if player_name not in win_pcts:
             return None
-        return [{"surface": "Hard", "win_pct": win_pcts[player_name]}]
+        return {"win_rate": win_pcts[player_name], "n_matches": 10}
     return _get
 
 
@@ -86,24 +101,36 @@ def test_rank_gap_below_threshold_returns_none():
 
 def test_favourite_worse_surface_winrate_returns_none():
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.5, "Nobody Else": 0.8}),
-    ), patch("strategies.bet_on_favourite.get_all_career_splits_for_surface", return_value={}):
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.5, "Nobody Else": 0.8}),
+    ):
         result = bet_on_favourite(_match())
     assert result is None
 
 
 def test_missing_surface_data_fails_closed():
-    with patch("strategies.bet_on_favourite.get_current_career_splits", return_value=None), \
-         patch("strategies.bet_on_favourite.get_all_career_splits_for_surface", return_value={}):
+    with patch("strategies.bet_on_favourite.get_recent_form_by_surface", return_value=None):
         result = bet_on_favourite(_match())
     assert result is None
 
 
+def test_favourite_worse_recent_form_returns_none():
+    with patch(
+        "strategies.bet_on_favourite.get_recent_form",
+        side_effect=_mock_form({"Novak Djokovic": 0.4, "Nobody Else": 0.7}),
+    ):
+        assert bet_on_favourite(_match()) is None
+
+
+def test_missing_recent_form_fails_closed():
+    with patch("strategies.bet_on_favourite.get_recent_form", return_value=None):
+        assert bet_on_favourite(_match()) is None
+
+
 def test_full_real_proposal_with_sizing():
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch(
         "strategies.bet_on_favourite.KalshiPortfolioAPI",
         return_value=_mock_portfolio(balance_dollars=1000.0, fills=[]),
@@ -126,8 +153,8 @@ def test_daily_cap_reduces_stake():
         {"action": "buy", "side": "yes", "yes_price_dollars": 0.7, "count_fp": 700},  # 490
     ]
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch(
         "strategies.bet_on_favourite.KalshiPortfolioAPI",
         return_value=_mock_portfolio(balance_dollars=1000.0, fills=fills),
@@ -144,8 +171,8 @@ def test_daily_cap_exhausted_returns_none():
         {"action": "buy", "side": "yes", "yes_price_dollars": 0.5, "count_fp": 1010},
     ]
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch(
         "strategies.bet_on_favourite.KalshiPortfolioAPI",
         return_value=_mock_portfolio(balance_dollars=1000.0, fills=fills),
@@ -155,14 +182,22 @@ def test_daily_cap_exhausted_returns_none():
     assert result is None
 
 
+def test_requires_minimum_calibrated_model_edge():
+    with patch(
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+    ), patch("strategies.bet_on_favourite._model_probability", return_value=0.71):
+        assert bet_on_favourite(_match(current_a_price=0.70)) is None
+
+
 def test_malformed_fill_entry_skipped_not_fatal():
     fills = [
         {"action": "buy", "side": "yes", "yes_price_dollars": "not-a-number", "count_fp": 1},
         {"action": "sell"},  # ignorado, no es 'buy'
     ]
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch(
         "strategies.bet_on_favourite.KalshiPortfolioAPI",
         return_value=_mock_portfolio(balance_dollars=1000.0, fills=fills),
@@ -179,9 +214,25 @@ def test_portfolio_balance_failure_fails_closed():
             raise Exception("Kalshi down")
 
     with patch(
-        "strategies.bet_on_favourite.get_current_career_splits",
-        side_effect=_mock_splits({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch("strategies.bet_on_favourite.KalshiPortfolioAPI", return_value=_BrokenPortfolio()):
         result = bet_on_favourite(_match())
 
     assert result is None
+
+
+def test_class_evaluates_all_markets_and_collects_only_proposals():
+    markets = [_match(), _match(id="M2", player_b_rank=10)]
+    with patch(
+        "strategies.bet_on_favourite.get_recent_form_by_surface",
+        side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
+    ), patch(
+        "strategies.bet_on_favourite.KalshiPortfolioAPI",
+        return_value=_mock_portfolio(balance_dollars=1000.0, fills=[]),
+    ):
+        strategy = BetOnFavourite(api=object(), markets=markets)
+        opportunities = strategy.evaluate_risk_and_return_opportunities()
+
+    assert opportunities == strategy.opportunities
+    assert [item["market_id"] for item in opportunities] == ["M1"]

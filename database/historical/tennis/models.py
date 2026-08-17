@@ -39,7 +39,7 @@ que referencia por FK, nunca antes."""
 
 from peewee import (
     BooleanField, CharField, DateField, DateTimeField, FloatField,
-    ForeignKeyField, IntegerField, TextField,
+    DeferredForeignKey, ForeignKeyField, IntegerField, TextField,
 )
 
 from database.base_models import HistoricalBaseModel
@@ -162,6 +162,11 @@ class Match(HistoricalBaseModel):
     # MatchHistory/ranking/stats para los jugadores de cada partido
     # nuevo detectado acá. NULL = todavía no procesado por ese worker.
     history_synced_at = DateTimeField(null=True)
+    # Relación explícita mercado -> partido deportivo. Es nullable
+    # durante el instante previo a resolver/crear la fila canónica.
+    match_history = DeferredForeignKey(
+        "MatchHistory", backref="kalshi_scans", null=True, on_delete="SET NULL",
+    )
 
 
 class MatchDuration(HistoricalBaseModel):
@@ -225,7 +230,13 @@ class MatchHistory(HistoricalBaseModel):
 
     class Meta:
         table_name = "match_history"
-        indexes = ((("match_id",), True),)
+        indexes = (
+            (("match_id",), True),
+            (("player_a", "match_date"), False),
+            (("player_b", "match_date"), False),
+            (("player_a", "player_b", "match_date"), False),
+            (("surface", "match_date"), False),
+        )
 
     match_id = CharField(unique=True)
     # 2026-08-10, pedido explícito del usuario ("usaremos sólo
@@ -293,6 +304,12 @@ class MatchHistory(HistoricalBaseModel):
     # tras 52 semanas sin competir, esto no hace esa distinción.
     player_a_elo_rank = IntegerField(null=True)
     player_b_elo_rank = IntegerField(null=True)
+    # Weighted Elo point-in-time: rating general con decaimiento temporal
+    # y margen de sets, más rating específico de la superficie.
+    player_a_weighted_elo = FloatField(null=True)
+    player_b_weighted_elo = FloatField(null=True)
+    player_a_surface_elo = FloatField(null=True)
+    player_b_surface_elo = FloatField(null=True)
 
     # 2026-08-12, pedido explícito del usuario ("necesitamos la duración
     # de los matches... añadir un modelo... y campo a la tabla de
@@ -323,25 +340,55 @@ class MatchHistory(HistoricalBaseModel):
     # quién ganó).
     winner_age = FloatField(null=True)
     loser_age = FloatField(null=True)
-    minutes = IntegerField(null=True)
-    best_of = IntegerField(null=True)
 
     # `player_retired` -- RESTAURADO 2026-08-11, pedido explícito del
-    # usuario ("hay que agregar los retiros de los players"). Se había
-    # eliminado antes ese mismo día asumiendo que ninguna fuente lo
-    # exponía -- eso fue un error, no verificado a fondo: TennisExplorer
-    # SÍ marca el retiro dentro del texto de score
-    # (`get_match_detail`'s `sets_score`, ej. "(7-5, 2-6, 6-4 ret.)"),
-    # convención estándar de tenis. `retired` = True cuando el score
-    # trae el marcador "ret."/"w.o." -- el jugador retirado es siempre
-    # el PERDEDOR (`loser`, ver abajo), nunca se adivina si el marcador
-    # no aparece (fail-closed, ver `_parse_retirement` en
-    # `tennisexplorer_player_scraper.py`).
+    # usuario ("hay que agregar los retiros de los players"). La fuente
+    # primaria es la tabla Injuries del perfil de TennisExplorer, enlazada
+    # de forma estricta por jugador+fecha+torneo+match_id. Los walkovers
+    # no se marcan como retiros. Un "ret." explícito en match-detail se
+    # conserva como fallback compatible.
     retired = BooleanField(default=False)
     player_retired = ForeignKeyField(Player, backref="matches_retired", null=True, on_delete="SET NULL", column_name="player_retired_id")
+    retirement_reason = CharField(null=True)
+    retirement_score = CharField(null=True)
+    injury_end_date = CharField(null=True)
+    retirement_source = CharField(null=True)
 
     fetched_at = DateTimeField()
     updated_at = DateTimeField(null=True)  # solo se setea si una re-verificación cambió algún campo
+
+
+class TennisPlayerStrength(HistoricalBaseModel):
+    """Último Weighted Elo disponible para decisiones pre-match."""
+
+    class Meta:
+        table_name = "tennis_player_strength"
+        indexes = ((("player", "tour"), True),)
+
+    player = ForeignKeyField(Player, backref="strengths", on_delete="CASCADE")
+    tour = CharField()
+    overall_elo = FloatField()
+    hard_elo = FloatField(null=True)
+    clay_elo = FloatField(null=True)
+    grass_elo = FloatField(null=True)
+    last_match_date = DateField(null=True)
+    updated_at = DateTimeField()
+
+
+class TennisEloCalibration(HistoricalBaseModel):
+    """Platt scaling por tour/superficie para convertir Elo en probabilidad."""
+
+    class Meta:
+        table_name = "tennis_elo_calibration"
+        indexes = ((("tour", "surface"), True),)
+
+    tour = CharField()
+    surface = CharField()
+    intercept = FloatField(default=0.0)
+    slope = FloatField(default=1.0)
+    sample_count = IntegerField(default=0)
+    fitted_through = DateField(null=True)
+    updated_at = DateTimeField()
 
 
 class ProbabilityTick(HistoricalBaseModel):
@@ -387,9 +434,7 @@ class MatchStats(HistoricalBaseModel):
 
     class Meta:
         table_name = "tennis_match_stats"
-        indexes = ((("match",), True),)
-
-    match = ForeignKeyField(Match, backref="stats", on_delete="CASCADE", unique=True, null=True)
+        indexes = ((("match_history",), True),)
     # 2026-08-08, pedido explícito del usuario -- fusión de `ChartedMatchStats`
     # acá: `match` (arriba) sigue apuntando a `Match` (el tracker VIVO de
     # Kalshi, Categoría B, fuera de la consolidación) por retrocompatibilidad
@@ -407,6 +452,8 @@ class MatchStats(HistoricalBaseModel):
     flashscore_match_id = CharField(null=True)
     raw_stats_json = TextField()
     fetched_at = DateTimeField()
+    is_usable = BooleanField(default=True)
+    invalid_reason = TextField(null=True)
 
     # Match-level totals
     aces_a = IntegerField(null=True)
@@ -449,9 +496,7 @@ class MatchStatsSet(HistoricalBaseModel):
 
     class Meta:
         table_name = "tennis_match_stats_set"
-        indexes = ((("match", "set_number"), True), (("match_history", "set_number"), True))
-
-    match = ForeignKeyField(Match, backref="set_stats", on_delete="CASCADE", null=True)
+        indexes = ((("match_history", "set_number"), True),)
     # 2026-08-09, pedido explícito del usuario -- mismo patrón que
     # `MatchStats.match_history`/`MatchWeather.match_history`: `match`
     # (arriba) sigue apuntando a `Match` (tracker vivo de Kalshi,
@@ -570,6 +615,7 @@ class TennisHistoricalOdds(HistoricalBaseModel):
     odds_opponent = FloatField(null=True)
     source = CharField()
     fetched_at = DateTimeField()
+    match_history = ForeignKeyField(MatchHistory, backref="historical_odds", null=True, on_delete="CASCADE")
 
 
 # `TmlDatabaseMatch` -- ELIMINADA 2026-08-09. 2026-08-10: la fuente
@@ -624,6 +670,7 @@ class TennisPlayerRanking(HistoricalBaseModel):
     ranking = IntegerField()
     country = CharField(null=True)
     fetched_at = DateTimeField()
+    player = ForeignKeyField(Player, backref="official_rankings", null=True, on_delete="CASCADE")
 
 
 # `TennisServeCalibration` -- ELIMINADA 2026-08-10, pedido explícito del
@@ -643,26 +690,6 @@ class TennisPlayerRanking(HistoricalBaseModel):
 # de eliminarla (`save_surface_match_history`/`get_recent_surface_
 # match_history`/`get_all_surface_matches` en `writer.py` ya estaban
 # migradas a `MatchHistory` de una fase anterior de esta misma sesión).
-
-
-class TennisRecentResult(HistoricalBaseModel):
-    class Meta:
-        table_name = "tennis_recent_result"
-        indexes = ((("player_name", "match_date", "opponent_name"), True),)
-
-    player_name = CharField()
-    # 2026-08-10, bug real encontrado corriendo tests: este campo
-    # faltaba (el índice de Meta lo referenciaba, `writer.py` lo sigue
-    # leyendo/escribiendo activamente) -- restaurado, omisión real, no
-    # decisión de diseño.
-    match_date = CharField(null=True)
-    match = ForeignKeyField(Match, backref="recent_results", on_delete="CASCADE", null=True)
-    tournament = ForeignKeyField(Tournament, backref="recent_results", on_delete="CASCADE", null=True)
-    opponent_name = CharField()
-    subject_won = BooleanField()
-    retired_or_walkover = BooleanField()
-    round = CharField(null=True)
-    fetched_at = DateTimeField()
 
 
 class TennisAbstractElo(HistoricalBaseModel):
@@ -701,6 +728,7 @@ class PlayerStats(HistoricalBaseModel):
     ace_pct = FloatField(null=True)
     df_pct = FloatField(null=True)
     fetched_at = DateTimeField()
+    player = ForeignKeyField(Player, backref="career_surface_stats", null=True, on_delete="CASCADE")
 
 
 class PlayerRankingHistory(HistoricalBaseModel):

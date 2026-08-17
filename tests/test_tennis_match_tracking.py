@@ -9,11 +9,12 @@ from unittest.mock import patch
 import pytest
 
 from database.db import init_db_historical, db_historical
-from database.historical.tennis.models import Match as TennisScannedMatch
+from database.historical.tennis.models import Match as TennisScannedMatch, MatchHistory
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
     save_probability_tick, mark_match_settled,
+    get_probability_history,
 )
 
 
@@ -22,10 +23,12 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         TennisMatchProbabilityTick.delete().execute()
+        MatchHistory.delete().execute()
         TennisScannedMatch.delete().execute()
     yield
     with db_historical.connection_context():
         TennisMatchProbabilityTick.delete().execute()
+        MatchHistory.delete().execute()
         TennisScannedMatch.delete().execute()
 
 
@@ -43,6 +46,9 @@ def test_register_scanned_match_is_idempotent():
     register_scanned_match(_fake_market())
     register_scanned_match(_fake_market())  # segunda vez, mismo market_id
     assert TennisScannedMatch.select().count() == 1
+    assert MatchHistory.select().count() == 1
+    assert MatchHistory.get().match_id == "kalshi:KXATPMATCH-TEST"
+    assert TennisScannedMatch.get().match_history_id == MatchHistory.get().id
 
 
 def test_register_scanned_match_skips_incomplete_data():
@@ -65,6 +71,8 @@ def test_get_open_scanned_matches_excludes_settled():
     open_matches = get_open_scanned_matches()
     assert len(open_matches) == 1
     assert open_matches[0]["market_id"] == "KXATPMATCH-OPEN"
+    settled_history = MatchHistory.select().where(MatchHistory.winner.is_null(False)).get()
+    assert settled_history.winner_id == settled_history.player_a_id
 
 
 def test_save_probability_tick_requires_registered_match():
@@ -80,6 +88,13 @@ def test_save_probability_tick_persists_both_prices():
     assert tick.market_price_a == 0.55
     assert tick.model_fair_a == 0.58
     assert tick.match.market_id == "KXATPMATCH-TICK"
+    history = get_probability_history(tick.match.match_history_id)
+    assert history == [{
+        "market_id": "KXATPMATCH-TICK",
+        "observed_at": tick.observed_at,
+        "market_probability_a": 0.55,
+        "model_probability_a": 0.58,
+    }]
 
 
 def test_mark_match_settled_only_accepts_a_or_b():

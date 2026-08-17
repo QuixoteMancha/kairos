@@ -190,7 +190,7 @@ def run_backtest() -> dict:
             continue
 
         max_reached = max(dog_prices)
-        hit = max_reached >= target
+        target_touched = max_reached >= target
 
         cases.append({
             "market_id": match.market_id,
@@ -203,7 +203,11 @@ def run_backtest() -> dict:
             "avg_volatility": signal.avg_volatility,
             "target": round(target, 4),
             "max_reached": round(max_reached, 4),
-            "hit": hit,
+            "target_touched": target_touched,
+            # No hay bid/ask, profundidad ni confirmación de fill en estos
+            # ticks. Sería incorrecto convertir un touch en una ejecución.
+            "simulated_fill": None,
+            "hit": target_touched,  # alias de compatibilidad; ver métricas de salida
             "underdog_fatigue_index": validity["underdog_fatigue_index"],
             "favorite_fatigue_index": validity["favorite_fatigue_index"],
             "underdog_age": validity["underdog_age"],
@@ -211,7 +215,7 @@ def run_backtest() -> dict:
         })
 
     n = len(cases)
-    hits = sum(1 for c in cases if c["hit"])
+    targets_touched = sum(1 for c in cases if c["target_touched"])
 
     return {
         "total_settled_sf_final_matches": len(sf_final_matches),
@@ -219,8 +223,13 @@ def run_backtest() -> dict:
         "excluded_target_above_50pct": excluded_target_above_50,
         "excluded_validity_gate": excluded_validity_gate,
         "evaluable_cases": n,
-        "hits": hits,
-        "hit_rate": round(hits / n, 4) if n else None,
+        "targets_touched": targets_touched,
+        "target_touch_rate": round(targets_touched / n, 4) if n else None,
+        "simulated_fills": None,
+        "fill_rate": None,
+        # Alias temporal para consumidores antiguos. No representa fills.
+        "hits": targets_touched,
+        "hit_rate": round(targets_touched / n, 4) if n else None,
         "cases": cases,
         "caveat": (
             "Sample chico esperado -- round-tracking recién implementado "
@@ -228,7 +237,9 @@ def run_backtest() -> dict:
             "por falta de fuente de datos. Gate de fatiga/edad/lesión "
             "hand-reasoned sin calibrar, y excluye casos por simple falta "
             "de dato (duración/fecha de nacimiento no siempre disponibles). "
-            "NO tratar hit_rate como concluyente con N < ~20."
+            "`target_touch_rate` no demuestra ejecución: faltan bid/ask, "
+            "profundidad, latencia y confirmación de fill. NO tratarlo como "
+            "rentabilidad ni como concluyente con N < ~20."
         ),
     }
 

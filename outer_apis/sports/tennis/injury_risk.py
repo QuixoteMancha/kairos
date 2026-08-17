@@ -4,10 +4,7 @@ motivó: Svitolina jugando con una lesión de cadera real (walkover
 confirmado el 2026-06-21 en Bad Homburg, retirada de otro torneo por lo
 mismo a fines de junio).
 
-Fuente: Tennis Abstract, sección `recent-results` de cada jugador (ver
-`outer_apis/scrapers/tennis/tennisabstract_player_scraper.py::get_recent_results`).
-DB-first, frescura POR JUGADOR (mismo patrón que el resto de
-outer_apis/sports/tennis/*).
+Fuente: retiros canónicos de `MatchHistory`, derivados por consulta.
 
 NO es un blend probabilístico como los demás (no hay forma honesta de
 calibrar "cuántos puntos porcentuales vale un walkover de hace 3

@@ -18,9 +18,9 @@ FILTROS (ambos deben pasar, "strict filters"):
   1. Diferencia de ranking real (ATP >= 20, WTA >= 30, umbrales ya
      usados en otras estrategias de esta sesión, ver
      `kairos-atp-surface-winrate-rank-priority-2026-08-04`).
-  2. El favorito debe tener MEJOR win_pct real en la superficie del
-     partido que el underdog (DB-first vía `get_current_career_splits`/
-     `get_all_career_splits_for_surface`, TennisAbstract).
+  2. El favorito debe tener mejor win rate que el underdog tanto en la
+     superficie durante las últimas 52 semanas como en sus últimos 10
+     partidos (DB-first vía TennisExplorer).
 
 SIZING: 1% del balance real de la wallet de Kalshi, con un tope diario
 del 50% del balance ya gastado en compras (`get_portfolio_fills`).
@@ -40,39 +40,39 @@ se salta sin romper el cálculo del resto."""
 from datetime import datetime, timezone
 from typing import Optional
 
-from database.historical.tennis.writer import (
-    get_current_career_splits,
-    get_all_career_splits_for_surface,
-)
+from outer_apis.sports.tennis.surface_form import get_recent_form, get_recent_form_by_surface
 from outer_apis.kalshi.portfolio import KalshiPortfolioAPI
+from database.db import init_db_historical
+from database.historical.tennis import TennisEloCalibration, TennisPlayerStrength, Player
+from models.volatility.sports.tennis.weighted_elo import (
+    calibrate, combined_probability, regress_for_inactivity,
+)
+from scripts.tennis.compute_weighted_elo import normalize_surface
 
 ATP_THRESHOLD = 20
 WTA_THRESHOLD = 30
 STAKE_FRACTION = 0.01
 DAILY_CAP_FRACTION = 0.5
+MIN_MODEL_EDGE = 0.03
 
 
-def _player_surface_winpct(player_name: str, surface: str) -> Optional[float]:
-    """Try DB-first sources to obtain player's win_pct on `surface`.
-
-    Returns None on any missing/unstable data.
-    """
+def _player_surface_winpct(player_name: str, surface: str, tour: str | None = None) -> Optional[float]:
+    """Winrate point-in-time en superficie durante las últimas 52 semanas."""
     try:
-        splits = get_current_career_splits(player_name)
-        if splits:
-            for r in splits:
-                if r.get("surface") == surface and r.get("win_pct") is not None:
-                    return float(r.get("win_pct"))
-
-        # Bulk mapping fallback: cheaper when many players share the same
-        # surface snapshot.
-        if surface:
-            pool = get_all_career_splits_for_surface(surface)
-            if pool and player_name in pool:
-                return float(pool[player_name].get("win_pct"))
+        result = get_recent_form_by_surface(player_name, surface, tour=tour)
+        if result is not None:
+            return float(result["win_rate"])
     except Exception:
         return None
     return None
+
+
+def _player_recent_winpct(player_name: str, tour: str) -> Optional[float]:
+    try:
+        result = get_recent_form(player_name, tour=tour)
+        return float(result["win_rate"]) if result is not None else None
+    except Exception:
+        return None
 
 
 def _rank_difference_ok(fav_rank: Optional[int], dog_rank: Optional[int], tour: str) -> bool:
@@ -95,7 +95,54 @@ def _today_start_unix() -> int:
     return int(start.timestamp())
 
 
-def bet_on_favourite(match: dict) -> dict | None:
+def _model_probability(favourite: str, underdog: str, tour: str, surface: str) -> float | None:
+    """Probabilidad Weighted Elo calibrada; fail-closed si falta un rating."""
+    normalized_surface = normalize_surface(surface)
+    if normalized_surface is None or tour not in {"ATP", "WTA"}:
+        return None
+    try:
+        init_db_historical()
+        players = {
+            row.canonical_name: row
+            for row in Player.select().where(Player.canonical_name.in_((favourite, underdog)))
+        }
+        if favourite not in players or underdog not in players:
+            return None
+        strengths = {
+            row.player_id: row
+            for row in TennisPlayerStrength.select().where(
+                (TennisPlayerStrength.tour == tour)
+                & TennisPlayerStrength.player.in_((players[favourite].id, players[underdog].id))
+            )
+        }
+        fav = strengths.get(players[favourite].id)
+        dog = strengths.get(players[underdog].id)
+        if fav is None or dog is None:
+            return None
+        attr = f"{normalized_surface.lower()}_elo"
+        fav_surface, dog_surface = getattr(fav, attr), getattr(dog, attr)
+        if fav_surface is None or dog_surface is None:
+            return None
+        today = datetime.now(timezone.utc).date()
+        fav_overall = regress_for_inactivity(
+            fav.overall_elo, (today - fav.last_match_date).days if fav.last_match_date else 0,
+        )
+        dog_overall = regress_for_inactivity(
+            dog.overall_elo, (today - dog.last_match_date).days if dog.last_match_date else 0,
+        )
+        raw = combined_probability(fav_overall, dog_overall, fav_surface, dog_surface)
+        fitted = TennisEloCalibration.get_or_none(
+            (TennisEloCalibration.tour == tour)
+            & (TennisEloCalibration.surface == normalized_surface)
+        )
+        if fitted is None or fitted.sample_count < 100:
+            return None
+        return calibrate(raw, fitted.intercept, fitted.slope)
+    except Exception:
+        return None
+
+
+def _evaluate_match(match: dict) -> dict | None:
     """Evaluate a single paired tennis `match` (as returned by
     `outer_apis.kalshi.markets.tennis.build_tennis_markets`).
     Returns a proposal dict or None.
@@ -133,14 +180,30 @@ def bet_on_favourite(match: dict) -> dict | None:
         return None
 
     # Winrate on surface: favourite must have higher win_pct than underdog
-    fav_win = _player_surface_winpct(fav_name, surface)
-    dog_win = _player_surface_winpct(dog_name, surface)
+    fav_win = _player_surface_winpct(fav_name, surface, tour)
+    dog_win = _player_surface_winpct(dog_name, surface, tour)
     if fav_win is None or dog_win is None:
         return None
     try:
         if float(fav_win) <= float(dog_win):
             return None
     except Exception:
+        return None
+
+    fav_recent = _player_recent_winpct(fav_name, tour)
+    dog_recent = _player_recent_winpct(dog_name, tour)
+    if fav_recent is None or dog_recent is None or fav_recent <= dog_recent:
+        return None
+
+    model_probability = _model_probability(fav_name, dog_name, tour, surface)
+    try:
+        market_probability = float(a_price if fav_side == "a" else b_price)
+    except (TypeError, ValueError):
+        return None
+    if model_probability is None or not 0 < market_probability < 1:
+        return None
+    model_edge = model_probability - market_probability
+    if model_edge < MIN_MODEL_EDGE:
         return None
 
     # Sizing: 1% of Kalshi wallet balance, capped by daily 50% spent
@@ -196,5 +259,37 @@ def bet_on_favourite(match: dict) -> dict | None:
         "dog_name": dog_name,
         "tour": tour,
         "surface": surface,
-        "reason": "ranking_diff_and_surface_winrate",
+        "reason": "rank_gap_surface_winrate_and_calibrated_weighted_elo_edge",
+        "model_probability": round(model_probability, 4),
+        "market_probability": round(market_probability, 4),
+        "model_edge": round(model_edge, 4),
+        "favorite_surface_52w_winrate": round(fav_win, 4),
+        "underdog_surface_52w_winrate": round(dog_win, 4),
+        "favorite_recent_10_winrate": round(fav_recent, 4),
+        "underdog_recent_10_winrate": round(dog_recent, 4),
     }
+
+
+class BetOnFavourite:
+    """Evalúa una colección de mercados con la interfaz de las estrategias.
+
+    La clase solo produce propuestas; no coloca órdenes reales.
+    """
+
+    def __init__(self, api, markets):
+        self.api = api
+        self.markets = markets
+        self.opportunities = []
+
+    def evaluate_risk_and_return_opportunities(self):
+        self.opportunities = []
+        for market in self.markets:
+            proposal = _evaluate_match(market)
+            if proposal is not None:
+                self.opportunities.append(proposal)
+        return self.opportunities
+
+
+def bet_on_favourite(match: dict) -> dict | None:
+    """Compatibilidad con callers antiguos que evalúan un solo partido."""
+    return _evaluate_match(match)

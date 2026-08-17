@@ -104,6 +104,19 @@ def test_load_priced_matches_favorite_lost():
     assert matches[0]["favorite_won"] is False
 
 
+def test_load_priced_matches_emits_one_case_when_both_perspectives_have_odds():
+    with db_historical.connection_context():
+        _seed_match("A", "B", "2026-01-01", "W", odds_self=1.5, odds_opp=2.8)
+        TennisHistoricalOdds.create(
+            player_name="B", opponent_name="A", match_date="2026-01-01",
+            odds_self=2.8, odds_opponent=1.5, source="test_real_odds",
+            fetched_at=datetime.now(timezone.utc),
+        )
+    matches = _load_priced_matches()
+    assert len(matches) == 1
+    assert matches[0]["favorite_decimal_odds"] == 1.5
+
+
 def test_load_priced_matches_skips_rows_without_odds():
     with db_historical.connection_context():
         p_a, p_b = _make_player("NoOdds"), _make_player("X")
@@ -129,17 +142,16 @@ def test_calibration_by_real_odds_buckets_correctly():
     assert result["0.85-0.90"]["actual_hit_rate"] == 1.0
 
 
-def test_run_strategy1_with_real_odds_applies_fees_and_reports_metrics():
+def test_run_strategy1_with_real_odds_uses_offered_decimal_odds():
     matches = [
-        {"favorite_fair_price": 0.60, "favorite_won": True},
-        {"favorite_fair_price": 0.60, "favorite_won": False},
+        {"match_date": "2026-01-02", "match_id": "2", "favorite_fair_price": 0.60, "favorite_decimal_odds": 1.5, "favorite_won": True},
+        {"match_date": "2026-01-01", "match_id": "1", "favorite_fair_price": 0.60, "favorite_decimal_odds": 1.5, "favorite_won": False},
     ]
     result = run_strategy1_with_real_odds(matches, initial_capital=50.0)
     assert result["n_trades"] == 2
     assert result["winrate"] == 0.5
-    # con fee real, la ganancia neta debe ser MENOR que el bruto (1-0.6)/0.6=0.667
-    assert result["avg_roi_per_trade_pct"] is not None
-    assert result["final_capital_usdc"] != 50.0
+    assert result["avg_roi_per_trade_pct"] == -25.0
+    assert result["final_capital_usdc"] == 49.75
 
 
 def test_run_strategy1_with_real_odds_no_trades_returns_none_metrics():

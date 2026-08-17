@@ -153,8 +153,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_head_to_head(fair_a, market)
         fair_a = self._blend_set_sequence_resilience(fair_a, market)
         fair_a = self._blend_surface_form(fair_a, market)
-        fair_a = self._blend_tennisabstract_elo(fair_a, market)
-        fair_a = self._blend_tennisabstract_season_form(fair_a, market)
+        fair_a = self._blend_own_surface_elo(fair_a, market)
         fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
         fair_a = self._blend_style_peer_group(fair_a, market)
         fair_a = self._apply_injury_risk_discount(fair_a, market)
@@ -276,22 +275,15 @@ class TennisFModel(_SportFModel):
         return (1 - SURFACE_FORM_WEIGHT) * fair_a + SURFACE_FORM_WEIGHT * surface_form_implied_a
 
     @staticmethod
-    def _blend_tennisabstract_elo(fair_a: float, market: dict) -> float:
-        """Elo real por jugador (Tennis Abstract), carrera +
-        por superficie (hElo/cElo/gElo, ver
-        outer_apis/sports/tennis/tennisabstract_elo.py). Reemplaza
-        conceptualmente al sistema propio de buckets de ranking en calidad
-        de dato -- por eso tiene el peso más alto de todos los blends.
-        Fail-closed: requiere `tour` conocido Y ambos nombres matcheen en
-        la tabla de Tennis Abstract, si no, no ajusta nada (nunca fabrica
-        un Elo por analogía de ranking)."""
+    def _blend_own_surface_elo(fair_a: float, market: dict) -> float:
+        """Elo propio ponderado, usando su componente de superficie."""
         tour = market.get('tour')
         name_a = market.get('player_a_name')
         name_b = market.get('player_b_name')
         if not tour or not name_a or not name_b:
             return fair_a
 
-        from outer_apis.sports.tennis.tennisabstract_elo import get_elo, elo_implied_win_prob
+        from outer_apis.sports.tennis.own_elo import get_elo, elo_implied_win_prob
 
         surface = market.get('surface')
         elo_a = get_elo(name_a, tour, surface=surface)
@@ -301,6 +293,9 @@ class TennisFModel(_SportFModel):
 
         elo_implied_a = clamp01(elo_implied_win_prob(elo_a, elo_b))
         return (1 - TENNISABSTRACT_ELO_WEIGHT) * fair_a + TENNISABSTRACT_ELO_WEIGHT * elo_implied_a
+
+    # Alias transitorio para integraciones que llamaban el helper privado.
+    _blend_tennisabstract_elo = _blend_own_surface_elo
 
     @staticmethod
     def _blend_tennisabstract_season_form(fair_a: float, market: dict) -> float:

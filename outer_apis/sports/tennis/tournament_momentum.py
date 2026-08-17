@@ -9,9 +9,8 @@ llegó a semifinal ganando 3 rondas seguidas ESTA semana está mostrando
 una forma más fuerte de lo que su ranking (una medida lenta, acumulada
 durante meses) puede reflejar.
 
-Fuente: mismos datos de `recent-results` de Tennis Abstract que
-`injury_risk.py` (reusa el mismo caché DB-first, ver
-`recent_results_cache.py`) -- sin fetch adicional."""
+Fuente: los mismos partidos canónicos de `MatchHistory` que
+`injury_risk.py`, mediante una consulta compartida y sin fetch adicional."""
 
 from __future__ import annotations
 

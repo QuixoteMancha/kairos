@@ -62,7 +62,7 @@ def test_fetch_and_cache_skips_live_fetch_when_player_not_in_allowlist():
     p_a = Player.create(canonical_name="Old Match Player", created_at=datetime.now(timezone.utc))
     p_b = Player.create(canonical_name="X", created_at=datetime.now(timezone.utc))
     MatchHistory.create(
-        match_id=_synthetic_recentform_match_id("Old Match Player", "X", "2026-07-20"),
+        match_id="real-old-match",
         player_a=p_a, player_b=p_b, match_date="2026-07-20",
         winner=p_a, score="6-4 6-3", source="tennisexplorer",
         fetched_at=datetime.now(timezone.utc),
@@ -87,7 +87,7 @@ def test_fetch_and_cache_returns_empty_when_not_in_allowlist_and_no_data_ever():
     assert result == []
 
 
-def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
+def test_fetch_and_cache_never_fetches_live_even_when_player_in_allowlist():
     match_history.set_fetch_allowlist({"New Match Player"})
     fake_matches = [{"fecha": "2026-08-01", "oponente": "Y", "resultado": "L", "score": "3-6 4-6", "source": "flashscore"}]
 
@@ -95,13 +95,13 @@ def test_fetch_and_cache_fetches_live_when_player_in_allowlist():
                return_value=fake_matches) as mock_fetch:
         result = match_history._fetch_and_cache("New Match Player")
 
-    mock_fetch.assert_called_once()
-    assert result == fake_matches
+    mock_fetch.assert_not_called()
+    assert result == []
 
 
-def test_fetch_and_cache_unrestricted_when_allowlist_is_none():
+def test_fetch_and_cache_is_query_only_when_allowlist_is_none():
     match_history.set_fetch_allowlist(None)  # comportamiento de siempre
     with patch("outer_apis.sports.tennis.match_history.tennisexplorer_player_scraper.get_player_recent_matches",
                return_value=[]) as mock_fetch:
         match_history._fetch_and_cache("Anybody")
-    mock_fetch.assert_called_once()
+    mock_fetch.assert_not_called()

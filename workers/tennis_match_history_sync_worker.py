@@ -39,6 +39,7 @@ import time
 from datetime import datetime, timezone
 
 from database.db import init_db_historical, db_historical
+from database.historical.workerstate import mark_cycle_failed, mark_cycle_finished, mark_cycle_started
 from database.historical.tennis import TennisScannedMatch, MatchHistory, Player
 from database.historical.tennis.writer import _lookup_player_id
 from database.historical.tennis.matchstats import has_match_stats_for_history, save_match_stats_for_history
@@ -50,6 +51,7 @@ from scripts.tennis.wta_top200_historical_backfill import backfill_player
 _BATCH_SIZE = int(os.getenv("TENNIS_HISTORY_SYNC_BATCH_SIZE", "10"))
 _STATS_FILL_LIMIT_PER_PLAYER = int(os.getenv("TENNIS_HISTORY_SYNC_STATS_LIMIT", "5"))
 _SLEEP_SECONDS = int(os.getenv("TENNIS_HISTORY_SYNC_SLEEP_S", "300"))
+_WORKER_NAME = "tennis_match_history_sync_worker"
 
 
 def _recent_years() -> list[int]:
@@ -89,9 +91,10 @@ def fill_missing_stats_for_player(player_name: str, limit: int = _STATS_FILL_LIM
             # a `find_match_id` para exigir que el candidato de
             # Flashscore tenga el MISMO resultado de sets, no solo
             # nombre+fecha.
+            tournament_name = mh.tournament.tournament_name if mh.tournament else None
             match_id = find_match_id(
                 mh.player_a.canonical_name, mh.player_b.canonical_name, mh.match_date or "",
-                mh.tournament, expected_score=mh.score,
+                tournament_name, expected_score=mh.score,
             )
             if not match_id:
                 continue
@@ -190,9 +193,13 @@ def run_once() -> dict:
 
 
 if __name__ == "__main__":
+    init_db_historical()
     while True:
         try:
-            run_once()
+            mark_cycle_started(_WORKER_NAME)
+            result = run_once()
+            mark_cycle_finished(_WORKER_NAME, result)
         except Exception as e:
+            mark_cycle_failed(_WORKER_NAME, e)
             print(f"[tennis_match_history_sync_worker] error: {e}", flush=True)
         time.sleep(_SLEEP_SECONDS)

@@ -5,11 +5,10 @@ al último torneo y entre partidos recientes... en el índice también se
 puede añadir la edad como peso ya que jugadores sobre 30 no toleran bien
 tanta fatiga acumulada").
 
-FUENTE DE DATOS: `recent_results_cache.fetch_and_cache` (mismo caché
-DB-first que ya usan `injury_risk.py`/`tournament_momentum.py`, sin
-fetch adicional) -- cada fila trae `duration_minutes` real (Tennis
-Abstract, columna 15 de `recent-results`, agregada 2026-08-01, ver
-`tennisabstract_player_scraper.get_recent_results`). Edad real vía
+FUENTE DE DATOS: consulta sobre `MatchHistory` compartida por
+`injury_risk.py`/`tournament_momentum.py`, sin tabla derivada ni fetch
+adicional. Cada fila expone `duration_minutes` desde `MatchDuration`.
+Edad real vía
 `player_age.get_age` (Tennis Abstract bio page, cache permanente).
 
 MODELO -- HAND-REASONED, NO CALIBRADO (mismo criterio que el resto de
