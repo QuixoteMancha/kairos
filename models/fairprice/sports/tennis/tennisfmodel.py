@@ -103,7 +103,6 @@ STYLE_PEER_GROUP_WEIGHT = 0.10
 # hace 3 semanas sin datos reales de cuántos partidos post-lesión se
 # ganan/pierden. Es una heurística de riesgo, documentada como tal, no
 # un número derivado de datos.
-INJURY_RISK_DISCOUNT = 0.05
 
 # Avance de rondas en el torneo actual (2026-08-01, pedido explícito del
 # usuario -- "el ranking puede ser engañoso, el avance de rondas
@@ -399,29 +398,26 @@ class TennisFModel(_SportFModel):
 
     @staticmethod
     def _apply_injury_risk_discount(fair_a: float, market: dict) -> float:
-        """Descuento fijo (no un blend) si alguno de los 2 jugadores tuvo
-        un retiro/no-presentación real en los últimos 45 días (ver
-        outer_apis/sports/tennis/injury_risk.py). Si AMBOS lo tuvieron,
-        los descuentos se cancelan (ninguno tiene ventaja relativa por
-        esto). Fail-closed: sin nombres, o sin datos reales de ninguno de
-        los 2 (`get_injury_risk_flag` devuelve None), no ajusta nada --
-        None es explícitamente distinto de {"flagged": False}, que sí es
-        una respuesta real de "sin evidencia de lesión reciente"."""
+        """Castigo relativo posterior a lesión, con Elo y stats recientes
+        comparados contra las 52 semanas anteriores al retiro."""
         name_a = market.get('player_a_name')
         name_b = market.get('player_b_name')
         if not name_a or not name_b:
             return fair_a
 
-        from outer_apis.sports.tennis.injury_risk import get_injury_risk_flag
+        from outer_apis.sports.tennis.injury_risk import get_post_injury_performance_penalty
 
-        risk_a = get_injury_risk_flag(name_a)
-        risk_b = get_injury_risk_flag(name_b)
+        surface = market.get('surface')
+        risk_a = get_post_injury_performance_penalty(name_a, surface=surface)
+        risk_b = get_post_injury_performance_penalty(name_b, surface=surface)
         if risk_a is None and risk_b is None:
             return fair_a
 
-        discount_a = INJURY_RISK_DISCOUNT if (risk_a and risk_a.get('flagged')) else 0.0
-        discount_b = INJURY_RISK_DISCOUNT if (risk_b and risk_b.get('flagged')) else 0.0
-        return clamp01(fair_a - discount_a + discount_b)
+        penalty_a = float((risk_a or {}).get('penalty', 0.0))
+        penalty_b = float((risk_b or {}).get('penalty', 0.0))
+        mass_a = fair_a * (1.0 - penalty_a)
+        mass_b = (1.0 - fair_a) * (1.0 - penalty_b)
+        return clamp01(mass_a / (mass_a + mass_b)) if mass_a + mass_b > 0 else fair_a
 
     @staticmethod
     def _blend_tournament_momentum(fair_a: float, market: dict) -> float:

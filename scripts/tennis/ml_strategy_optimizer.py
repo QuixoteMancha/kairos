@@ -29,6 +29,8 @@ from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import MatchHistory, MatchStats
 from database.historical.workerstate import TennisMlExperiment
 from scripts.tennis.bet_on_favourite_backtest import _odds_for_match, simulate
+from outer_apis.sports.tennis.injury_risk import calculate_post_injury_penalty
+from strategies.bet_on_favourite import _relative_injury_adjustment
 
 
 MIN_TRAIN_ROWS = 500
@@ -84,6 +86,8 @@ def collect_dataset() -> list[dict[str, Any]]:
     elos: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     services: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     returns: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
+    performance: dict[int, list[tuple[date, float | None, float | None, float | None]]] = defaultdict(list)
+    injury_state: dict[int, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
     with db_historical.connection_context():
         stats_by_match = {
@@ -106,6 +110,27 @@ def collect_dataset() -> list[dict[str, Any]]:
             except (TypeError, ValueError):
                 continue
             odds = _odds_for_match(match)
+
+            def injury_penalty(player_id: int) -> float:
+                state = injury_state.get(player_id)
+                if state is None:
+                    return 0.0
+                recovery = state["date"]
+                end = state.get("end")
+                active = False
+                if end and end <= played:
+                    recovery = max(recovery, end)
+                post = [item for item in performance[player_id] if item[0] >= state["date"]][-10:]
+
+                def delta(index: int) -> float | None:
+                    before = [item[index] for item in state["baseline"] if item[index] is not None]
+                    after = [item[index] for item in post if item[index] is not None]
+                    return sum(after) / len(after) - sum(before) / len(before) if before and after else None
+
+                return calculate_post_injury_penalty(
+                    days_since_recovery=max(0, (played - recovery).days), injury_active=active,
+                    elo_delta=delta(1), service_delta=delta(2), return_delta=delta(3),
+                )["total"]
             elo_values = (
                 match.player_a_weighted_elo, match.player_b_weighted_elo,
                 match.player_a_surface_elo, match.player_b_surface_elo,
@@ -156,6 +181,8 @@ def collect_dataset() -> list[dict[str, Any]]:
                         _mean(list(returns[fav_id])) - _mean(list(returns[dog_id]))
                         if returns[fav_id] and returns[dog_id] else None
                     ),
+                    "favorite_injury_penalty": injury_penalty(fav_id),
+                    "underdog_injury_penalty": injury_penalty(dog_id),
                     "hit": match.winner_id == fav_id,
                 })
 
@@ -167,6 +194,19 @@ def collect_dataset() -> list[dict[str, Any]]:
             if match.player_b_weighted_elo is not None:
                 elos[match.player_b_id].append(float(match.player_b_weighted_elo))
             stats = stats_by_match.get(match.id)
+            for player_id in (match.player_a_id, match.player_b_id):
+                if match.retired and match.player_retired_id == player_id:
+                    cutoff = played.toordinal() - 365
+                    end = None
+                    if match.injury_end_date:
+                        try:
+                            end = date.fromisoformat(match.injury_end_date)
+                        except ValueError:
+                            pass
+                    injury_state[player_id] = {
+                        "date": played, "end": end,
+                        "baseline": [item for item in performance[player_id] if item[0].toordinal() >= cutoff],
+                    }
             if stats is not None:
                 for player_id, side, opponent_side in (
                     (match.player_a_id, "a", "b"), (match.player_b_id, "b", "a"),
@@ -176,6 +216,20 @@ def collect_dataset() -> list[dict[str, Any]]:
                         services[player_id].append(service)
                     if return_rate is not None:
                         returns[player_id].append(return_rate)
+                    elo = (
+                        match.player_a_surface_elo if side == "a" else match.player_b_surface_elo
+                    )
+                    if elo is None:
+                        elo = match.player_a_weighted_elo if side == "a" else match.player_b_weighted_elo
+                    performance[player_id].append((
+                        played, float(elo) if elo is not None else None, service, return_rate,
+                    ))
+            else:
+                for player_id, elo in (
+                    (match.player_a_id, match.player_a_surface_elo or match.player_a_weighted_elo),
+                    (match.player_b_id, match.player_b_surface_elo or match.player_b_weighted_elo),
+                ):
+                    performance[player_id].append((played, float(elo) if elo is not None else None, None, None))
     return rows
 
 
@@ -214,13 +268,23 @@ def _matrix(rows: list[dict[str, Any]]) -> np.ndarray:
 
 def dataset_sha256(rows: list[dict[str, Any]]) -> str:
     identity = "\n".join(json.dumps(
-        {key: row.get(key) for key in ("match_id", "date", *FEATURE_COLUMNS)},
+        {key: row.get(key) for key in (
+            "match_id", "date", *FEATURE_COLUMNS,
+            "favorite_injury_penalty", "underdog_injury_penalty",
+        )},
         sort_keys=True, default=str,
     ) for row in rows)
     return sha256(identity.encode()).hexdigest()
 
 
 def _evaluate_predictions(rows: list[dict[str, Any]], probabilities: np.ndarray) -> dict[str, Any]:
+    probabilities = np.asarray([
+        _relative_injury_adjustment(
+            float(probability), float(row.get("favorite_injury_penalty", 0.0)),
+            float(row.get("underdog_injury_penalty", 0.0)),
+        )
+        for row, probability in zip(rows, probabilities)
+    ])
     labels = np.asarray([int(row["hit"]) for row in rows])
     selected = []
     for row, probability in zip(rows, probabilities):
@@ -293,6 +357,7 @@ def train_and_evaluate(rows: list[dict[str, Any]], artifact_root: str | Path) ->
             "reason": "historical Kalshi execution prices are unavailable for most training matches",
             "stake_fraction_per_trade": 0.01,
             "max_daily_exposure_fraction": 0.5,
+            "post_injury_adjustment": "relative_probability_mass_penalty_capped_at_10pct",
         },
     }
 

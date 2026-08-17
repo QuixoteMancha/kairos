@@ -12,7 +12,32 @@ import pytest
 from outer_apis.scrapers.tennis.tennisabstract_player_scraper import (
     _parse_date, get_recent_results as scraper_get_recent_results,
 )
-from outer_apis.sports.tennis.injury_risk import get_injury_risk_flag, INJURY_LOOKBACK_DAYS
+from outer_apis.sports.tennis.injury_risk import (
+    get_injury_risk_flag, INJURY_LOOKBACK_DAYS, calculate_post_injury_penalty,
+)
+
+
+def test_post_injury_penalty_combines_recency_and_measured_declines():
+    result = calculate_post_injury_penalty(
+        days_since_recovery=30, elo_delta=-50,
+        service_delta=-5, return_delta=-0.05,
+    )
+    assert result == {
+        "total": 0.055, "recency": 0.02, "elo_decline": 0.015,
+        "service_decline": 0.01, "return_decline": 0.01,
+    }
+
+
+def test_post_injury_penalty_never_rewards_improvement_and_is_capped():
+    improved = calculate_post_injury_penalty(
+        days_since_recovery=100, elo_delta=50, service_delta=5, return_delta=0.1,
+    )
+    assert improved["total"] == 0.0
+    severe = calculate_post_injury_penalty(
+        days_since_recovery=0, injury_active=True,
+        elo_delta=-1000, service_delta=-100, return_delta=-1,
+    )
+    assert severe["total"] == 0.10
 
 
 def test_parse_date_iso_conversion():

@@ -15,11 +15,13 @@ import json
 from typing import Any
 
 from database.db import db_historical, init_db_historical
-from database.historical.tennis import MatchHistory, TennisHistoricalOdds
+from database.historical.tennis import MatchHistory, TennisHistoricalOdds, TennisMatchStats
 from scripts.reports import risk_metrics
 from models.volatility.sports.tennis.weighted_elo import (
     calibrate, combined_probability, fit_platt,
 )
+from outer_apis.sports.tennis.injury_risk import calculate_post_injury_penalty
+from strategies.bet_on_favourite import _relative_injury_adjustment
 
 
 RANK_GAP_BY_TOUR = {"ATP": 20, "WTA": 30}
@@ -55,9 +57,16 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
     init_db_historical()
     surface_record: dict[tuple[str, str], list[tuple[date, bool]]] = defaultdict(list)
     recent_record: dict[str, deque[bool]] = defaultdict(lambda: deque(maxlen=10))
+    performance: dict[int, list[tuple[date, float | None, float | None, float | None]]] = defaultdict(list)
+    injury_state: dict[int, dict[str, Any]] = {}
     cases: list[dict[str, Any]] = []
     skipped = defaultdict(int)
     with db_historical.connection_context():
+        stats_by_match = {
+            item.match_history_id: item for item in TennisMatchStats.select().where(
+                TennisMatchStats.match_history.is_null(False) & TennisMatchStats.is_usable
+            )
+        }
         rows = list(
             MatchHistory.select()
             .where(
@@ -80,6 +89,34 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
             odds = _odds_for_match(row)
             a_rank, b_rank = row.player_a_elo_rank, row.player_b_elo_rank
 
+            def injury_penalty(player_id: int) -> tuple[float, dict[str, Any] | None]:
+                state = injury_state.get(player_id)
+                if state is None:
+                    return 0.0, None
+                recovery = state["date"]
+                reported_end = state.get("end")
+                active = False
+                if reported_end and reported_end <= played:
+                    recovery = max(recovery, reported_end)
+                post = [item for item in performance[player_id] if item[0] >= state["date"]][-10:]
+                baseline = state["baseline"]
+
+                def metric_delta(index: int) -> float | None:
+                    before = [item[index] for item in baseline if item[index] is not None]
+                    after = [item[index] for item in post if item[index] is not None]
+                    return (sum(after) / len(after) - sum(before) / len(before)) if before and after else None
+
+                deltas = (metric_delta(1), metric_delta(2), metric_delta(3))
+                components = calculate_post_injury_penalty(
+                    days_since_recovery=max(0, (played - recovery).days),
+                    injury_active=active, elo_delta=deltas[0],
+                    service_delta=deltas[1], return_delta=deltas[2],
+                )
+                return components["total"], {
+                    "injury_date": state["date"].isoformat(), "components": components,
+                    "elo_delta": deltas[0], "service_delta": deltas[1], "return_delta": deltas[2],
+                }
+
             if odds is None:
                 skipped["no_odds"] += 1
             elif not surface:
@@ -94,6 +131,10 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
             else:
                 a_is_favourite = odds[0] < odds[1]
                 fav_name, dog_name = (a_name, b_name) if a_is_favourite else (b_name, a_name)
+                fav_id, dog_id = (
+                    (row.player_a_id, row.player_b_id) if a_is_favourite
+                    else (row.player_b_id, row.player_a_id)
+                )
                 fav_rank, dog_rank = (a_rank, b_rank) if a_is_favourite else (b_rank, a_rank)
                 fav_odds = odds[0] if a_is_favourite else odds[1]
                 raw_a_probability = combined_probability(
@@ -101,6 +142,8 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                     row.player_a_surface_elo, row.player_b_surface_elo,
                 )
                 raw_favourite_probability = raw_a_probability if a_is_favourite else 1.0 - raw_a_probability
+                fav_injury_penalty, fav_injury = injury_penalty(fav_id)
+                dog_injury_penalty, dog_injury = injury_penalty(dog_id)
                 cutoff = played - timedelta(days=365)
                 fav_record = [won for day, won in surface_record[(fav_name, surface)] if day >= cutoff]
                 dog_record = [won for day, won in surface_record[(dog_name, surface)] if day >= cutoff]
@@ -137,6 +180,10 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                             "underdog_recent_10_winrate": dog_recent_wr,
                             "favorite_decimal_odds": fav_odds,
                             "raw_model_probability": raw_favourite_probability,
+                            "favorite_injury_penalty": fav_injury_penalty,
+                            "underdog_injury_penalty": dog_injury_penalty,
+                            "favorite_injury_signal": fav_injury,
+                            "underdog_injury_signal": dog_injury,
                             "hit": row.winner_id == (row.player_a_id if a_is_favourite else row.player_b_id),
                         })
 
@@ -147,6 +194,44 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                 surface_record[(loser, surface)].append((played, False))
             recent_record[winner].append(True)
             recent_record[loser].append(False)
+
+            # Snapshot de baseline ANTES de incorporar el partido del retiro.
+            for player_id in (row.player_a_id, row.player_b_id):
+                if row.retired and row.player_retired_id == player_id:
+                    cutoff = played - timedelta(days=365)
+                    injury_end = None
+                    if row.injury_end_date:
+                        try:
+                            injury_end = date.fromisoformat(row.injury_end_date)
+                        except ValueError:
+                            pass
+                    injury_state[player_id] = {
+                        "date": played,
+                        "end": injury_end,
+                        "baseline": [item for item in performance[player_id] if item[0] >= cutoff],
+                    }
+
+            stats = stats_by_match.get(row.id)
+            for player_id, side, opponent_side in (
+                (row.player_a_id, "a", "b"), (row.player_b_id, "b", "a"),
+            ):
+                elo = getattr(row, f"player_{side}_surface_elo")
+                if elo is None:
+                    elo = getattr(row, f"player_{side}_weighted_elo")
+                service = return_rate = None
+                if stats is not None:
+                    first_in = getattr(stats, f"first_serve_pct_{side}")
+                    first_won = getattr(stats, f"first_serve_points_won_pct_{side}")
+                    second_won = getattr(stats, f"second_serve_points_won_pct_{side}")
+                    if None not in (first_in, first_won, second_won):
+                        service = float(first_in) / 100 * float(first_won) + (1 - float(first_in) / 100) * float(second_won)
+                    return_games = getattr(stats, f"return_games_won_{side}")
+                    opponent_service_games = getattr(stats, f"serve_games_played_{opponent_side}")
+                    if return_games is not None and opponent_service_games:
+                        return_rate = float(return_games) / float(opponent_service_games)
+                performance[player_id].append((
+                    played, float(elo) if elo is not None else None, service, return_rate,
+                ))
     return cases, dict(skipped)
 
 
@@ -230,6 +315,10 @@ def _calibrated_value_cases(
             continue
         intercept, slope = coefficients[(case["tour"], surface)]
         probability = calibrate(case["raw_model_probability"], intercept, slope)
+        probability = _relative_injury_adjustment(
+            probability, case.get("favorite_injury_penalty", 0.0),
+            case.get("underdog_injury_penalty", 0.0),
+        )
         market_probability = 1.0 / case["favorite_decimal_odds"]
         edge = probability - market_probability
         if edge >= MIN_MODEL_EDGE:
@@ -257,6 +346,8 @@ def run_walk_forward(cases: list[dict[str, Any]], initial_capital: float = 50.0)
 def run_backtest(initial_capital: float = 50.0) -> dict[str, Any]:
     cases, skipped = collect_cases()
     identity = "\n".join(f'{c["match_id"]}:{c["date"]}' for c in cases)
+    fav_penalties = [float(c.get("favorite_injury_penalty", 0.0)) for c in cases]
+    dog_penalties = [float(c.get("underdog_injury_penalty", 0.0)) for c in cases]
     return {
         "strategy": "BetOnFavourite",
         "ranking_source": "self_elo_rank_point_in_time",
@@ -268,6 +359,19 @@ def run_backtest(initial_capital: float = 50.0) -> dict[str, Any]:
             "recent_form_matches": 10,
             "min_surface_matches": 3,
             "min_recent_matches": 5,
+            "post_injury_recency_days": 90,
+            "post_injury_performance_days": 180,
+            "max_post_injury_probability_penalty": 0.10,
+        },
+        "injury_adjustment_summary": {
+            "favorite_flagged_cases": sum(value > 0 for value in fav_penalties),
+            "underdog_flagged_cases": sum(value > 0 for value in dog_penalties),
+            "favorite_mean_penalty_when_flagged": round(
+                sum(value for value in fav_penalties if value > 0) / max(1, sum(value > 0 for value in fav_penalties)), 6,
+            ),
+            "underdog_mean_penalty_when_flagged": round(
+                sum(value for value in dog_penalties if value > 0) / max(1, sum(value > 0 for value in dog_penalties)), 6,
+            ),
         },
         "dataset_sha256": sha256(identity.encode()).hexdigest(),
         "date_range": [cases[0]["date"], cases[-1]["date"]] if cases else None,

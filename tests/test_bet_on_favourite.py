@@ -22,7 +22,8 @@ def strategy_signals():
     default_form = _mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4})
     with patch("strategies.bet_on_favourite._model_probability", return_value=0.80), \
          patch("strategies.bet_on_favourite.get_recent_form_by_surface", side_effect=default_form), \
-         patch("strategies.bet_on_favourite.get_recent_form", side_effect=default_form):
+         patch("strategies.bet_on_favourite.get_recent_form", side_effect=default_form), \
+         patch("strategies.bet_on_favourite.get_post_injury_performance_penalty", return_value={"flagged": False, "penalty": 0.0}):
         yield
 
 
@@ -187,6 +188,19 @@ def test_requires_minimum_calibrated_model_edge():
         "strategies.bet_on_favourite.get_recent_form_by_surface",
         side_effect=_mock_form({"Novak Djokovic": 0.8, "Nobody Else": 0.4}),
     ), patch("strategies.bet_on_favourite._model_probability", return_value=0.71):
+        assert bet_on_favourite(_match(current_a_price=0.70)) is None
+
+
+def test_post_injury_decline_can_remove_otherwise_valid_edge():
+    def injury(player_name, **kwargs):
+        return {
+            "flagged": player_name == "Novak Djokovic",
+            "penalty": 0.10 if player_name == "Novak Djokovic" else 0.0,
+        }
+
+    with patch("strategies.bet_on_favourite._model_probability", return_value=0.75), patch(
+        "strategies.bet_on_favourite.get_post_injury_performance_penalty", side_effect=injury,
+    ):
         assert bet_on_favourite(_match(current_a_price=0.70)) is None
 
 

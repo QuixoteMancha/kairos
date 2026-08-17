@@ -48,12 +48,23 @@ from models.volatility.sports.tennis.weighted_elo import (
     calibrate, combined_probability, regress_for_inactivity,
 )
 from scripts.tennis.compute_weighted_elo import normalize_surface
+from outer_apis.sports.tennis.injury_risk import get_post_injury_performance_penalty
 
 ATP_THRESHOLD = 20
 WTA_THRESHOLD = 30
 STAKE_FRACTION = 0.01
 DAILY_CAP_FRACTION = 0.5
 MIN_MODEL_EDGE = 0.03
+
+
+def _relative_injury_adjustment(
+    probability: float, favourite_penalty: float, underdog_penalty: float,
+) -> float:
+    """Reduce la masa probabilística del lado lesionado y renormaliza."""
+    fav_mass = probability * (1.0 - max(0.0, min(0.10, favourite_penalty)))
+    dog_mass = (1.0 - probability) * (1.0 - max(0.0, min(0.10, underdog_penalty)))
+    total = fav_mass + dog_mass
+    return fav_mass / total if total > 0 else probability
 
 
 def _player_surface_winpct(player_name: str, surface: str, tour: str | None = None) -> Optional[float]:
@@ -202,6 +213,14 @@ def _evaluate_match(match: dict) -> dict | None:
         return None
     if model_probability is None or not 0 < market_probability < 1:
         return None
+    fav_injury = get_post_injury_performance_penalty(fav_name, surface=surface)
+    dog_injury = get_post_injury_performance_penalty(dog_name, surface=surface)
+    fav_injury_penalty = float((fav_injury or {}).get("penalty", 0.0))
+    dog_injury_penalty = float((dog_injury or {}).get("penalty", 0.0))
+    model_probability_before_injury = model_probability
+    model_probability = _relative_injury_adjustment(
+        model_probability, fav_injury_penalty, dog_injury_penalty,
+    )
     model_edge = model_probability - market_probability
     if model_edge < MIN_MODEL_EDGE:
         return None
@@ -259,14 +278,19 @@ def _evaluate_match(match: dict) -> dict | None:
         "dog_name": dog_name,
         "tour": tour,
         "surface": surface,
-        "reason": "rank_gap_surface_winrate_and_calibrated_weighted_elo_edge",
+        "reason": "rank_gap_surface_form_elo_edge_and_post_injury_performance",
         "model_probability": round(model_probability, 4),
+        "model_probability_before_injury": round(model_probability_before_injury, 4),
         "market_probability": round(market_probability, 4),
         "model_edge": round(model_edge, 4),
         "favorite_surface_52w_winrate": round(fav_win, 4),
         "underdog_surface_52w_winrate": round(dog_win, 4),
         "favorite_recent_10_winrate": round(fav_recent, 4),
         "underdog_recent_10_winrate": round(dog_recent, 4),
+        "favorite_injury_penalty": round(fav_injury_penalty, 4),
+        "underdog_injury_penalty": round(dog_injury_penalty, 4),
+        "favorite_injury_signal": fav_injury,
+        "underdog_injury_signal": dog_injury,
     }
 
 
