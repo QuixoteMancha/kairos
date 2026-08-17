@@ -519,6 +519,50 @@ class LiveStatsSnapshot(HistoricalBaseModel):
     serve_games_played_b = IntegerField(null=True)
 
 
+class LiveLimitArbDecision(HistoricalBaseModel):
+    """Propuesta shadow auditable; nunca representa una orden real."""
+
+    class Meta:
+        table_name = "tennis_live_limit_arb_decision"
+        indexes = (
+            (("probability_tick", "strategy_version"), True),
+            (("status", "decision_at"), False),
+        )
+
+    match = ForeignKeyField(Match, backref="live_limit_arb_decisions", on_delete="CASCADE")
+    match_history = ForeignKeyField(
+        MatchHistory, backref="live_limit_arb_decisions", null=True, on_delete="SET NULL",
+    )
+    probability_tick = ForeignKeyField(
+        ProbabilityTick, backref="live_limit_arb_decisions", on_delete="CASCADE",
+    )
+    point_snapshot = ForeignKeyField(
+        LivePointSnapshot, backref="live_limit_arb_decisions", on_delete="CASCADE",
+    )
+    stats_snapshot = ForeignKeyField(
+        LiveStatsSnapshot, backref="live_limit_arb_decisions", null=True, on_delete="SET NULL",
+    )
+    strategy_version = CharField()
+    decision_at = DateTimeField()
+    favourite_side = CharField()
+    case = CharField()  # favourite_undervalued|favourite_overvalued
+    market_probability = FloatField()
+    live_fair_probability = FloatField()
+    edge = FloatField()
+    performance_state = CharField()  # improving|stable|declining
+    performance_score = FloatField()
+    comeback_rate = FloatField(null=True)
+    comeback_sample_count = IntegerField(default=0)
+    market_leg_side = CharField()
+    market_leg_price = FloatField()
+    limit_leg_side = CharField()
+    limit_leg_price = FloatField()
+    expected_locked_return = FloatField()
+    features_json = TextField()
+    status = CharField(default="open")  # open|won|lost
+    settled_at = DateTimeField(null=True)
+
+
 class MatchWeather(HistoricalBaseModel):
     class Meta:
         table_name = "tennis_match_weather"

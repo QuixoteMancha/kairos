@@ -57,8 +57,8 @@ from database.historical.workerstate import (
     HistoricalEnrichmentAttempt, HistoricalWorkerState, TennisMlExperiment,
 )
 from database.historical.tennis.models import (
-    FavouriteShadowDecision, MatchHistory, MatchStats, MatchWeather, Player,
-    TennisHistoricalOdds, LivePointSnapshot, LiveStatsSnapshot,
+    FavouriteShadowDecision, LiveLimitArbDecision, MatchHistory, MatchStats,
+    MatchWeather, Player, TennisHistoricalOdds, LivePointSnapshot, LiveStatsSnapshot,
 )
 from database.historical.tennis.live_tracking import latest_live_state
 from database.accounting.limitarbsignal import LimitArbSignal
@@ -292,6 +292,60 @@ def tennis_favourite_shadow():
                 'status': row.status,
                 'clv': row.clv,
                 'simulated_pnl_usd': row.simulated_pnl_usd,
+            } for row in rows[:50]],
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tennis/live-limit-arb-shadow')
+def tennis_live_limit_arb_shadow():
+    """Propuestas shadow de LiveLimitArb -- NUNCA representa órdenes
+    reales (línea roja del proyecto, ver `strategies/live_limit_arb.py`).
+
+    `win_rate`/`status` describen si comprar SOLO la pata de mercado
+    (worst case, la pata límite no llegó a llenarse) hubiera acertado --
+    no la rentabilidad real del arb de 2 patas, que depende de un
+    fill_simulator que esta estrategia todavía no tiene."""
+    try:
+        init_db_historical()
+        with db_historical.connection_context():
+            rows = list(LiveLimitArbDecision.select().order_by(
+                LiveLimitArbDecision.decision_at.desc(),
+                LiveLimitArbDecision.id.desc(),
+            ))
+        settled = [row for row in rows if row.status in {"won", "lost"}]
+        locked_returns = [float(row.expected_locked_return) for row in rows]
+        return jsonify({
+            'total': len(rows),
+            'open': sum(row.status == 'open' for row in rows),
+            'settled': len(settled),
+            'wins': sum(row.status == 'won' for row in settled),
+            'market_leg_win_rate': round(
+                sum(row.status == 'won' for row in settled) / len(settled), 4
+            ) if settled else None,
+            'average_expected_locked_return': round(
+                sum(locked_returns) / len(locked_returns), 4
+            ) if locked_returns else None,
+            'recent': [{
+                'id': row.id,
+                'market_id': row.match.market_id,
+                'probability_tick_id': row.probability_tick_id,
+                'decision_at': row.decision_at.isoformat(),
+                'favourite_side': row.favourite_side,
+                'case': row.case,
+                'market_probability': row.market_probability,
+                'live_fair_probability': row.live_fair_probability,
+                'edge': row.edge,
+                'performance_state': row.performance_state,
+                'comeback_rate': row.comeback_rate,
+                'comeback_sample_count': row.comeback_sample_count,
+                'market_leg_side': row.market_leg_side,
+                'market_leg_price': row.market_leg_price,
+                'limit_leg_side': row.limit_leg_side,
+                'limit_leg_price': row.limit_leg_price,
+                'expected_locked_return': row.expected_locked_return,
+                'status': row.status,
             } for row in rows[:50]],
         }), 200
     except Exception as e:

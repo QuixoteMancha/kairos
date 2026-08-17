@@ -10,13 +10,18 @@ from datetime import datetime, timezone, timedelta
 from database.db import init_db_historical
 from database.historical.tennis.live_tracking import persist_live_snapshots
 from database.historical.tennis.matchtracking import ensure_match_history_for_scanned_match
-from database.historical.tennis.models import Match, ProbabilityTick
+from database.historical.tennis.models import (
+    LivePointSnapshot, LiveStatsSnapshot, Match, ProbabilityTick,
+)
 from database.historical.workerstate import (
     mark_cycle_failed, mark_cycle_finished, mark_cycle_started,
     startup_schedule_delay,
 )
 from outer_apis.scrapers.tennis.flashscore_scraper import (
     find_live_match_identity, get_match_statistics, get_point_by_point,
+)
+from strategies.live_limit_arb import (
+    evaluate_live_limit_arb, settle_live_limit_arb_decisions,
 )
 
 _WORKER_NAME = "tennis_live_data_worker"
@@ -60,6 +65,7 @@ def run_once() -> dict[str, int]:
         ).order_by(Match.detected_at.desc()).limit(_BATCH_SIZE)
     )
     resolved = point_rows = stats_rows = unavailable = deferred = errors = 0
+    decisions_evaluated = 0
     for match in matches:
         try:
             # No scrapea partidos sin precio reciente: además de ahorrar carga,
@@ -94,13 +100,42 @@ def run_once() -> dict[str, int]:
             saved = persist_live_snapshots(match, points, stats)
             point_rows += int(saved["points"])
             stats_rows += int(saved["stats"])
+
+            # 2026-08-17, pedido explícito del usuario ("termina lo que
+            # estaba haciendo codex"): evalúa LiveLimitArb (shadow, NUNCA
+            # coloca órdenes) sobre el corte más reciente de este ciclo --
+            # usa lo recién persistido si hubo, o lo último ya guardado
+            # (partido puede seguir jugándose entre ciclos sin cambios
+            # de precio suficientes para un tick nuevo).
+            latest_point = (
+                LivePointSnapshot.select()
+                .where(LivePointSnapshot.match == match)
+                .order_by(LivePointSnapshot.observed_at.desc())
+                .first()
+            )
+            latest_stats = (
+                LiveStatsSnapshot.select()
+                .where(LiveStatsSnapshot.match == match)
+                .order_by(LiveStatsSnapshot.observed_at.desc())
+                .first()
+            )
+            if evaluate_live_limit_arb(match, latest_point, latest_stats) is not None:
+                decisions_evaluated += 1
         except Exception as exc:
             errors += 1
             print(f"[{_WORKER_NAME}] {match.market_id}: {exc}")
+
+    # Resuelve propuestas shadow de ciclos anteriores contra partidos ya
+    # cerrados -- barato (solo status="open"), corre siempre, no depende
+    # del lote de este ciclo.
+    settled = settle_live_limit_arb_decisions()
+
     result = {
         "open": len(matches), "resolved": resolved, "point_rows": point_rows,
         "stats_rows": stats_rows, "unavailable": unavailable,
         "deferred_no_fresh_tick": deferred, "errors": errors,
+        "live_limit_arb_decisions_evaluated": decisions_evaluated,
+        "live_limit_arb_settled": settled,
     }
     print(f"[{_WORKER_NAME}] {result}")
     return result
