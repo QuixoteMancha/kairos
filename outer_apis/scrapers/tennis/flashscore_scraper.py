@@ -772,6 +772,7 @@ def find_match_identity(
 
     best_match: dict[str, Any] | None = None
     best_score = 0.0
+    best_name_score = 0.0  # sin el bonus de torneo -- confianza real del nombre
     for rec in _parse_all_records_with_tournament(html):
         if (require_final and rec.get("status") != 3) or not rec.get("timestamp"):
             continue  # histórico: finalizado; live: cualquier estado real
@@ -799,24 +800,51 @@ def find_match_identity(
             if not candidate_sets or not _score_sets_match(expected_sets, candidate_sets):
                 continue  # marcador no coincide -- NO es el mismo partido, se descarta
 
-        combined = score_anchor + score_opponent
+        name_score = score_anchor + score_opponent
+        combined = name_score
         if tournament and rec.get("tournament"):
             if _norm_name(tournament) in _norm_name(rec["tournament"]) or \
                _norm_name(rec["tournament"]) in _norm_name(tournament):
                 combined += 0.5  # bonus, no obligatorio -- el torneo puede no matchear textualmente
 
         if combined > best_score:
-            best_score = combined
             player_a_p1 = _name_score(player_a_name, p1_fs)
             player_a_p2 = _name_score(player_a_name, p2_fs)
             if max(player_a_p1, player_a_p2) < 0.6:
                 continue
+            best_score = combined
+            best_name_score = name_score
             best_match = {
                 "match_id": rec.get("match_id"),
                 "player_a_is_p1": player_a_p1 >= player_a_p2,
                 "p1_name": p1_fs,
                 "p2_name": p2_fs,
             }
+
+    # 2026-08-19: nombre abreviado ("Apellido I.") deja margen real de
+    # colisión por homónimo cuando el match NO se apoyó en solapamiento
+    # completo de tokens por ambos lados (1.8 = 0.9+0.9, el caso normal
+    # de "Apellido I." vs nombre completo -- confiable, verificado en
+    # los tests existentes) -- se usa `best_name_score`, SIN el bonus de
+    # torneo, para no dejar que un torneo que matcheó por texto tape un
+    # nombre débil. Por debajo de eso (solapamiento parcial o el
+    # fallback de "mismas 4 primeras letras") se re-verifica contra el
+    # nombre COMPLETO real de la página del partido antes de confiar en
+    # la identidad. Fail-closed: si la verificación no confirma a
+    # ninguno de los 2 lados con nombre completo, se descarta el match
+    # (mejor perder el dato que asignarlo al jugador equivocado).
+    if best_match is not None and best_name_score < 1.75:
+        full_names = _fetch_full_match_names(best_match["match_id"])
+        if full_names is None:
+            return None
+        p1_full, p2_full = full_names
+        a_p1, a_p2 = _name_score(player_a_name, p1_full), _name_score(player_a_name, p2_full)
+        b_p1, b_p2 = _name_score(player_b_name, p1_full), _name_score(player_b_name, p2_full)
+        if max(a_p1, a_p2) < 0.6 or max(b_p1, b_p2) < 0.6:
+            return None
+        best_match["player_a_is_p1"] = a_p1 >= a_p2
+        best_match["p1_name"] = p1_full
+        best_match["p2_name"] = p2_full
 
     return best_match
 
@@ -1082,6 +1110,48 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
             })
 
     return sets if sets else None
+
+
+# ── Nombre completo P1/P2 vía página pública del partido ───────────────────
+# 2026-08-19, pedido explícito del usuario ("investiga más" -> "sí,
+# implementa el fix sugerido"): ni `df_st_1` (stats) ni `df_su_1`
+# (summary) traen nombre de jugador -- verificado en vivo, payload
+# crudo sin un solo campo de nombre. El feed de listado de resultados
+# (`_fetch_results_page` / `FH÷`/`FK÷`) SÍ trae nombre, pero ABREVIADO
+# ("Ruud C.", no "Casper Ruud") -- pese al comentario viejo de este
+# módulo que decía "nombres completos", desmentido en vivo. La página
+# HTML pública del partido (no un feed interno, la página que ve un
+# humano) sí trae nombre completo en `<title>`, mismo orden P1-P2,
+# verificado contra match_id real "IJv5lXgD" (Ruud/Bublik):
+# "Casper Ruud v Alexander Bublik 04/04/2026 | Tennis - Flashscore".
+# Se usa SOLO como verificación de respaldo cuando el fuzzy-match sobre
+# el nombre abreviado da un score dudoso (no un fetch extra en cada
+# identificación -- costo de red real, se paga solo cuando hace falta).
+_MATCH_PAGE_URL = "https://www.flashscore.com/match/tennis/{match_id}/"
+_MATCH_PAGE_TITLE_RE = re.compile(r"<title>(.*?)\s+v\s+(.*?)\s+\d{2}/\d{2}/\d{4}")
+
+
+def _fetch_full_match_names(match_id: str) -> tuple[str, str] | None:
+    """Nombre completo (P1, P2) desde la página pública del partido.
+    Fail-closed: `None` si falla la request o el `<title>` no matchea
+    el formato esperado -- nunca fabrica un nombre."""
+    try:
+        resp = brightdata_proxy.fetch_with_ip_block_fallback(
+            _MATCH_PAGE_URL.format(match_id=match_id),
+            headers={"Referer": "https://www.flashscore.com/"},
+            timeout=25,
+        )
+        if resp is None or resp.status_code != 200:
+            return None
+        m = _MATCH_PAGE_TITLE_RE.search(resp.text or "")
+        if not m:
+            return None
+        p1_full, p2_full = m.group(1).strip(), m.group(2).strip()
+        if not p1_full or not p2_full:
+            return None
+        return p1_full, p2_full
+    except Exception:
+        return None
 
 
 # ── Duración del partido + sets (sin proxy) ────────────────────────────────

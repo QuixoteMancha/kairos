@@ -257,6 +257,115 @@ def test_find_match_identity_reports_player_a_orientation():
     assert identity["player_a_is_p1"] is False
 
 
+# ── Verificación de respaldo por nombre completo (2026-08-19) ──────────────
+# Cuando el fuzzy-match sobre el nombre abreviado es débil (no llega al
+# solapamiento completo de tokens de ambos lados), se re-verifica contra
+# el nombre completo real de la página del partido antes de confiar en
+# la identidad -- ver docstring de `find_match_identity`.
+
+def test_find_match_identity_confirms_weak_match_via_full_names():
+    import time
+    ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))
+    # "Zverev A." vs "Zverevsky Alexander" solo matchea por el fallback
+    # débil (primeras 4 letras), no por solapamiento de tokens -- score
+    # de nombre combinado queda por debajo del umbral de confianza.
+    html = _fake_results_html(
+        _raw_record("weak123", ts, "Zverev A.", "Alcaraz C."),
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.search_player",
+        return_value=("pid1", "slug1"),
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_results_page",
+        return_value=html,
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_full_match_names",
+        return_value=("Alexander Zverevsky", "Carlos Alcaraz"),
+    ) as fetch_full:
+        identity = find_match_identity(
+            "Zverevsky Alexander", "Carlos Alcaraz", "2026-08-01",
+        )
+    assert fetch_full.called
+    assert identity["match_id"] == "weak123"
+    assert identity["player_a_is_p1"] is True
+    assert identity["p1_name"] == "Alexander Zverevsky"
+    assert identity["p2_name"] == "Carlos Alcaraz"
+
+
+def test_find_match_identity_fail_closed_when_full_names_dont_confirm():
+    import time
+    ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))
+    html = _fake_results_html(
+        _raw_record("weak456", ts, "Zverev A.", "Alcaraz C."),
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.search_player",
+        return_value=("pid1", "slug1"),
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_results_page",
+        return_value=html,
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_full_match_names",
+        return_value=("Someone Totally Different", "Another Random Player"),
+    ):
+        identity = find_match_identity(
+            "Zverevsky Alexander", "Carlos Alcaraz", "2026-08-01",
+        )
+    assert identity is None
+
+
+def test_find_match_identity_fail_closed_when_full_names_fetch_fails():
+    import time
+    ts = int(time.mktime((2026, 8, 1, 12, 0, 0, 0, 0, 0)))
+    html = _fake_results_html(
+        _raw_record("weak789", ts, "Zverev A.", "Alcaraz C."),
+    )
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.search_player",
+        return_value=("pid1", "slug1"),
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_results_page",
+        return_value=html,
+    ), patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper._fetch_full_match_names",
+        return_value=None,
+    ):
+        identity = find_match_identity(
+            "Zverevsky Alexander", "Carlos Alcaraz", "2026-08-01",
+        )
+    assert identity is None
+
+
+def test_fetch_full_match_names_parses_title_tag():
+    from outer_apis.scrapers.tennis.flashscore_scraper import _fetch_full_match_names
+
+    class _FakeResp:
+        status_code = 200
+        text = (
+            "<html><head><title>Casper Ruud v Alexander Bublik 04/04/2026"
+            " | Tennis - Flashscore</title></head></html>"
+        )
+
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy"
+        ".fetch_with_ip_block_fallback",
+        return_value=_FakeResp(),
+    ):
+        names = _fetch_full_match_names("IJv5lXgD")
+    assert names == ("Casper Ruud", "Alexander Bublik")
+
+
+def test_fetch_full_match_names_fail_closed_on_bad_response():
+    from outer_apis.scrapers.tennis.flashscore_scraper import _fetch_full_match_names
+
+    with patch(
+        "outer_apis.scrapers.tennis.flashscore_scraper.brightdata_proxy"
+        ".fetch_with_ip_block_fallback",
+        return_value=None,
+    ):
+        assert _fetch_full_match_names("whatever") is None
+
+
 def test_find_live_match_identity_accepts_non_final_status():
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
