@@ -182,6 +182,36 @@ def test_fill_locations_respects_limit():
     assert geo.call_count == 2
 
 
+def test_fill_locations_unresolvable_row_does_not_block_next_cycle():
+    # 2026-08-22, bug real encontrado en producción: worker corriendo
+    # 24h+ con `updated: 0` en TODOS los ciclos -- un `LIMIT` fijo sin
+    # orden/cursor sobre `WHERE lat IS NULL` procesaba SIEMPRE las
+    # mismas filas irresolubles (exhibiciones sin ciudad real
+    # extraíble), nunca dejando lugar a la cola larga real detrás.
+    # Simulado acá con una fila SIN ciudad extraíble (ver
+    # `_BLOCKLIST_KEYWORDS`/`extract_city_candidate`) seguida de una
+    # resoluble -- el cursor rotativo debe alcanzar la segunda en el
+    # ciclo siguiente, no quedarse pegado en la primera para siempre.
+    _t("United Cup")  # sin ciudad real extraíble, ver blocklist
+    _t("Asuncion challenger")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_location", return_value=None,
+    ), patch(
+        "scripts.tennis.fill_tournament_metadata.geocode_city",
+        return_value={"lat": -25.3, "lon": -57.6, "display_name": "Asuncion"},
+    ):
+        first = fill_tournament_locations(limit=1)
+        second = fill_tournament_locations(limit=1)
+
+    # la 1ra pasada consume el cupo en la fila irresoluble (sin ciudad);
+    # la 2da, gracias al cursor, avanza a la resoluble y la actualiza --
+    # sin el fix, ambas pasadas reprocesarían "United Cup" para siempre.
+    assert first["sin_ciudad_extraible"] == 1
+    assert second["updated"] == 1
+    row = Tournament.get(Tournament.tournament_name == "Asuncion challenger")
+    assert (row.lat, row.lon) == (-25.3, -57.6)
+
+
 # --- refine_generic_levels (página de torneo de TennisExplorer) ---
 
 def test_refine_replaces_generic_level_with_exact_one():

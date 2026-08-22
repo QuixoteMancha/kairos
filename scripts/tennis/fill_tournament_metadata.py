@@ -62,6 +62,7 @@ from outer_apis.scrapers.tennis.tennisexplorer_tournament_scraper import get_tou
 from outer_apis.scrapers.tennis.tournament_location import (
     extract_city_candidate, get_location, normalize_tournament_name,
 )
+from scripts.tennis.rotating_batch import take_rotating_batch
 
 # Jerarquía compartida con `wta_tournament_level_backfill._LEVEL_PRIORITY`
 # (mismos nombres de nivel) + los del lado ATP y los genéricos de
@@ -238,19 +239,36 @@ def fill_tournament_locations(limit: int = 25) -> dict[str, Any]:
     y es un servicio comunitario gratuito. El worker corre cada hora, así
     que se completa de a tandas.
 
+    2026-08-22, bug real encontrado en vivo (worker corriendo 24h+ con
+    `updated: 0` y `no_encontrados: 25/25` en TODOS los ciclos, ver
+    kairos-tournament-geocoding-rotating-batch-fix-2026-08-22): el
+    `LIMIT 25` fijo sobre `WHERE lat IS NULL` sin orden ni cursor
+    procesaba SIEMPRE las mismas 25 filas (eventos tipo "Ultimate Tennis
+    Showdown"/"A Racquet at The Rock" -- exhibiciones sin ciudad real
+    extraíble, `extract_city_candidate` correctamente les devuelve el
+    nombre completo del evento y Nominatim correctamente no encuentra
+    nada). Como esas filas NUNCA salían de la query (nunca se les asigna
+    lat/lon), consumían el presupuesto completo de CADA ciclo para
+    siempre, y la cola larga real (Challenger/ITF geocodificables) nunca
+    tenía turno. Fix: `take_rotating_batch` (mismo helper que ya usan
+    otros enrichments con este problema) -- cursor persistente por PK,
+    wrap-around, así una fila irresoluble bloquea una sola pasada, no
+    todas las siguientes.
+
     Fail-closed: si no se puede extraer una ciudad candidata (ej. evento
     de equipo/liga, ver `_BLOCKLIST_KEYWORDS`) o Nominatim no devuelve
     nada, la fila se saltea SIN escribir -- nunca una sede aproximada."""
     init_db_historical()
 
-    query = Tournament.select().where(Tournament.lat.is_null() | Tournament.lon.is_null())
+    base_query = Tournament.select().where(Tournament.lat.is_null() | Tournament.lon.is_null())
+    rows, _ = take_rotating_batch(
+        base_query, Tournament.id, after_id=0, limit=limit,
+        cursor_key="tournament_geocode_cursor",
+    )
 
     processed = updated = no_city = not_found = 0
     now = datetime.now(timezone.utc)
-    for tournament in query:
-        if processed >= limit:
-            break
-
+    for tournament in rows:
         city = extract_city_candidate(tournament.tournament_name)
         if city is None:
             no_city += 1
@@ -269,10 +287,10 @@ def fill_tournament_locations(limit: int = 25) -> dict[str, Any]:
             # de solo la ciudad -- desambigua casos reales como
             # "Santiago" (Chile / Compostela / Cuba).
             if tournament.city and tournament.country:
-                query = f"{tournament.city}, {tournament.country}"
+                nominatim_query = f"{tournament.city}, {tournament.country}"
             else:
-                query = city
-            geo = geocode_city(query)
+                nominatim_query = city
+            geo = geocode_city(nominatim_query)
             if geo is None:
                 not_found += 1
                 continue
