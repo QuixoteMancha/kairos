@@ -35,6 +35,7 @@ from typing import Any
 
 from outer_apis.scrapers import brightdata_proxy
 from outer_apis.scrapers.tennis._request_throttle import flashscore_throttle
+from database.historical.tennis.writer import _names_confirm_identity
 
 _SEARCH_URL = "https://s.flashscore.com/search/?q={name}&l=1&s=2&f=1%3B1&pid=2&sid=2"
 _RESULTS_URL = "https://www.flashscore.com/player/{slug}/{pid}/results/"
@@ -174,17 +175,27 @@ def _verify_flashscore_player(pid: str, slug: str, expected_name: str) -> bool:
         # 2026-08-10, bug real encontrado en vivo: comparar por
         # solapamiento de CUALQUIER token es insuficiente -- "Elina
         # Svitolina" vs "Elina Zakharova" comparten el nombre de pila
-        # ("Elina") y esto los confundía como la misma persona. Exige
-        # coincidencia del APELLIDO (heurística ya probada en
-        # `database/historical/tennis/writer.py::_names_confirm_identity`:
-        # el token MÁS LARGO de cada nombre, agnóstico al orden).
-        expected_tokens = _significant_tokens(expected_name)
-        page_tokens = _significant_tokens(page_name)
-        if not expected_tokens or not page_tokens:
-            return False
-        expected_surname = max(expected_tokens, key=len)
-        page_surname = max(page_tokens, key=len)
-        return expected_surname == page_surname
+        # ("Elina") y esto los confundía como la misma persona.
+        #
+        # 2026-08-22, bug real #2 encontrado en vivo (constraint UNIQUE
+        # de Postgres lo frenó en producción, ver
+        # kairos-flashscore-search-player-surname-collision-2026-08-22):
+        # esta función comparaba SOLO el apellido, aproximado como el
+        # token MÁS LARGO -- pero eso realmente NO era "la misma
+        # heurística que `_names_confirm_identity`" como decía este
+        # comentario (falso, nunca verificado). Dos problemas reales:
+        # (1) sin chequeo de nombre de pila, "Olga Esteve Mendez" vs
+        # "Seone Mendez" (apellido compuesto compartiendo el token
+        # "Mendez") verificaba como la MISMA persona -- eran 2 jugadoras
+        # reales distintas; (2) `_significant_tokens` devuelve un `set`
+        # (orden no determinístico), y con apellidos compuestos como
+        # "Esteve"/"Mendez" (empate de longitud, 6 letras cada uno)
+        # `max(tokens, key=len)` podía elegir cualquiera de los dos según
+        # el hash de iteración -- ni siquiera consistente entre corridas.
+        # Se reemplaza por `_names_confirm_identity` (la función REAL que
+        # ya exige apellido-ancla + nombre/inicial coincidente, y no usa
+        # sets para elegir apellido) -- fail-closed igual que antes.
+        return _names_confirm_identity(expected_name, page_name)
     except Exception:
         return False
 

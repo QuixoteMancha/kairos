@@ -105,6 +105,22 @@ def test_search_player_skips_unverified_candidate_and_picks_next():
     assert result == ("jyngIesG", "monfils-elina")
 
 
+def test_verify_flashscore_player_false_for_compound_surname_collision():
+    # 2026-08-22, bug real encontrado en producción (Postgres UNIQUE
+    # constraint frenó la escritura, ver
+    # kairos-flashscore-search-player-surname-collision-2026-08-22):
+    # "Olga Esteve Mendez" y "Seone Mendez" son 2 jugadoras reales
+    # distintas que comparten el token "Mendez" (apellido compuesto).
+    # La versión vieja de `_verify_flashscore_player` comparaba SOLO el
+    # apellido (token más largo, con empate no determinístico entre
+    # "Esteve"/"Mendez", ambos 6 letras) y las confundía.
+    with patch(
+        "requests.get",
+        return_value=_fake_response(text=_profile_html("Seone Mendez")),
+    ), patch("outer_apis.scrapers.tennis.flashscore_scraper.flashscore_throttle.wait"):
+        assert _verify_flashscore_player("j3kiI4W8", "mendez-seone", "Olga Esteve Mendez") is False
+
+
 def test_search_player_returns_none_when_no_candidate_verifies():
     _player_id_cache.clear()
     search_resp = _fake_response(text=_search_json([("MX0lkYlJ", "elina-zakharova")]))
