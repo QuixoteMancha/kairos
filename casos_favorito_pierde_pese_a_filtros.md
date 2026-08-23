@@ -58,17 +58,34 @@ total), ordenados por fecha.
 | 2026-08-05 | Montreal | Alexander Zverev | Griekspoor T. | 1.14 | 87.7% |
 | 2026-08-09 | Toronto WTA | Aryna Sabalenka | Ekaterina Alexandrova | 1.16 | 86.2% |
 
-## Anomalías de datos detectadas al armar esta lista (sin investigar aún)
+## Anomalías de datos detectadas al armar esta lista
 
 - **2025-10-12 Rio de Janeiro WTA** (Urrutia vs Perez) y **2026-05-09 Rome**
   (Fils vs Pellegrino): score parseado como `"4-5"` y `"4-0"` -- un solo
   "set" con marcador de juegos parcial, no son sets completos de tenis.
-  Huele a walkover/retiro mal parseado, contaminando el dataset.
+  Huele a walkover/retiro mal parseado, contaminando el dataset. Sigue
+  sin investigar.
 - **2025-05-28 French Open, Casper Ruud vs Nuno Borges**: score
-  `"2-6, 6-4, 6-1, 6-0"` -- Ruud ganó 3 de 4 sets, pero el caso está
-  marcado como pérdida del favorito (`hit=False`). Sospechoso, posible
-  bug de `winner_id` o de orientación del score. Pendiente de investigar.
+  `"2-6, 6-4, 6-1, 6-0"`. INVESTIGADO 2026-08-23, NO es un bug: verificado
+  contra el resultado real (ATP/RolandGarros.com) -- Borges le ganó a Ruud
+  2-6, 6-4, 6-1, 6-0 (remontada real tras perder el set 1, Ruud jugó con
+  la rodilla lesionada). El score en la fila está orientado desde la
+  perspectiva de Borges (underdog), no de Ruud (favorito) -- `hit=False`
+  es CORRECTO, el favorito perdió de verdad.
 
-Generado 2026-08-17, ver nota de Obsidian "Testing de estrategia
-favorito 17-08-2026" para el contexto completo de esta sesión de
-testing.
+  Investigando este caso sí apareció un bug real y distinto (no relacionado
+  a esta fila puntual): `save_match_detail` (`database/historical/tennis/
+  writer.py`) espeja `player_a_id`/`player_b_id`/`player_a_ranking`/
+  `player_b_ranking` cuando una fila sintética preexistente tenía los
+  lados invertidos, pero NO espejaba el string `score` -- quedaba
+  orientado al orden original del fetch mientras los IDs ya apuntaban al
+  orden inverso. Fixed + testeado (`_mirror_score`, 934 passed), pendiente
+  de deploy a prod. Alcance real en filas ya escritas: no auditado
+  retroactivamente (requeriría re-derivar cuál fue el orden histórico en
+  el momento de cada escritura, no reconstruible solo con el estado
+  actual de la fila).
+
+Generado 2026-08-17, actualizado 2026-08-23 (investigación de la
+anomalía Ruud-Borges + bug real de orientación de `score`), ver nota de
+Obsidian "Testing de estrategia favorito 17-08-2026" para el contexto
+completo de esta sesión de testing.

@@ -13,6 +13,7 @@ writing the historical record failed).
 
 from datetime import datetime, timedelta, timezone
 import logging
+import re
 from typing import Any
 
 from peewee import IntegrityError, JOIN
@@ -499,6 +500,46 @@ def save_rankings_snapshot(tour: str, players: list[dict[str, Any]]) -> None:
                 logger.exception("ranking advisory unlock failed", extra={"tour": tour})
 
 
+_SCORE_SET_TOKEN_RE = re.compile(
+    r"^(\d+)(<sup>\d+</sup>)?-(\d+)(<sup>\d+</sup>)?$"
+)
+
+
+def _mirror_score(score: str | None) -> str | None:
+    """Invierte "6-4, 7-6<sup>3</sup>" -> "4-6, 6<sup>3</sup>-7" -- misma
+    convención real de datos ya verificada en producción (el `<sup>N</sup>`
+    de tiebreak viaja pegado al lado que corresponde, ver ejemplos reales
+    en `match_history.score`: "6-1, 6<sup>5</sup>-7, 6-3").
+
+    2026-08-23, bug real encontrado investigando la anomalía Ruud-Borges
+    (French Open 2025, `hit=False` pese a ganar 3 de 4 sets, ver
+    kairos-giant-killer-veto-open-items-2026-08-19 punto #4): el bloque de
+    `save_match_detail` que espeja `player_a_id`/`player_b_id` cuando la
+    fila YA existía con los lados invertidos (creada primero por el
+    prefetch del OTRO jugador) espejaba `player_a_ranking`/
+    `player_b_ranking` pero NO el string `score` -- quedaba orientado al
+    orden ORIGINAL (`a_name`-`b_name` de ESTE fetch) mientras
+    `player_a_id`/`player_b_id` ya apuntaban al orden INVERSO. Cualquier
+    consumidor que lea `score` como "desde la perspectiva de player_a"
+    (`parse_set_scores`, todo el backtest de favorito) interpretaba el
+    marcador al revés para esas filas.
+
+    Fail-closed: si algún token no matchea el formato conocido, se
+    devuelve `None` en vez de un mirror parcial/incorrecto -- mejor
+    perder el score que guardar uno espejado a medias."""
+    if not score:
+        return score
+    tokens = []
+    for raw in score.split(","):
+        raw = raw.strip()
+        m = _SCORE_SET_TOKEN_RE.match(raw)
+        if not m:
+            return None
+        a, sup_a, b, sup_b = m.groups()
+        tokens.append(f"{b}{sup_b or ''}-{a}{sup_a or ''}")
+    return ", ".join(tokens)
+
+
 def _identity_matches_detail_side(known_name: str, detail_name: str) -> bool:
     """`known_name` (nombre que ya conocemos, ej. el que trackea el tick
     worker de Kalshi) confirma contra `detail_name` (nombre nativo de
@@ -818,6 +859,11 @@ def save_match_detail(detail: dict[str, Any]) -> str:
                         fields["player_a_ranking"], fields["player_b_ranking"] = (
                             fields["player_b_ranking"], fields["player_a_ranking"],
                         )
+                        # 2026-08-23, bug real (ver `_mirror_score`): el
+                        # score también está orientado al a/b ORIGINAL de
+                        # este fetch -- si no se espeja junto con los IDs
+                        # queda desalineado con `player_a_id`/`player_b_id`.
+                        fields["score"] = _mirror_score(fields.get("score"))
 
         fields["player_a_id"] = player_a_id
         fields["player_b_id"] = player_b_id

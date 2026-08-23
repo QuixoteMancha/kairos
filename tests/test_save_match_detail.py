@@ -10,6 +10,7 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory, Player, save_match_detail
+from database.historical.tennis.writer import _mirror_score
 
 
 @pytest.fixture(autouse=True)
@@ -171,6 +172,12 @@ def test_upgrades_synthetic_row_with_sides_swapped():
     assert row.player_b.canonical_name == "Anisimova Amanda"
     assert row.winner.canonical_name == "Anisimova Amanda"
     assert row.player_b_ranking == 10  # ranking de Anisimova (10) ahora del lado b
+    # 2026-08-23, bug real encontrado (anomalía Ruud-Borges, ver
+    # kairos-giant-killer-veto-open-items-2026-08-19 punto #4): el score
+    # "6-4, 6-2" venía orientado Anisimova-Sabalenka (a-b de ESTE fetch) --
+    # tras espejar los IDs (ahora a=Sabalenka, b=Anisimova) el score debe
+    # espejarse junto, o queda desalineado con player_a/player_b.
+    assert row.score == "4-6, 2-6"
 
 
 def test_does_not_search_by_pair_when_match_date_missing():
@@ -242,3 +249,20 @@ def test_recovers_from_match_history_create_race_condition(monkeypatch):
     status = save_match_detail(_detail())
     assert status != "error", "BUG: se perdió el partido por la carrera entre threads"
     assert MatchHistory.select().where(MatchHistory.match_id == "2692781").count() == 1
+
+
+def test_mirror_score_swaps_plain_sets():
+    assert _mirror_score("6-4, 6-2") == "4-6, 2-6"
+
+
+def test_mirror_score_moves_tiebreak_superscript_to_correct_side():
+    # dato real de producción: "6-1, 6<sup>5</sup>-7, 6-3" -- el <sup>
+    # viaja pegado al número al que corresponde, no a una posición fija.
+    assert _mirror_score("6-1, 6<sup>5</sup>-7, 6-3") == "1-6, 7-6<sup>5</sup>, 3-6"
+    assert _mirror_score("6-4, 7-6<sup>3</sup>") == "4-6, 6<sup>3</sup>-7"
+
+
+def test_mirror_score_fail_closed_on_unknown_format():
+    assert _mirror_score("6-4, ret.") is None
+    assert _mirror_score(None) is None
+    assert _mirror_score("") == ""
