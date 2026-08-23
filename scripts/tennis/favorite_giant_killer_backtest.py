@@ -503,7 +503,15 @@ def collect_cases(
             # corrección explícita del usuario. Requiere 3 sets
             # resueltos; si el partido terminó 2-0 no hay set 3 que
             # medir, no se agrega evento (ni éxito ni fracaso).
-            sets = parse_set_scores(row.score)
+            # 2026-08-23, bug real confirmado (flaggeado sin arreglar desde
+            # kairos-resilience-clutch-saga-2026-08-17): `parse_set_scores`
+            # no sabe nada de retiros -- un partido "6-4, 3-6, 2-1 ret."
+            # tiene un score de set 3 PARCIAL pero parseable como si fuera
+            # completo, y se contaba como una resolución real (ganó/perdió
+            # el set decisivo) cuando en realidad nunca se jugó. `row.
+            # retired` (bool real en MatchHistory) es la señal correcta --
+            # se excluye ANTES de mirar la secuencia de sets.
+            sets = None if row.retired else parse_set_scores(row.score)
             if sets is not None and len(sets) >= 3 and a_rank is not None and b_rank is not None:
                 a_id, b_id = row.player_a_id, row.player_b_id
                 s1_a, s1_b = sets[0]
