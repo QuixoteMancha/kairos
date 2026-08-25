@@ -192,6 +192,162 @@ def run_analysis(swing_threshold: float = 4.0) -> dict[str, Any]:
     }
 
 
+@dataclass
+class BreakHoldEvent:
+    """Fase 2, 2026-08-24 -- pedido explícito del usuario ("dale con la
+    fase 2"): en vez de medir cualquier swing grande genérico, aislar
+    específicamente el patrón "Break+Hold" que propuso la estrategia
+    Closing Scalp -- quiebre confirmado y SOSTENIDO en el juego
+    siguiente -- y medir la reacción del mercado sobre ESE patrón
+    puntual, más quirúrgico que el swing genérico de la Fase 1."""
+    match_id: int
+    side: str  # "a" o "b" -- quién quebró y sostuvo
+    price_before_break: float
+    price_after_break: float
+    price_after_hold: float
+    contemporaneous_move_break: float  # movimiento durante la ventana del quiebre
+    consolidation_move: float  # movimiento durante la ventana del hold (post-quiebre)
+    lagged_move: float | None  # movimiento en la ventana SIGUIENTE al hold, si existe
+
+
+def _break_delta_side(curr: LiveStatsSnapshot, prev: LiveStatsSnapshot) -> str | None:
+    """"a" si en esta ventana A quebró (break_points_won_a subió y el de
+    B no), "b" si quebró B, None si no hubo quiebre neto o faltan datos
+    (fail-closed, nunca asume)."""
+    a1, a0 = curr.break_points_won_a, prev.break_points_won_a
+    b1, b0 = curr.break_points_won_b, prev.break_points_won_b
+    if None in (a1, a0, b1, b0):
+        return None
+    da, db = a1 - a0, b1 - b0
+    if da > 0 and db == 0:
+        return "a"
+    if db > 0 and da == 0:
+        return "b"
+    return None
+
+
+def _held(curr: LiveStatsSnapshot, prev: LiveStatsSnapshot, *, breaker_side: str) -> bool | None:
+    """True si en esta ventana el RIVAL del que quebró no le quebró de
+    vuelta (el breaker "sostuvo" su ventaja) -- None si faltan datos."""
+    a1, a0 = curr.break_points_won_a, prev.break_points_won_a
+    b1, b0 = curr.break_points_won_b, prev.break_points_won_b
+    if None in (a1, a0, b1, b0):
+        return None
+    opponent_delta = (b1 - b0) if breaker_side == "a" else (a1 - a0)
+    return opponent_delta == 0
+
+
+def collect_break_hold_events() -> list[BreakHoldEvent]:
+    """Requiere 3 snapshots consecutivos por evento: ventana del quiebre
+    (t-1->t), ventana del hold (t->t+1), y opcionalmente t+2 para el
+    lagged_move post-hold. Fail-closed: cualquier ventana sin precio o
+    sin stats de quiebre válidas descarta el evento entero, no se
+    interpola nada."""
+    init_db_historical()
+    events: list[BreakHoldEvent] = []
+
+    match_ids = [
+        row.match_id for row in (
+            LiveStatsSnapshot.select(LiveStatsSnapshot.match)
+            .group_by(LiveStatsSnapshot.match)
+            .having(__import__("peewee").fn.COUNT(LiveStatsSnapshot.id) >= MIN_SNAPSHOTS_PER_MATCH)
+        )
+    ]
+    if not match_ids:
+        return events
+
+    ticks = ProbabilityTick.select(ProbabilityTick.id, ProbabilityTick.market_price_a).where(
+        ProbabilityTick.match.in_(match_ids)
+    )
+    price_cache = {t.id: t.market_price_a for t in ticks if t.market_price_a is not None}
+
+    for match_id in match_ids:
+        snaps = list(
+            LiveStatsSnapshot.select()
+            .where(LiveStatsSnapshot.match == match_id)
+            .order_by(LiveStatsSnapshot.observed_at.asc(), LiveStatsSnapshot.id.asc())
+        )
+        prices = [_price_at_tick(s.probability_tick_id, price_cache) for s in snaps]
+
+        # i = índice del snapshot al FINAL de la ventana de quiebre (t-1->t)
+        for i in range(1, len(snaps) - 1):
+            side = _break_delta_side(snaps[i], snaps[i - 1])
+            if side is None:
+                continue
+            held = _held(snaps[i + 1], snaps[i], breaker_side=side)
+            if held is not True:
+                continue  # no hubo hold confirmado -- no es este patrón
+
+            price_before_break, price_after_break, price_after_hold = (
+                prices[i - 1], prices[i], prices[i + 1],
+            )
+            if None in (price_before_break, price_after_break, price_after_hold):
+                continue
+
+            lagged_move = None
+            if i + 2 < len(snaps) and prices[i + 2] is not None:
+                lagged_move = prices[i + 2] - price_after_hold
+
+            events.append(BreakHoldEvent(
+                match_id=match_id, side=side,
+                price_before_break=price_before_break,
+                price_after_break=price_after_break,
+                price_after_hold=price_after_hold,
+                contemporaneous_move_break=price_after_break - price_before_break,
+                consolidation_move=price_after_hold - price_after_break,
+                lagged_move=lagged_move,
+            ))
+    return events
+
+
+def run_break_hold_analysis() -> dict[str, Any]:
+    """Sobre el patrón Break+Hold específico (no swing genérico): ¿el
+    mercado ya reaccionó completo cuando se confirma el hold, o sigue
+    goteando precio DESPUÉS de confirmado el patrón? Esa segunda cola es
+    la que la estrategia Closing Scalp querría capturar como edge."""
+    events = collect_break_hold_events()
+    n_matches = len({e.match_id for e in events})
+
+    def _signed(e: BreakHoldEvent, move: float | None) -> float | None:
+        if move is None:
+            return None
+        sign = 1.0 if e.side == "a" else -1.0
+        return move * sign
+
+    break_signed = [v for e in events if (v := _signed(e, e.contemporaneous_move_break)) is not None]
+    consolidation_signed = [v for e in events if (v := _signed(e, e.consolidation_move)) is not None]
+    lagged_signed = [v for e in events if (v := _signed(e, e.lagged_move)) is not None]
+
+    # "goteo post-confirmación": el precio se siguió moviendo a favor del
+    # breaker DESPUÉS de que el hold ya estaba confirmado -- edge
+    # potencial real para Closing Scalp si esto es sistemático.
+    post_confirmation_drift = [
+        e for e in events
+        if e.lagged_move is not None and (_signed(e, e.lagged_move) or 0) > 0.01
+    ]
+
+    return {
+        "n_matches_con_snapshots": n_matches,
+        "n_eventos_break_hold_confirmado": len(events),
+        "contemporaneous_move_break_promedio_direccion_breaker": (
+            round(sum(break_signed) / len(break_signed), 4) if break_signed else None
+        ),
+        "consolidation_move_promedio_direccion_breaker": (
+            round(sum(consolidation_signed) / len(consolidation_signed), 4) if consolidation_signed else None
+        ),
+        "lagged_move_post_hold_promedio_direccion_breaker": (
+            round(sum(lagged_signed) / len(lagged_signed), 4) if lagged_signed else None
+        ),
+        "n_goteo_post_confirmacion": len(post_confirmation_drift),
+        "pct_goteo_post_confirmacion": (
+            round(100 * len(post_confirmation_drift) / len(events), 1) if events else None
+        ),
+    }
+
+
 if __name__ == "__main__":
     import json
-    print(json.dumps(run_analysis(), indent=2, ensure_ascii=False))
+    print(json.dumps({
+        "swing_generico": run_analysis(),
+        "break_hold_especifico": run_break_hold_analysis(),
+    }, indent=2, ensure_ascii=False))

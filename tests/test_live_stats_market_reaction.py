@@ -11,7 +11,9 @@ import pytest
 
 from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import LiveStatsSnapshot, Match, ProbabilityTick
-from scripts.tennis.live_stats_market_reaction import collect_events, run_analysis
+from scripts.tennis.live_stats_market_reaction import (
+    collect_break_hold_events, collect_events, run_analysis, run_break_hold_analysis,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -103,3 +105,40 @@ def test_missing_price_or_stats_excludes_window_fail_closed():
 
     events = collect_events()
     assert len(events) == 1  # la ventana con price_before=None se excluye, no se inventa
+
+
+# --- Fase 2, 2026-08-24: patrón Break+Hold específico (Closing Scalp) ---
+
+def test_break_hold_detects_confirmed_consolidation_and_post_drift():
+    match = _match("KX-5")
+    # t0->t1: A quiebra (breaks_a 0->1, breaks_b se mantiene en 0)
+    # t1->t2: A sostiene (breaks_b sigue en 0 -> hold confirmado)
+    # t2->t3: el precio sigue subiendo a favor de A (goteo post-confirmación)
+    _snapshot(match, 0, 0.50, points_a=10, points_b=10, breaks_a=0, breaks_b=0)
+    _snapshot(match, 5, 0.55, points_a=14, points_b=11, breaks_a=1, breaks_b=0)
+    _snapshot(match, 10, 0.60, points_a=18, points_b=13, breaks_a=1, breaks_b=0)
+    _snapshot(match, 15, 0.66, points_a=22, points_b=15, breaks_a=1, breaks_b=0)
+
+    events = collect_break_hold_events()
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.side == "a"
+    assert ev.contemporaneous_move_break == pytest.approx(0.05)
+    assert ev.consolidation_move == pytest.approx(0.05)
+    assert ev.lagged_move == pytest.approx(0.06)
+
+    report = run_break_hold_analysis()
+    assert report["n_eventos_break_hold_confirmado"] == 1
+    assert report["n_goteo_post_confirmacion"] == 1
+    assert report["pct_goteo_post_confirmacion"] == 100.0
+
+
+def test_break_hold_excludes_broken_back_no_confirmed_hold():
+    match = _match("KX-6")
+    # t0->t1: A quiebra
+    # t1->t2: B rompe de vuelta (breaks_b sube) -> NO es hold, se excluye
+    _snapshot(match, 0, 0.50, points_a=10, points_b=10, breaks_a=0, breaks_b=0)
+    _snapshot(match, 5, 0.55, points_a=14, points_b=11, breaks_a=1, breaks_b=0)
+    _snapshot(match, 10, 0.50, points_a=15, points_b=15, breaks_a=1, breaks_b=1)
+
+    assert collect_break_hold_events() == []
