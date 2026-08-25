@@ -398,9 +398,18 @@ services:
     env_file: [.env]
     environment:
       <<: *kairos-db-environment
-      # Independiente del tick de mercado: no lo bloquea y limita la
-      # presión sobre Flashscore/mini-PC a 12 partidos cada 5 minutos.
-      TENNIS_LIVE_DATA_INTERVAL_SECONDS: "300"
+      # Independiente del tick de mercado: no lo bloquea. 2026-08-25,
+      # pedido explícito del usuario -- bajado de 300s a 60s (5x más
+      # resolución para el event-study de reacción del mercado) como
+      # primer paso conservador; el batch selector ahora rota con
+      # cursor (`take_rotating_batch`, ver tennis_live_data_worker.py)
+      # así que ya no hace falta compensar starvation subiendo
+      # BATCH_SIZE -- con 12/ciclo + rotación cubre los ~44 partidos
+      # resueltos reales cada ~4 minutos en vez de nunca. Reevaluar si
+      # 60s alcanza de resolución antes de bajar más (el piso real de
+      # Flashscore es 0.5s/request COMPARTIDO con los workers de
+      # backfill, no hay margen ilimitado).
+      TENNIS_LIVE_DATA_INTERVAL_SECONDS: "60"
       TENNIS_LIVE_DATA_BATCH_SIZE: "12"
     depends_on: *kairos-db-depends
     restart: unless-stopped

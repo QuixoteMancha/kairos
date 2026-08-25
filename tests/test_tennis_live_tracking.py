@@ -128,6 +128,52 @@ def test_run_once_evaluates_live_limit_arb_after_persisting_snapshots():
     assert decision.case == "favourite_undervalued"
 
 
+def test_run_once_rotates_batch_so_no_match_is_starved_forever():
+    """2026-08-25, hallazgo real verificado contra prod (125 partidos
+    abiertos, 34/44 ya resueltos a Flashscore quedaban afuera del batch
+    SIEMPRE con el `order_by(detected_at.desc()).limit(N)` fijo viejo --
+    mismo patrón de starvation que geocoding/tournament 2026-08-22).
+    Con 3 partidos elegibles y BATCH_SIZE parcheado a 2, el 3er partido
+    debe aparecer en algún ciclo dentro de 2 corridas, no quedar
+    bloqueado para siempre por los 2 más nuevos."""
+    from unittest.mock import patch
+
+    from workers.tennis_live_data_worker import run_once
+
+    seen_market_ids: set[str] = set()
+
+    def _fake_points(flashscore_id):
+        seen_market_ids.add(flashscore_id)
+        return {"set_1": {"games": []}}
+
+    for i in range(3):
+        m = Match.create(
+            market_id=f"KX-ROT-{i}", ticker_a="A", ticker_b="B", tour="ATP",
+            player_a_name="A", player_b_name="B", best_of=3,
+            detected_at=datetime.now(timezone.utc), flashscore_match_id=f"fs-rot-{i}",
+            player_a_is_flashscore_p1=True,
+        )
+        ProbabilityTick.create(
+            match=m, observed_at=datetime.now(timezone.utc), market_price_a=0.5,
+        )
+
+    with patch(
+        "workers.tennis_live_data_worker._BATCH_SIZE", 2,
+    ), patch(
+        "workers.tennis_live_data_worker._has_fresh_market_tick", return_value=True,
+    ), patch(
+        "workers.tennis_live_data_worker.ensure_match_history_for_scanned_match",
+    ), patch(
+        "workers.tennis_live_data_worker.get_point_by_point", side_effect=_fake_points,
+    ), patch(
+        "workers.tennis_live_data_worker.get_match_statistics", return_value=None,
+    ):
+        run_once()
+        run_once()
+
+    assert seen_market_ids == {"fs-rot-0", "fs-rot-1", "fs-rot-2"}
+
+
 def test_run_once_settles_prior_open_decisions_when_match_resolves():
     from unittest.mock import patch
 

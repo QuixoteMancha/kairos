@@ -20,6 +20,7 @@ from database.historical.workerstate import (
 from outer_apis.scrapers.tennis.flashscore_scraper import (
     find_live_match_identity, get_match_statistics, get_point_by_point,
 )
+from scripts.tennis.rotating_batch import take_rotating_batch
 from strategies.live_limit_arb import (
     evaluate_live_limit_arb, settle_live_limit_arb_decisions,
 )
@@ -59,10 +60,20 @@ def _has_fresh_market_tick(match: Match) -> bool:
 def run_once() -> dict[str, int]:
     init_db_historical()
     cutoff = datetime.now(timezone.utc) - timedelta(days=3)
-    matches = list(
-        Match.select().where(
-            Match.winner.is_null() & (Match.detected_at >= cutoff)
-        ).order_by(Match.detected_at.desc()).limit(_BATCH_SIZE)
+    # 2026-08-25, bug real confirmado contra prod (125 partidos abiertos,
+    # 44 ya resueltos a Flashscore -- de esos, 34 quedaban afuera de
+    # SIEMPRE por este `order_by(detected_at.desc()).limit(_BATCH_SIZE)`
+    # fijo: sin cursor, los partidos más nuevos siempre desplazan a los
+    # más viejos, así estén en vivo y ya resueltos. Mismo patrón de
+    # starvation ya arreglado en geocoding/tournament (2026-08-22) --
+    # reusa `take_rotating_batch` para que ningún partido quede
+    # bloqueado para siempre por el volumen de mercados nuevos.
+    query = Match.select().where(
+        Match.winner.is_null() & (Match.detected_at >= cutoff)
+    )
+    matches, _ = take_rotating_batch(
+        query, Match.id, after_id=0, limit=_BATCH_SIZE,
+        cursor_key="tennis_live_data_worker",
     )
     resolved = point_rows = stats_rows = unavailable = deferred = errors = 0
     decisions_evaluated = 0
