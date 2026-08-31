@@ -25,6 +25,9 @@ se asume ni se interpola):
      >= `MIN_SPW_EDGE_PCT` puntos porcentuales a favor del que cierra.
   3. Segundo servicio ganado del que cierra >= `MIN_SECOND_SERVE_PCT`
      (si ya está crítico en el momento de la consolidación, no se entra).
+     Las condiciones 2 y 3 deben cumplirse tanto en el acumulado del
+     partido como en la sección Flashscore del set de entrada: un set
+     anterior fuerte no puede ocultar deterioro en el set decisivo.
   4. Ventaja estructural pre-match: ranking MEJOR (número más bajo) Y
      Elo MAYOR (superficie si está disponible para AMBOS jugadores,
      si no cae a Elo general -- nunca se mezclan escalas, superficie
@@ -84,6 +87,7 @@ from datetime import datetime
 from typing import Any
 
 from database.db import init_db_historical
+from database.historical.tennis.matchstats_parser import typed_columns_from_stats
 from database.historical.tennis.models import (
     LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, ProbabilityTick,
 )
@@ -126,6 +130,39 @@ def _spw_edge(snapshot: LiveStatsSnapshot, side: str) -> float | None:
     return spw_side - spw_other
 
 
+def _set_serve_conditions(
+    snapshot: LiveStatsSnapshot, side: str, set_number: int,
+) -> tuple[float, float] | None:
+    """SPW edge and second-serve percentage for the entry set only.
+
+    Typed snapshot columns are match-cumulative. The raw Flashscore payload
+    preserves independent ``set_N`` sections, so use that point-in-time data
+    to ensure earlier sets cannot mask deterioration in the closing set.
+    """
+    import json
+    try:
+        raw = json.loads(snapshot.raw_stats_json or "{}")
+    except (TypeError, ValueError):
+        return None
+    columns = typed_columns_from_stats(raw.get(f"set_{set_number}") or {})
+
+    def set_spw(for_side: str) -> float | None:
+        first_pct = columns.get(f"first_serve_pct_{for_side}")
+        first_won = columns.get(f"first_serve_points_won_pct_{for_side}")
+        second_won = columns.get(f"second_serve_points_won_pct_{for_side}")
+        if None in (first_pct, first_won, second_won):
+            return None
+        first_share = first_pct / 100.0
+        return first_share * first_won + (1.0 - first_share) * second_won
+
+    side_spw = set_spw(side)
+    other_spw = set_spw(_other(side))
+    second_serve = columns.get(f"second_serve_points_won_pct_{side}")
+    if None in (side_spw, other_spw, second_serve):
+        return None
+    return side_spw - other_spw, second_serve
+
+
 def _structural_advantage(history: MatchHistory | None, side: str) -> bool | None:
     """True si `side` tiene ranking mejor Y Elo mayor (misma fuente para
     ambos jugadores -- superficie si ambos la tienen, si no general para
@@ -159,6 +196,8 @@ class ClosingScalpEvent:
     second_serve_pct_at_entry: float
     current_set_at_entry: int | None
     settled_at: datetime | None = None
+    set_spw_edge_at_entry: float | None = None
+    set_second_serve_pct_at_entry: float | None = None
     # Re-chequeo/resultado, completados por `_resolve_event`:
     spw_edge_still_valid: bool | None = None
     set_outcome_known: bool | None = None
@@ -423,6 +462,17 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
             if match_closing_set is not True:
                 continue
 
+            # The same live-performance gates must hold inside this set,
+            # not only in match-cumulative stats. Fail closed when the raw
+            # point-in-time set section is absent or incomplete.
+            set_conditions = _set_serve_conditions(entry_snap, side, current_set)
+            if set_conditions is None:
+                continue
+            set_spw_edge, set_second_serve_pct = set_conditions
+            if set_spw_edge < MIN_SPW_EDGE_PCT \
+                    or set_second_serve_pct < MIN_SECOND_SERVE_PCT:
+                continue
+
             event = ClosingScalpEvent(
                 match_id=match_id, side=side, entry_price=entry_price,
                 entry_observed_at=entry_snap.observed_at,
@@ -430,6 +480,8 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
                 spw_edge_at_entry=round(spw_edge, 2),
                 second_serve_pct_at_entry=second_serve_pct,
                 current_set_at_entry=current_set,
+                set_spw_edge_at_entry=round(set_spw_edge, 2),
+                set_second_serve_pct_at_entry=set_second_serve_pct,
                 is_forced_final_set_at_entry=(current_set == match.best_of),
             )
             _resolve_event(event, match, snaps, price_cache, i + 1)

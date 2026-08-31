@@ -7,13 +7,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import json
 
 from database.db import init_db_historical
 from database.historical.tennis.models import (
     LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, Player, ProbabilityTick,
 )
 from scripts.tennis.closing_scalp_backtest import (
-    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _confirmed_hold, _spw, _spw_edge, _structural_advantage,
+    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _confirmed_hold, _set_serve_conditions,
+    _spw, _spw_edge, _structural_advantage,
     collect_closing_scalp_events, run_closing_scalp_backtest, simulate_bankroll,
 )
 
@@ -69,7 +71,11 @@ def _snapshot(match, minute, price, *, price_b=None, points_a=0, points_b=0, bre
         match=match, probability_tick=tick, flashscore_match_id="fs-x",
         player_a_is_flashscore_p1=False,
         observed_at=datetime.now(timezone.utc) + timedelta(minutes=minute),
-        raw_stats_json="{}",
+        raw_stats_json=json.dumps({f"set_{current_set}": {
+            "1st serve percentage": [f"{first_pct_a}%", f"{first_pct_b}%"],
+            "1st serve points won": [f"{first_won_a}%", f"{first_won_b}%"],
+            "2nd serve points won": [f"{second_won_a}%", f"{second_won_b}%"],
+        }}),
         total_points_won_a=points_a, total_points_won_b=points_b,
         service_games_won_a=service_a, service_games_won_b=service_b,
         return_games_won_a=return_a, return_games_won_b=return_b,
@@ -93,6 +99,28 @@ def test_spw_edge_none_if_any_subfield_missing():
     snap.first_serve_pct_b = None
     snap.save()
     assert _spw_edge(snap, "a") is None
+
+
+def test_set_conditions_do_not_inherit_strong_previous_sets():
+    match = _match("KX-SET-SPW")
+    snap = _snapshot(
+        match, 10, 0.8, current_set=3,
+        # Match-cumulative typed values remain strong.
+        first_pct_a=65, first_won_a=80, second_won_a=60,
+        first_pct_b=55, first_won_b=55, second_won_b=45,
+    )
+    snap.raw_stats_json = json.dumps({"set_3": {
+        # But the decisive set itself is weak and must fail the gate.
+        "1st serve percentage": ["60%", "60%"],
+        "1st serve points won": ["60%", "59%"],
+        "2nd serve points won": ["35%", "50%"],
+    }})
+    snap.save()
+
+    assert _spw_edge(snap, "a") >= MIN_SPW_EDGE_PCT
+    set_edge, set_second = _set_serve_conditions(snap, "a", 3)
+    assert set_edge < MIN_SPW_EDGE_PCT
+    assert set_second < MIN_SECOND_SERVE_PCT
 
 
 def test_hold_requires_an_actual_service_game_won():
