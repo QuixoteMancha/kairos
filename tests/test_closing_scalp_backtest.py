@@ -14,7 +14,7 @@ from database.historical.tennis.models import (
     LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, Player, ProbabilityTick,
 )
 from scripts.tennis.closing_scalp_backtest import (
-    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _confirmed_hold, _set_serve_conditions,
+    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _set_serve_conditions,
     _spw, _spw_edge, _structural_advantage,
     collect_closing_scalp_events, run_closing_scalp_backtest, simulate_bankroll,
 )
@@ -86,6 +86,30 @@ def _snapshot(match, minute, price, *, price_b=None, points_a=0, points_b=0, bre
     )
 
 
+def _closing_point_raw(side="a", current_set=3, sequence="break_then_serve"):
+    """Point feed immediately before ``side`` serves for the match."""
+    candidate = 2 if side == "a" else 1
+    opponent = 1 if candidate == 2 else 2
+    sections = {}
+    if current_set > 1:
+        sections["set_1"] = {"games": [
+            {"winner_side": candidate, "raw": {}} for _ in range(6)
+        ] + [{"winner_side": opponent, "raw": {}} for _ in range(3)]}
+    if sequence == "break_then_serve":
+        hc, he = ((4, 5) if candidate == 2 else (5, 4))
+        games = [{"winner_side": candidate,
+                  "raw": {"HC": str(hc), "HE": str(he), "HG": str(opponent)}}]
+    else:
+        scores = ((3, 4), (3, 5), (4, 5)) if candidate == 2 else ((4, 3), (5, 3), (5, 4))
+        games = [
+            {"winner_side": candidate, "raw": {"HC": str(scores[0][0]), "HE": str(scores[0][1]), "HG": str(opponent)}},
+            {"winner_side": candidate, "raw": {"HC": str(scores[1][0]), "HE": str(scores[1][1]), "HG": str(candidate)}},
+            {"winner_side": opponent, "raw": {"HC": str(scores[2][0]), "HE": str(scores[2][1]), "HG": str(opponent)}},
+        ]
+    sections[f"set_{current_set}"] = {"games": games}
+    return json.dumps(sections)
+
+
 def test_spw_derivation_matches_manual_formula():
     match = _match("KX-SPW")
     snap = _snapshot(match, 0, 0.5, first_pct_a=60.0, first_won_a=80.0, second_won_a=40.0)
@@ -121,16 +145,6 @@ def test_set_conditions_do_not_inherit_strong_previous_sets():
     set_edge, set_second = _set_serve_conditions(snap, "a", 3)
     assert set_edge < MIN_SPW_EDGE_PCT
     assert set_second < MIN_SECOND_SERVE_PCT
-
-
-def test_hold_requires_an_actual_service_game_won():
-    match = _match("KX-HOLD")
-    after_break = _snapshot(match, 5, 0.55, breaks_a=1, service_a=0)
-    merely_later = _snapshot(match, 10, 0.57, breaks_a=1, service_a=0)
-    actual_hold = _snapshot(match, 15, 0.60, breaks_a=1, service_a=1)
-
-    assert _confirmed_hold(merely_later, after_break, "a") is False
-    assert _confirmed_hold(actual_hold, merely_later, "a") is True
 
 
 def test_structural_advantage_requires_both_ranking_and_elo_favoring_side():
@@ -287,11 +301,7 @@ def test_serving_for_match_case_b_already_up_one_set_entering_set_two():
 
     # set_1 YA terminado 6-3 a favor de A (player_a_is_flashscore_p1=False
     # en el helper -> winner_side=2 significa "gana A").
-    set1_done = {"set_1": {"games": (
-        [{"winner_side": 2}] * 6 + [{"winner_side": 1}] * 3
-    )}}
-    import json
-    raw = json.dumps(set1_done)
+    raw = _closing_point_raw("a", 2, "break_hold_then_serve")
 
     _snapshot(match, 0, 0.55, points_a=10, points_b=10, breaks_a=0, breaks_b=0, current_set=2)
     _snapshot(match, 5, 0.60, points_a=14, points_b=11, breaks_a=1, breaks_b=0, current_set=2)
@@ -300,6 +310,7 @@ def test_serving_for_match_case_b_already_up_one_set_entering_set_two():
 
     events = collect_closing_scalp_events()
     assert len(events) == 1
+    assert events[0].entry_sequence == "break_hold_then_serve"
     assert events[0].is_forced_final_set_at_entry is False  # NO es el set 3 forzoso
     assert events[0].current_set_at_entry == 2
 
@@ -329,12 +340,14 @@ def test_full_pipeline_finds_one_entry_and_computes_match_return_on_win():
               first_pct_b=55.0, first_won_b=55.0, second_won_b=45.0)
     _snapshot(match, 10, 0.60, points_a=18, points_b=13, breaks_a=1, breaks_b=0, current_set=3,
               first_pct_a=65.0, first_won_a=80.0, second_won_a=60.0,
-              first_pct_b=55.0, first_won_b=55.0, second_won_b=45.0)
+              first_pct_b=55.0, first_won_b=55.0, second_won_b=45.0,
+              raw_point_json=_closing_point_raw("a", 3, "break_then_serve"))
 
     events = collect_closing_scalp_events()
     assert len(events) == 1
     ev = events[0]
     assert ev.side == "a"
+    assert ev.entry_sequence == "break_then_serve"
     assert ev.entry_price == 0.60
     assert ev.match_resolved is True
     assert ev.closer_won_match is True
@@ -433,7 +446,8 @@ def test_entry_price_uses_market_price_b_when_closer_is_side_b():
               first_pct_b=65, first_won_b=80, second_won_b=60, current_set=3)
     _snapshot(match, 10, 0.75, price_b=0.40, points_a=13, points_b=18, breaks_a=0, breaks_b=1,
               first_pct_a=55, first_won_a=55, second_won_a=45,
-              first_pct_b=65, first_won_b=80, second_won_b=60, current_set=3)
+              first_pct_b=65, first_won_b=80, second_won_b=60, current_set=3,
+              raw_point_json=_closing_point_raw("b", 3, "break_then_serve"))
 
     events = collect_closing_scalp_events()
     assert len(events) == 1
@@ -491,7 +505,8 @@ def test_second_serve_degradation_after_entry_no_longer_triggers_a_stop():
               first_pct_b=55, first_won_b=55, second_won_b=45)
     _snapshot(match, 10, 0.60, points_a=18, points_b=13, breaks_a=1, breaks_b=0, current_set=3,
               first_pct_a=65, first_won_a=80, second_won_a=60,
-              first_pct_b=55, first_won_b=55, second_won_b=45)
+              first_pct_b=55, first_won_b=55, second_won_b=45,
+              raw_point_json=_closing_point_raw("a", 3, "break_then_serve"))
     # el 2do servicio de A se derrumba después de la entrada -- ya no
     # importa para la salida, solo importaba al momento de entrar.
     _snapshot(match, 15, 0.40, points_a=19, points_b=20, breaks_a=1, breaks_b=1, current_set=3,
@@ -531,7 +546,8 @@ def test_is_final_set_of_match_true_when_entry_happens_in_the_deciding_set():
               first_pct_b=55, first_won_b=55, second_won_b=45)
     _snapshot(match, 10, 0.70, points_a=18, points_b=13, breaks_a=1, breaks_b=0, current_set=3,
               first_pct_a=65, first_won_a=80, second_won_a=60,
-              first_pct_b=55, first_won_b=55, second_won_b=45)
+              first_pct_b=55, first_won_b=55, second_won_b=45,
+              raw_point_json=_closing_point_raw("a", 3, "break_then_serve"))
 
     events = collect_closing_scalp_events()
     assert len(events) == 1

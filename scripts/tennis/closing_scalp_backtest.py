@@ -9,8 +9,10 @@ ESPECIFICACIÓN (todas las condiciones de entrada deben cumplirse, fail-
 closed -- si falta cualquier dato necesario, el evento se descarta, nunca
 se asume ni se interpola):
 
-  1. Break+Hold confirmado: reusa `_break_delta_side` para el break y
-     exige después un incremento real de `service_games_won` del breaker.
+  1. Entrada justo antes de que el candidato saque para ganar el partido.
+     Se aceptan dos secuencias observables en el punto-a-punto real:
+     (a) break y saque inmediato para partido; (b) break, hold confirmado,
+     juego de saque del rival y nuevo saque del candidato para partido.
      No hay verificación empírica
      todavía de la notación de tiebreak en el feed de Flashscore (0 TBs
      observados en producción al 2026-08-27) -- el detector de
@@ -34,9 +36,8 @@ se asume ni se interpola):
      para uno y general para el otro) a favor del que cierra. Si falta
      cualquiera de los dos (ranking o Elo en la escala elegida) para
      cualquiera de los dos jugadores, el evento se descarta.
-  5. 2026-08-29, pedido explícito del usuario tras su experiencia
-     apostando manual ("tiene que ser cuando sirvan para el match"): la
-     entrada debe ocurrir en un set que, de ganarlo, CIERRA el partido --
+  5. Además, la entrada debe ocurrir en un set que, de ganarlo, CIERRA
+     el partido --
      `_is_match_closing_set()` cubre dos casos, ambos calculables en vivo
      sin sesgo de anticipación:
        (a) el set de la entrada es el que matemáticamente TIENE que ser
@@ -95,7 +96,7 @@ from outer_apis.kalshi.fees import order_fee
 from outer_apis.sports.tennis.set_sequence_stats import parse_set_scores
 from scripts.reports import risk_metrics
 from scripts.tennis.live_stats_market_reaction import (
-    MIN_SNAPSHOTS_PER_MATCH, _break_delta_side,
+    MIN_SNAPSHOTS_PER_MATCH,
 )
 
 MIN_SPW_EDGE_PCT = 8.0  # 2026-08-29, subido de 2.0 -- pedido explícito del
@@ -195,6 +196,7 @@ class ClosingScalpEvent:
     spw_edge_at_entry: float
     second_serve_pct_at_entry: float
     current_set_at_entry: int | None
+    entry_sequence: str | None = None
     settled_at: datetime | None = None
     set_spw_edge_at_entry: float | None = None
     set_second_serve_pct_at_entry: float | None = None
@@ -268,18 +270,6 @@ def _point_snapshot_at(match_id: int, probability_tick_id: int | None) -> LivePo
         (LivePointSnapshot.match == match_id)
         & (LivePointSnapshot.probability_tick == probability_tick_id)
     )
-
-
-def _confirmed_hold(curr: LiveStatsSnapshot, prev: LiveStatsSnapshot, side: str) -> bool | None:
-    """True only when ``side`` actually won the next service game."""
-    other = _other(side)
-    service_now = getattr(curr, f"service_games_won_{side}")
-    service_before = getattr(prev, f"service_games_won_{side}")
-    return_now = getattr(curr, f"return_games_won_{other}")
-    return_before = getattr(prev, f"return_games_won_{other}")
-    if None in (service_now, service_before, return_now, return_before):
-        return None
-    return service_now - service_before == 1 and return_now - return_before == 0
 
 
 def _games_by_set(point: LivePointSnapshot) -> dict[int, tuple[int, int]]:
@@ -359,6 +349,75 @@ def _is_match_closing_set(match: Match, side: str, current_set: int | None,
     return won_before >= sets_to_win - 1
 
 
+def _flashscore_side(point: LivePointSnapshot, side: str) -> int:
+    """Map stable Kairos side a/b to Flashscore's point-feed side 1/2."""
+    return 1 if (side == "a") == point.player_a_is_flashscore_p1 else 2
+
+
+def _closing_service_sequence(
+    match: Match, point: LivePointSnapshot | None, side: str,
+) -> str | None:
+    """Identify an executable service game for the match.
+
+    Accepted paths are deliberately explicit:
+      * ``break_then_serve``: the last completed game was a break by the
+        candidate, who now serves for the match.
+      * ``break_hold_then_serve``: break, consolidated hold, one opponent
+        service game, then the candidate serves again for the match.
+
+    HC/HE are the post-game score and HG is the server of each completed
+    game in Flashscore's feed. Missing or malformed fields fail closed.
+    """
+    if point is None or point.current_set is None:
+        return None
+    if _is_match_closing_set(match, side, point.current_set, point) is not True:
+        return None
+    try:
+        import json
+        raw = json.loads(point.raw_point_json or "{}")
+        games = (raw.get(f"set_{point.current_set}") or {}).get("games") or []
+        last = games[-1]
+        score_p1 = int(last.get("raw", {}).get("HC"))
+        score_p2 = int(last.get("raw", {}).get("HE"))
+        last_server = int(last.get("raw", {}).get("HG"))
+    except (IndexError, TypeError, ValueError):
+        return None
+
+    candidate = _flashscore_side(point, side)
+    opponent = 2 if candidate == 1 else 1
+    # Service alternates after every normal game. Tiebreak entry (6-6) is
+    # intentionally excluded because its service rotation is different.
+    if last_server != opponent:
+        return None
+    side_games = score_p1 if candidate == 1 else score_p2
+    opponent_games = score_p2 if candidate == 1 else score_p1
+    if not ((side_games == 5 and opponent_games <= 4)
+            or (side_games == 6 and opponent_games == 5)):
+        return None
+
+    if last.get("winner_side") == candidate:
+        return "break_then_serve"
+
+    if len(games) < 3:
+        return None
+    break_game, hold_game, opponent_game = games[-3:]
+    try:
+        break_server = int(break_game.get("raw", {}).get("HG"))
+        hold_server = int(hold_game.get("raw", {}).get("HG"))
+        opponent_server = int(opponent_game.get("raw", {}).get("HG"))
+    except (TypeError, ValueError):
+        return None
+    if (
+        break_server == opponent
+        and break_game.get("winner_side") == candidate
+        and hold_server == candidate
+        and hold_game.get("winner_side") == candidate
+        and opponent_server == opponent
+    ):
+        return "break_hold_then_serve"
+    return None
+
+
 def _resolve_event(event: ClosingScalpEvent, match: Match, snaps: list[LiveStatsSnapshot],
                     price_cache: dict[int, tuple[float | None, float | None]], entry_index: int) -> None:
     """Completa el re-chequeo y el resultado real, mirando snapshots
@@ -427,68 +486,51 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
         history = match.match_history if match.match_history_id else None
         snaps, price_cache = _collect_candidate_snapshots(match_id)
 
-        for i in range(1, len(snaps) - 1):
-            side = _break_delta_side(snaps[i], snaps[i - 1])
-            if side is None:
-                continue
-            held = _confirmed_hold(snaps[i + 1], snaps[i], side)
-            if held is not True:
-                continue
-
-            entry_snap = snaps[i + 1]
-            entry_price = _price_for_side(entry_snap.probability_tick_id, side, price_cache)
-            # 0/1 are settled or non-tradeable endpoints, not executable
-            # entries with meaningful upside and downside.
-            if entry_price is None or not 0.0 < entry_price < 1.0:
-                continue
-
-            spw_edge = _spw_edge(entry_snap, side)
-            if spw_edge is None or spw_edge < MIN_SPW_EDGE_PCT:
-                continue
-            second_serve_pct = _second_serve_pct(entry_snap, side)
-            if second_serve_pct is None or second_serve_pct < MIN_SECOND_SERVE_PCT:
-                continue
-            if _structural_advantage(history, side) is not True:
-                continue
-
+        for i, entry_snap in enumerate(snaps):
             point = _point_snapshot_at(match_id, entry_snap.probability_tick_id)
             current_set = point.current_set if point else None
-            # 2026-08-29, filtro de entrada confirmado por el usuario
-            # ("tiene que ser cuando sirvan para el match"): SOLO se
-            # opera si ganar el set actual cierra el partido -- set
-            # decisivo forzoso O ya tiene suficientes sets ganados antes
-            # (ver `_is_match_closing_set`, calculable en vivo).
-            match_closing_set = _is_match_closing_set(match, side, current_set, point)
-            if match_closing_set is not True:
-                continue
+            for side in ("a", "b"):
+                sequence = _closing_service_sequence(match, point, side)
+                if sequence is None:
+                    continue
+                entry_price = _price_for_side(entry_snap.probability_tick_id, side, price_cache)
+                if entry_price is None or not 0.0 < entry_price < 1.0:
+                    continue
+                spw_edge = _spw_edge(entry_snap, side)
+                if spw_edge is None or spw_edge < MIN_SPW_EDGE_PCT:
+                    continue
+                second_serve_pct = _second_serve_pct(entry_snap, side)
+                if second_serve_pct is None or second_serve_pct < MIN_SECOND_SERVE_PCT:
+                    continue
+                if _structural_advantage(history, side) is not True:
+                    continue
+                set_conditions = _set_serve_conditions(entry_snap, side, current_set)
+                if set_conditions is None:
+                    continue
+                set_spw_edge, set_second_serve_pct = set_conditions
+                if set_spw_edge < MIN_SPW_EDGE_PCT \
+                        or set_second_serve_pct < MIN_SECOND_SERVE_PCT:
+                    continue
 
-            # The same live-performance gates must hold inside this set,
-            # not only in match-cumulative stats. Fail closed when the raw
-            # point-in-time set section is absent or incomplete.
-            set_conditions = _set_serve_conditions(entry_snap, side, current_set)
-            if set_conditions is None:
-                continue
-            set_spw_edge, set_second_serve_pct = set_conditions
-            if set_spw_edge < MIN_SPW_EDGE_PCT \
-                    or set_second_serve_pct < MIN_SECOND_SERVE_PCT:
-                continue
-
-            event = ClosingScalpEvent(
-                match_id=match_id, side=side, entry_price=entry_price,
-                entry_observed_at=entry_snap.observed_at,
-                settled_at=match.settled_at or snaps[-1].observed_at,
-                spw_edge_at_entry=round(spw_edge, 2),
-                second_serve_pct_at_entry=second_serve_pct,
-                current_set_at_entry=current_set,
-                set_spw_edge_at_entry=round(set_spw_edge, 2),
-                set_second_serve_pct_at_entry=set_second_serve_pct,
-                is_forced_final_set_at_entry=(current_set == match.best_of),
-            )
-            _resolve_event(event, match, snaps, price_cache, i + 1)
-            events.append(event)
-            # Never count correlated repeat entries on the same market as
-            # independent trades. V1 permits one open position per match.
-            break
+                event = ClosingScalpEvent(
+                    match_id=match_id, side=side, entry_price=entry_price,
+                    entry_observed_at=entry_snap.observed_at,
+                    settled_at=match.settled_at or snaps[-1].observed_at,
+                    spw_edge_at_entry=round(spw_edge, 2),
+                    second_serve_pct_at_entry=second_serve_pct,
+                    current_set_at_entry=current_set,
+                    entry_sequence=sequence,
+                    set_spw_edge_at_entry=round(set_spw_edge, 2),
+                    set_second_serve_pct_at_entry=set_second_serve_pct,
+                    is_forced_final_set_at_entry=(current_set == match.best_of),
+                )
+                _resolve_event(event, match, snaps, price_cache, i)
+                events.append(event)
+                break
+            if events and events[-1].match_id == match_id:
+                # One position per market; repeated snapshots of the same
+                # pre-service score are not independent opportunities.
+                break
     return events
 
 
@@ -530,13 +572,10 @@ def run_closing_scalp_backtest() -> dict[str, Any]:
             "toda posicion se liquida contra el resultado real."
         ),
         "nota_filtro_sirviendo_para_el_partido": (
-            "2026-08-29, pedido explicito del usuario ('tiene que ser "
-            "cuando sirvan para el match'): ahora SOLO se opera si ganar "
-            "el set actual cierra el partido -- set decisivo forzoso "
-            "(current_set == best_of) O ya tiene suficientes sets "
-            "ganados ANTES de este (derivado del punto-a-punto de sets "
-            "ya terminados, ver `_is_match_closing_set`). Ambos casos "
-            "calculables en vivo, sin sesgo de anticipacion."
+            "Solo se opera justo antes de que el candidato saque para "
+            "ganar el partido. Se aceptan break->saque para partido y "
+            "break->hold->saque rival->nuevo saque para partido, "
+            "reconstruidos con HC/HE/HG del punto-a-punto real."
         ),
         "nota_retorno_bruto_vs_neto": (
             "'nivel_partido__retorno_promedio_pct' de arriba es BRUTO "
