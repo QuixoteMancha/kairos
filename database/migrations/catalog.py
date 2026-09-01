@@ -347,6 +347,19 @@ def _add_live_limit_arb_decisions(database: Database) -> None:
     database.create_tables([TennisLiveLimitArbDecision], safe=True)
 
 
+def _add_scanned_match_qualifying_classification(database: Database) -> None:
+    """Estado ternario y trazable de qualy validado por TennisExplorer."""
+    for column in (
+        "is_qualifying BOOLEAN",
+        "qualifying_source VARCHAR(255)",
+        "qualifying_checked_at TIMESTAMP",
+        "qualifying_validated_at TIMESTAMP",
+    ):
+        database.execute_sql(
+            f"ALTER TABLE tennis_scanned_match ADD COLUMN IF NOT EXISTS {column}"
+        )
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -365,4 +378,8 @@ HISTORICAL_MIGRATIONS = (
     Migration(15, "add_favourite_shadow_decisions_20260817", _add_favourite_shadow_decisions),
     Migration(16, "add_tennis_live_snapshots_20260817", _add_tennis_live_snapshots),
     Migration(17, "add_live_limit_arb_decisions_20260817", _add_live_limit_arb_decisions),
+    Migration(
+        18, "classify_scanned_match_qualifying_20260901",
+        _add_scanned_match_qualifying_classification,
+    ),
 )

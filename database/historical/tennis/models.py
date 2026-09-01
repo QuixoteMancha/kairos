@@ -151,6 +151,13 @@ class Match(HistoricalBaseModel):
     surface = CharField(null=True)
     tournament = CharField(null=True)
     round = CharField(null=True)
+    # Clasificación validada contra el partido real de TennisExplorer.
+    # NULL significa que todavía no hay evidencia suficiente; nunca se
+    # interpreta una ronda genérica de Kalshi como cuadro principal.
+    is_qualifying = BooleanField(null=True)
+    qualifying_source = CharField(null=True)
+    qualifying_checked_at = DateTimeField(null=True)
+    qualifying_validated_at = DateTimeField(null=True)
     player_a_name = CharField()
     player_b_name = CharField()
     player_a_rank_at_match = IntegerField(null=True)

@@ -44,6 +44,7 @@ from database.historical.tennis import TennisScannedMatch, MatchHistory, Player
 from database.historical.tennis.writer import _lookup_player_id
 from database.historical.tennis.matchstats import has_match_stats_for_history, save_match_stats_for_history
 from database.historical.tennis.player_sync_status import get_pending_priority_requests, mark_player_synced
+from database.historical.tennis.qualifying import backfill_qualifying_status
 from outer_apis.sports.tennis.rankings import get_top_rankings
 from outer_apis.scrapers.tennis.flashscore_scraper import (
     find_match_identity, get_match_statistics,
@@ -51,6 +52,7 @@ from outer_apis.scrapers.tennis.flashscore_scraper import (
 from scripts.tennis.wta_top200_historical_backfill import backfill_player
 
 _BATCH_SIZE = int(os.getenv("TENNIS_HISTORY_SYNC_BATCH_SIZE", "10"))
+_QUALIFYING_BACKFILL_BATCH_SIZE = 100
 _STATS_FILL_LIMIT_PER_PLAYER = int(os.getenv("TENNIS_HISTORY_SYNC_STATS_LIMIT", "5"))
 _SLEEP_SECONDS = int(os.getenv("TENNIS_HISTORY_SYNC_SLEEP_S", "300"))
 _WORKER_NAME = "tennis_match_history_sync_worker"
@@ -151,6 +153,8 @@ def sync_match(match) -> dict:
         player_result.get("synced", False)
         for player_result in result["players"].values()
     )
+    if result["synced"]:
+        result["is_qualifying"] = backfill_qualifying_status(match)
     return result
 
 
@@ -193,7 +197,36 @@ def run_once() -> dict:
                 match.save()
             synced += 1
 
-    summary = {"priority_synced": priority_synced, "matches_synced": synced, "candidates_found": len(matches)}
+    # Filas antiguas ya sincronizadas: clasificación barata y local sobre
+    # MatchHistory. Las no resolubles permanecen NULL para futuros intentos.
+    with db_historical.connection_context():
+        qualifying_candidates = list(
+            TennisScannedMatch.select()
+            .where(
+                TennisScannedMatch.history_synced_at.is_null(False)
+                & TennisScannedMatch.is_qualifying.is_null()
+            )
+            # Recorre primero las nunca revisadas y después reintenta las
+            # desconocidas más antiguas; ninguna fila puede monopolizar el batch.
+            .order_by(
+                TennisScannedMatch.qualifying_checked_at.is_null(False),
+                TennisScannedMatch.qualifying_checked_at,
+                TennisScannedMatch.id,
+            )
+            .limit(_QUALIFYING_BACKFILL_BATCH_SIZE)
+        )
+    qualifying_classified = 0
+    for match in qualifying_candidates:
+        if backfill_qualifying_status(match) is not None:
+            qualifying_classified += 1
+
+    summary = {
+        "priority_synced": priority_synced,
+        "matches_synced": synced,
+        "candidates_found": len(matches),
+        "qualifying_candidates": len(qualifying_candidates),
+        "qualifying_classified": qualifying_classified,
+    }
     print(f"[tennis_match_history_sync_worker] {summary}", flush=True)
     return summary
 

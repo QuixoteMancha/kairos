@@ -10,6 +10,9 @@ import pytest
 
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import TennisScannedMatch, MatchHistory, TennisMatchStats, TennisPlayerSyncStatus
+from database.historical.tennis.qualifying import (
+    backfill_qualifying_status, classify_tennisexplorer_history,
+)
 from workers.tennis_match_history_sync_worker import (
     run_once, sync_match, fill_missing_stats_for_player,
 )
@@ -268,3 +271,81 @@ def test_run_once_does_not_mark_match_when_a_player_sync_fails():
     row = TennisScannedMatch.get(TennisScannedMatch.market_id == "MKT-RETRY")
     assert summary["matches_synced"] == 0
     assert row.history_synced_at is None
+
+
+def _real_history(*, round_name, tournament_name="US Open"):
+    from database.historical.tennis import Player, Tournament
+
+    player_a, _ = Player.get_or_create(
+        canonical_name="Novak Djokovic", defaults={"created_at": _now()},
+    )
+    player_b, _ = Player.get_or_create(
+        canonical_name="Carlos Alcaraz", defaults={"created_at": _now()},
+    )
+    tournament, _ = Tournament.get_or_create(
+        year=2026, tournament_name=tournament_name,
+        defaults={"city": "New York", "fetched_at": _now()},
+    )
+    return MatchHistory.create(
+        match_id=f"te:{round_name}:{tournament_name}", source="tennisexplorer",
+        match_date="2026-09-01", player_a=player_a, player_b=player_b,
+        tournament=tournament, round=round_name, fetched_at=_now(),
+    )
+
+
+def test_qualifying_classifier_uses_tennisexplorer_round():
+    history = _real_history(round_name="Qualification - 2. round")
+
+    assert classify_tennisexplorer_history(history) == (True, "tennisexplorer_round")
+
+
+def test_qualifying_classifier_accepts_main_draw_only_with_real_round():
+    history = _real_history(round_name="1. round")
+
+    assert classify_tennisexplorer_history(history) == (False, "tennisexplorer_round")
+
+
+def test_qualifying_classifier_does_not_trust_generic_kalshi_round():
+    history = _real_history(round_name="Round of 128")
+    history.match_id = "kalshi:MKT-SYNTHETIC"
+
+    assert classify_tennisexplorer_history(history) == (None, None)
+
+
+def test_backfill_qualifying_status_links_real_history():
+    history = _real_history(round_name="Qualification - 1. round")
+    match = _scanned_match(market_id="KXTEST-26SEP01-ABC", history_synced_at=_now())
+
+    assert backfill_qualifying_status(match) is True
+
+    match = TennisScannedMatch.get_by_id(match.id)
+    assert match.match_history_id == history.id
+    assert match.is_qualifying is True
+    assert match.qualifying_source == "tennisexplorer_round"
+    assert match.qualifying_checked_at is not None
+    assert match.qualifying_validated_at is not None
+
+
+def test_backfill_qualifying_status_records_unknown_attempt_for_rotation():
+    match = _scanned_match(market_id="KXTEST-26SEP02-UNKNOWN", history_synced_at=_now())
+
+    assert backfill_qualifying_status(match) is None
+
+    match = TennisScannedMatch.get_by_id(match.id)
+    assert match.is_qualifying is None
+    assert match.qualifying_checked_at is not None
+    assert match.qualifying_validated_at is None
+
+
+def test_run_once_backfills_already_synced_qualifying_match_without_network_sync():
+    _real_history(round_name="Qualification - 1. round")
+    _scanned_match(market_id="KXTEST-26SEP01-ABC", history_synced_at=_now())
+
+    with patch("workers.tennis_match_history_sync_worker.get_top_rankings"), patch(
+        "workers.tennis_match_history_sync_worker.sync_match",
+    ) as sync:
+        summary = run_once()
+
+    sync.assert_not_called()
+    assert summary["qualifying_candidates"] == 1
+    assert summary["qualifying_classified"] == 1
