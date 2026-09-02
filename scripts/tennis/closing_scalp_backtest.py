@@ -68,16 +68,24 @@ implementó nunca -- requiere parsear la notación cruda de puntos
 ningún caso real todavía (mismo problema no resuelto que la detección de
 tiebreak).
 
-UNIDAD DE ANÁLISIS -- dos niveles, con significado financiero DISTINTO:
-  - Por PARTIDO: Kalshi sí tiene mercado tradeable ("quién gana el
-    partido") -- acá se simula un retorno real: comprar YES al precio
-    de entrada (`market_price_a`/`market_price_b` del lado que cierra),
-    liquidar a 1.0 si gana el partido o a 0.0 si pierde. La simulación de
-    bankroll aplica el fee taker compartido de Kalshi en la entrada.
-  - Por SET: Kalshi NO tiene mercado de "quién gana el set" -- no hay
-    precio real contra el cual simular un retorno en dólares. Este nivel
-    reporta solo PRECISIÓN de la señal (¿el que cierra efectivamente
-    ganó el set?), no ROI. No se inventa un "precio de set" ficticio.
+UNIDAD DE ANÁLISIS -- dos tipos de entrada, con mercado y significado
+financiero DISTINTOS (`ClosingScalpEvent.entry_type`):
+  - `serve_for_match`: el set de la entrada CIERRA el partido si se
+    gana (`_is_match_closing_set` True). Mercado tradeable "quién gana
+    el partido" -- se simula un retorno real: comprar YES al precio de
+    entrada (`market_price_a`/`market_price_b` del lado que cierra),
+    liquidar a 1.0 si gana el partido o a 0.0 si pierde. La simulación
+    de bankroll (`simulate_bankroll`) opera SOLO este tipo.
+  - `serve_for_set`: el set de la entrada NO cierra el partido.
+    2026-09-01, pedido explícito del usuario -- verificado en vivo que
+    Kalshi SÍ tiene mercado real y tradeable para esto
+    (`KXATPSETWINNER`/`KXWTASETWINNER`, un evento por set, no un proxy
+    de precio de partido). Se opera ese mercado real: comprar YES al
+    precio de `SetProbabilityTick`, liquidar a 1.0/0.0 según el
+    resultado real del set. Reporta win-rate y retorno bruto por
+    separado (`run_closing_scalp_backtest`); NO entra todavía en
+    `simulate_bankroll` (ver docstring de esa función para el motivo:
+    falta el timestamp real de liquidación del mercado de set).
 """
 
 from __future__ import annotations
@@ -91,6 +99,7 @@ from database.db import init_db_historical
 from database.historical.tennis.matchstats_parser import typed_columns_from_stats
 from database.historical.tennis.models import (
     LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, ProbabilityTick,
+    SetProbabilityTick,
 )
 from outer_apis.kalshi.fees import order_fee
 from outer_apis.sports.tennis.set_sequence_stats import parse_set_scores
@@ -225,6 +234,19 @@ class ClosingScalpEvent:
     #     dos casos aplicó.
     is_final_set_of_match: bool | None = None
     is_forced_final_set_at_entry: bool | None = None
+    # 2026-09-01, pedido explícito del usuario: ampliación a entradas
+    # "saca para ganar UN SET" (no necesariamente el que cierra el
+    # partido), sobre el mercado REAL `KXATPSETWINNER`/`KXWTASETWINNER`
+    # confirmado tradeable (ver
+    # `outer_apis/kalshi/markets/tennis_set_winner.py`). "serve_for_match"
+    # es el comportamiento preexistente (entry_price/exit_price/
+    # match_return_pct sobre el mercado de PARTIDO, sin cambios).
+    # "serve_for_set" opera el mercado de SET real -- `entry_price` acá
+    # es el precio de ESE mercado (NUNCA el de partido), resuelto contra
+    # `set_return_pct` (no `match_return_pct`, que asume precio de
+    # partido).
+    entry_type: str = "serve_for_match"  # serve_for_match | serve_for_set
+    set_return_pct: float | None = None
 
 
 def _price_for_side(tick_id: int | None, side: str,
@@ -261,6 +283,33 @@ def _collect_candidate_snapshots(
         .order_by(LiveStatsSnapshot.observed_at.asc(), LiveStatsSnapshot.id.asc())
     )
     return snaps, price_cache
+
+
+def _set_price_for_side(
+    match_id: int, set_number: int, side: str, at_or_before: datetime,
+) -> float | None:
+    """Precio REAL del mercado "quién gana el set" (`SetProbabilityTick`,
+    ver `workers/tennis_set_tick_worker.py`) más reciente disponible en
+    o antes del snapshot de entrada, para el `set_number`/`side`
+    solicitados -- 2026-09-01. Fail-closed: None si no hay ningún tick
+    de ese set todavía (el worker de sets es best-effort, puede no haber
+    alcanzado a resolver el evento activo en ese instante); NUNCA se
+    complementa (`1 - precio`) ni se cae al precio del lado contrario,
+    mismo criterio que `_price_for_side` para el mercado de partido."""
+    tick = (
+        SetProbabilityTick.select()
+        .where(
+            (SetProbabilityTick.match == match_id)
+            & (SetProbabilityTick.set_number == set_number)
+            & (SetProbabilityTick.observed_at <= at_or_before)
+        )
+        .order_by(SetProbabilityTick.observed_at.desc())
+        .first()
+    )
+    if tick is None:
+        return None
+    price = tick.market_price_a if side == "a" else tick.market_price_b
+    return price if price is not None else None
 
 
 def _point_snapshot_at(match_id: int, probability_tick_id: int | None) -> LivePointSnapshot | None:
@@ -354,23 +403,31 @@ def _flashscore_side(point: LivePointSnapshot, side: str) -> int:
     return 1 if (side == "a") == point.player_a_is_flashscore_p1 else 2
 
 
-def _closing_service_sequence(
-    match: Match, point: LivePointSnapshot | None, side: str,
+def _serving_for_set_sequence(
+    point: LivePointSnapshot | None, side: str,
 ) -> str | None:
-    """Identify an executable service game for the match.
+    """Identify an executable service game for the CURRENT SET -- i.e.
+    the candidate is about to serve to win the set they're currently
+    playing, regardless of whether winning it also closes the match.
+
+    2026-09-01, refactor: this used to be gated on
+    `_is_match_closing_set` (only fired for match-closing sets, see
+    `_closing_service_sequence` in git history) -- pedido explícito del
+    usuario para separar "detección de secuencia de servicio" (esto)
+    de "gate de set decisivo" (`_is_match_closing_set`, ahora aplicado
+    por el CALLER para clasificar el evento en serve_for_match vs
+    serve_for_set, no para filtrar qué secuencias se detectan).
 
     Accepted paths are deliberately explicit:
       * ``break_then_serve``: the last completed game was a break by the
-        candidate, who now serves for the match.
+        candidate, who now serves for the set.
       * ``break_hold_then_serve``: break, consolidated hold, one opponent
-        service game, then the candidate serves again for the match.
+        service game, then the candidate serves again for the set.
 
     HC/HE are the post-game score and HG is the server of each completed
     game in Flashscore's feed. Missing or malformed fields fail closed.
     """
     if point is None or point.current_set is None:
-        return None
-    if _is_match_closing_set(match, side, point.current_set, point) is not True:
         return None
     try:
         import json
@@ -433,8 +490,12 @@ def _resolve_event(event: ClosingScalpEvent, match: Match, snaps: list[LiveStats
     edge_at_close = _spw_edge(last_snap, side)
     event.spw_edge_still_valid = (edge_at_close is not None and edge_at_close >= MIN_SPW_EDGE_PCT)
 
-    # Resultado real del SET en el que ocurrió la entrada -- solo
-    # precisión de señal, Kalshi no tiene mercado de set (ver docstring).
+    # Resultado real del SET en el que ocurrió la entrada. 2026-09-01:
+    # antes esto era solo precisión de señal (Kalshi no tenía mercado de
+    # set) -- ahora, para eventos `serve_for_set`, `entry_price` YA es
+    # el precio real del mercado de set (`KXATPSETWINNER`/
+    # `KXWTASETWINNER`), así que este resultado también produce un
+    # retorno simulable real (`set_return_pct`).
     if event.current_set_at_entry is not None and match.match_history_id:
         sets = parse_set_scores(match.match_history.score)
         idx = event.current_set_at_entry - 1
@@ -450,21 +511,35 @@ def _resolve_event(event: ClosingScalpEvent, match: Match, snaps: list[LiveStats
             # cantidad real de sets del partido completo).
             event.is_final_set_of_match = (event.current_set_at_entry == len(sets))
 
+    if (
+        event.entry_type == "serve_for_set"
+        and event.set_outcome_known
+        and event.entry_price not in (None, 0.0)
+    ):
+        event.set_return_pct = (
+            round(100.0 * (1.0 - event.entry_price) / event.entry_price, 2)
+            if event.closer_won_set else -100.0
+        )
+
     # Resultado real del PARTIDO -- acá sí hay retorno simulable. Sin
     # stop-loss (eliminado 2026-08-28): toda posición se liquida contra
-    # el resultado real, ganó (1.0) o perdió (0.0).
+    # el resultado real, ganó (1.0) o perdió (0.0). Solo aplica a
+    # eventos `serve_for_match`: `entry_price` en `serve_for_set` es el
+    # precio del mercado de SET, no comparable contra el resultado de
+    # partido.
     if match.winner in ("a", "b"):
         event.match_resolved = True
         event.closer_won_match = (match.winner == side)
-        event.exit_price = 1.0 if event.closer_won_match else 0.0
 
-        if event.entry_price not in (None, 0.0):
-            if event.closer_won_match:
-                event.match_return_pct = round(
-                    100.0 * (1.0 - event.entry_price) / event.entry_price, 2,
-                )
-            else:
-                event.match_return_pct = -100.0
+        if event.entry_type == "serve_for_match":
+            event.exit_price = 1.0 if event.closer_won_match else 0.0
+            if event.entry_price not in (None, 0.0):
+                if event.closer_won_match:
+                    event.match_return_pct = round(
+                        100.0 * (1.0 - event.entry_price) / event.entry_price, 2,
+                    )
+                else:
+                    event.match_return_pct = -100.0
 
 
 def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
@@ -490,10 +565,26 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
             point = _point_snapshot_at(match_id, entry_snap.probability_tick_id)
             current_set = point.current_set if point else None
             for side in ("a", "b"):
-                sequence = _closing_service_sequence(match, point, side)
+                sequence = _serving_for_set_sequence(point, side)
                 if sequence is None:
                     continue
-                entry_price = _price_for_side(entry_snap.probability_tick_id, side, price_cache)
+                # 2026-09-01: clasifica el evento por si ganar el set
+                # ACTUAL cierra el partido (`serve_for_match`, mercado y
+                # comportamiento preexistentes) o no (`serve_for_set`,
+                # mercado real `KXATPSETWINNER`/`KXWTASETWINNER`).
+                # Fail-closed: si no se puede determinar (`None`), se
+                # descarta el evento -- nunca se asume una clasificación.
+                is_closing = _is_match_closing_set(match, side, current_set, point)
+                if is_closing is None:
+                    continue
+                if is_closing:
+                    entry_type = "serve_for_match"
+                    entry_price = _price_for_side(entry_snap.probability_tick_id, side, price_cache)
+                else:
+                    entry_type = "serve_for_set"
+                    entry_price = _set_price_for_side(
+                        match_id, current_set, side, entry_snap.observed_at,
+                    )
                 if entry_price is None or not 0.0 < entry_price < 1.0:
                     continue
                 spw_edge = _spw_edge(entry_snap, side)
@@ -523,6 +614,7 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
                     set_spw_edge_at_entry=round(set_spw_edge, 2),
                     set_second_serve_pct_at_entry=set_second_serve_pct,
                     is_forced_final_set_at_entry=(current_set == match.best_of),
+                    entry_type=entry_type,
                 )
                 _resolve_event(event, match, snaps, price_cache, i)
                 events.append(event)
@@ -543,9 +635,21 @@ def run_closing_scalp_backtest() -> dict[str, Any]:
     with_set_outcome = [e for e in events if e.set_outcome_known]
     still_valid_at_close = [e for e in events if e.spw_edge_still_valid]
 
+    # 2026-09-01: separa serve_for_match (mercado de partido, comportamiento
+    # preexistente) de serve_for_set (mercado real KXATPSETWINNER/
+    # KXWTASETWINNER, set NO necesariamente decisivo) -- significado
+    # financiero distinto, nunca se deben promediar juntos.
+    serve_for_match_events = [e for e in events if e.entry_type == "serve_for_match"]
+    serve_for_set_events = [e for e in events if e.entry_type == "serve_for_set"]
+    set_events_with_return = [
+        e for e in serve_for_set_events if e.set_outcome_known and e.set_return_pct is not None
+    ]
+
     return {
         "n_matches_con_snapshots_suficientes": n_matches,
         "n_eventos_entrada_filtrados": len(events),
+        "n_eventos_serve_for_match": len(serve_for_match_events),
+        "n_eventos_serve_for_set": len(serve_for_set_events),
         "n_con_ventaja_spw_vigente_al_cierre": len(still_valid_at_close),
         "pct_ventaja_spw_vigente_al_cierre": (
             round(100 * len(still_valid_at_close) / len(events), 1) if events else None
@@ -565,6 +669,22 @@ def run_closing_scalp_backtest() -> dict[str, Any]:
             round(sum(e.match_return_pct for e in with_return) / len(with_return), 2)
             if with_return else None
         ),
+        # serve_for_set: retorno real sobre el mercado de SET (no de
+        # partido) -- ver `_set_price_for_side`/`SetProbabilityTick`.
+        "serve_for_set__n_con_resultado_conocido": len(
+            [e for e in serve_for_set_events if e.set_outcome_known]
+        ),
+        "serve_for_set__win_rate_pct": (
+            round(
+                100 * sum(e.closer_won_set for e in serve_for_set_events if e.set_outcome_known)
+                / len([e for e in serve_for_set_events if e.set_outcome_known]), 1,
+            ) if any(e.set_outcome_known for e in serve_for_set_events) else None
+        ),
+        "serve_for_set__n_con_retorno_calculado": len(set_events_with_return),
+        "serve_for_set__retorno_promedio_pct": (
+            round(sum(e.set_return_pct for e in set_events_with_return) / len(set_events_with_return), 2)
+            if set_events_with_return else None
+        ),
         "nota_sin_stop_loss": (
             "2026-08-28, pedido explicito del usuario: se elimino el "
             "stop-loss de 2do servicio -- ahora es SOLO filtro de "
@@ -572,16 +692,22 @@ def run_closing_scalp_backtest() -> dict[str, Any]:
             "toda posicion se liquida contra el resultado real."
         ),
         "nota_filtro_sirviendo_para_el_partido": (
-            "Solo se opera justo antes de que el candidato saque para "
-            "ganar el partido. Se aceptan break->saque para partido y "
-            "break->hold->saque rival->nuevo saque para partido, "
-            "reconstruidos con HC/HE/HG del punto-a-punto real."
+            "Se opera justo antes de que el candidato saque para ganar "
+            "el SET que esta jugando (break->saque para el set o "
+            "break->hold->saque rival->nuevo saque, reconstruidos con "
+            "HC/HE/HG del punto-a-punto real). Si ganar ese set tambien "
+            "cierra el partido, el evento se clasifica 'serve_for_match' "
+            "(mercado de partido); si no, 'serve_for_set' (mercado real "
+            "KXATPSETWINNER/KXWTASETWINNER, 2026-09-01)."
         ),
         "nota_retorno_bruto_vs_neto": (
-            "'nivel_partido__retorno_promedio_pct' de arriba es BRUTO "
+            "'nivel_partido__retorno_promedio_pct' y "
+            "'serve_for_set__retorno_promedio_pct' de arriba son BRUTOS "
             "(retorno aislado por trade, 100% del capital en cada uno) -- "
             "el retorno NETO de fees reales, con gestion de bankroll, "
-            "esta en `simulate_bankroll()` / 'simulacion_bankroll_nivel_partido'."
+            "esta en `simulate_bankroll()` / 'simulacion_bankroll_nivel_partido', "
+            "que HOY solo opera eventos serve_for_match (ver nota en "
+            "`simulate_bankroll`)."
         ),
     }
 
@@ -603,9 +729,18 @@ def simulate_bankroll(
     capital, agrupado por día -- reusa `scripts/reports/risk_metrics.py`
     para max drawdown/Sharpe/CAGR/CVaR, no reinventa la métrica).
 
-    Solo entra el nivel PARTIDO (único con mercado tradeable real, ver
-    docstring del módulo) -- el nivel set no tiene precio real, no se
-    puede simular bankroll sobre algo que no es operable.
+    Solo entra `entry_type == "serve_for_match"` (`match_return_pct` solo
+    se completa para esos eventos, ver `_resolve_event`). 2026-09-01:
+    aunque `serve_for_set` YA tiene precio real y retorno bruto
+    calculado (ver `run_closing_scalp_backtest`), NO se incluye acá
+    todavía -- `event.settled_at` es un proxy razonable para un evento
+    de partido (liquida cuando el partido termina) pero NO para un
+    evento de set intermedio (el mercado de ESE set liquida mucho antes,
+    y no se persiste el timestamp real de esa liquidación); incluirlo
+    con `settled_at` de partido sobreestimaría cuánto tiempo el capital
+    queda inmovilizado. Fail-closed: se prefiere excluirlo de la
+    simulación de bankroll hasta que exista ese dato real, no
+    aproximarlo.
 
     COMPOUNDING -- 2026-08-29, pedido explícito del usuario ("el
     compounding se aplica tras cada trade"): el 1% se recalcula sobre el

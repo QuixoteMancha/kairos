@@ -12,6 +12,7 @@ import json
 from database.db import init_db_historical
 from database.historical.tennis.models import (
     LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, Player, ProbabilityTick,
+    SetProbabilityTick,
 )
 from scripts.tennis.closing_scalp_backtest import (
     MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _set_serve_conditions,
@@ -23,7 +24,10 @@ from scripts.tennis.closing_scalp_backtest import (
 @pytest.fixture(autouse=True)
 def clean_tables():
     init_db_historical()
-    models = (LiveStatsSnapshot, LivePointSnapshot, ProbabilityTick, Match, MatchHistory, Player)
+    models = (
+        LiveStatsSnapshot, LivePointSnapshot, ProbabilityTick, SetProbabilityTick,
+        Match, MatchHistory, Player,
+    )
     for model in models:
         model.delete().execute()
     yield
@@ -552,3 +556,103 @@ def test_is_final_set_of_match_true_when_entry_happens_in_the_deciding_set():
     events = collect_closing_scalp_events()
     assert len(events) == 1
     assert events[0].is_final_set_of_match is True
+
+
+def test_serve_for_set_uses_real_set_market_price_not_match_price():
+    """2026-09-01, pedido explícito del usuario: entrada en set 1 de un
+    partido a mejor-de-3 (NO decisivo, ni caso (a) ni caso (b) de
+    `_is_match_closing_set`) se clasifica `serve_for_set` y usa el
+    precio REAL de `SetProbabilityTick` (mercado KXATPSETWINNER/
+    KXWTASETWINNER), nunca el precio de partido (`ProbabilityTick`)."""
+    a = _player("SetEntry A")
+    b = _player("SetEntry B")
+    history = MatchHistory.create(
+        match_id="te:99", source="tennisexplorer", tour="WTA", match_date="2026-08-17",
+        player_a=a, player_b=b, fetched_at=datetime.now(timezone.utc),
+        player_a_ranking=5, player_b_ranking=80,
+        player_a_surface_elo=1900, player_b_surface_elo=1500,
+        score="6-3, 4-6, 6-2", winner=a,
+    )
+    match = _match("KX-SET1", history=history)
+    match.winner = "a"
+    match.save()
+
+    _snapshot(match, 0, 0.50, points_a=10, points_b=10, breaks_a=0, breaks_b=0, current_set=1,
+              first_pct_a=65, first_won_a=80, second_won_a=60,
+              first_pct_b=55, first_won_b=55, second_won_b=45)
+    _snapshot(match, 2, 0.52, points_a=14, points_b=11, breaks_a=1, breaks_b=0, current_set=1,
+              first_pct_a=65, first_won_a=80, second_won_a=60,
+              first_pct_b=55, first_won_b=55, second_won_b=45)
+    tick = _snapshot(
+        match, 5, 0.55, points_a=18, points_b=13, breaks_a=1, breaks_b=0, current_set=1,
+        first_pct_a=65, first_won_a=80, second_won_a=60,
+        first_pct_b=55, first_won_b=55, second_won_b=45,
+        raw_point_json=_closing_point_raw("a", 1, "break_then_serve"),
+    )
+    entry_observed_at = tick.observed_at
+
+    # Precio REAL del mercado de set (distinto del precio de partido de
+    # arriba, 0.55) -- observado antes de la entrada.
+    SetProbabilityTick.create(
+        match=match, set_number=1, observed_at=entry_observed_at - timedelta(seconds=1),
+        event_ticker="KXWTASETWINNER-26AUGXXABCD-1",
+        market_price_a=0.80, market_price_b=0.20,
+    )
+
+    events = collect_closing_scalp_events()
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.entry_type == "serve_for_set"
+    assert ev.entry_price == 0.80  # precio de SET, no el 0.55 de partido
+    assert ev.is_forced_final_set_at_entry is False
+    assert ev.closer_won_set is True  # set 1 fue 6-3 a favor de A
+    assert ev.set_return_pct == pytest.approx(100.0 * (1.0 - 0.80) / 0.80, abs=0.01)
+    # No es serve_for_match: no se completa el retorno de partido.
+    assert ev.match_return_pct is None
+
+    report = run_closing_scalp_backtest()
+    assert report["n_eventos_serve_for_set"] == 1
+    assert report["n_eventos_serve_for_match"] == 0
+    assert report["serve_for_set__win_rate_pct"] == 100.0
+    assert report["serve_for_set__retorno_promedio_pct"] == pytest.approx(
+        100.0 * (1.0 - 0.80) / 0.80, abs=0.01,
+    )
+
+    # simulate_bankroll deliberadamente NO opera serve_for_set todavía
+    # (ver docstring) -- no debe aparecer como trade.
+    bankroll = simulate_bankroll(events)
+    assert bankroll["n_trades"] == 0
+
+
+def test_serve_for_set_fails_closed_without_a_set_probability_tick():
+    """Sin ningún `SetProbabilityTick` todavía persistido para ese set,
+    el evento se descarta -- nunca se cae al precio de partido ni se
+    fabrica un precio."""
+    a = _player("NoTick A")
+    b = _player("NoTick B")
+    history = MatchHistory.create(
+        match_id="te:100", source="tennisexplorer", tour="WTA", match_date="2026-08-17",
+        player_a=a, player_b=b, fetched_at=datetime.now(timezone.utc),
+        player_a_ranking=5, player_b_ranking=80,
+        player_a_surface_elo=1900, player_b_surface_elo=1500,
+        score="6-3, 4-6, 6-2", winner=a,
+    )
+    match = _match("KX-SET1-NOTICK", history=history)
+    match.winner = "a"
+    match.save()
+
+    _snapshot(match, 0, 0.50, points_a=10, points_b=10, breaks_a=0, breaks_b=0, current_set=1,
+              first_pct_a=65, first_won_a=80, second_won_a=60,
+              first_pct_b=55, first_won_b=55, second_won_b=45)
+    _snapshot(match, 2, 0.52, points_a=14, points_b=11, breaks_a=1, breaks_b=0, current_set=1,
+              first_pct_a=65, first_won_a=80, second_won_a=60,
+              first_pct_b=55, first_won_b=55, second_won_b=45)
+    _snapshot(
+        match, 5, 0.55, points_a=18, points_b=13, breaks_a=1, breaks_b=0, current_set=1,
+        first_pct_a=65, first_won_a=80, second_won_a=60,
+        first_pct_b=55, first_won_b=55, second_won_b=45,
+        raw_point_json=_closing_point_raw("a", 1, "break_then_serve"),
+    )
+
+    events = collect_closing_scalp_events()
+    assert events == []

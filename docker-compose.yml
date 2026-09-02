@@ -379,6 +379,24 @@ services:
     restart: unless-stopped
     networks: [kairos_net]
 
+  tennis_set_tick_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_set_tick_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_set_tick_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      # 2026-09-01, pedido explícito del usuario: precio real de
+      # mercado "quién gana el set" (KXATPSETWINNER/KXWTASETWINNER),
+      # ver workers/tennis_set_tick_worker.py. Mismo intervalo que
+      # tennis_match_tick_worker (minuto a minuto).
+      TENNIS_SET_TICK_INTERVAL_SECONDS: "60"
+      TENNIS_SET_TICK_BATCH_SIZE: "40"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+
   tennis_match_stats_orientation_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_tennis_match_stats_orientation_worker

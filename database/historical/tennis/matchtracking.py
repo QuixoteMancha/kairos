@@ -17,6 +17,7 @@ from typing import Any
 from database.db import init_db_historical
 from database.historical.tennis.models import Match as TennisScannedMatch
 from database.historical.tennis.models import ProbabilityTick as TennisMatchProbabilityTick
+from database.historical.tennis.models import SetProbabilityTick as TennisSetProbabilityTick
 from database.historical.tennis.models import MatchHistory
 
 
@@ -256,6 +257,30 @@ def save_probability_tick(
             match=match, observed_at=_now(),
             market_price_a=market_price_a, model_fair_a=model_fair_a,
             market_price_b=market_price_b, model_fair_b=model_fair_b,
+        )
+    except Exception:
+        pass
+
+
+def save_set_probability_tick(
+    scanned_match_id: int, set_number: int, event_ticker: str,
+    market_price_a: float | None, market_price_b: float | None,
+) -> None:
+    """Guarda un tick de precio real del mercado "quién gana el set"
+    (`KXATPSETWINNER`/`KXWTASETWINNER`) -- 2026-09-01, hermano de
+    `save_probability_tick` para el mercado de partido. Recibe el `id`
+    (PK) de `TennisScannedMatch` directamente en vez de `market_id`
+    (a diferencia del tick de partido, el caller -- el worker de sets --
+    ya tiene la fila `Match` cargada en memoria al resolver el evento
+    activo, no hace falta una segunda query). Fail-closed: nunca
+    fabrica un `Match` a partir de un tick suelto, y se traga
+    excepciones (side-effect, no debe tumbar el ciclo del worker)."""
+    try:
+        init_db_historical()
+        TennisSetProbabilityTick.create(
+            match=scanned_match_id, set_number=set_number, observed_at=_now(),
+            event_ticker=event_ticker,
+            market_price_a=market_price_a, market_price_b=market_price_b,
         )
     except Exception:
         pass

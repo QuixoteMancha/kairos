@@ -27,6 +27,7 @@ on a fresh fetch (never on a cache hit).
 from database.historical.tennis.models import (
     Match as TennisScannedMatch,
     ProbabilityTick as TennisMatchProbabilityTick,
+    SetProbabilityTick as TennisSetProbabilityTick,
     FavouriteShadowDecision as TennisFavouriteShadowDecision,
     LivePointSnapshot as TennisLivePointSnapshot,
     LiveStatsSnapshot as TennisLiveStatsSnapshot,
@@ -65,7 +66,8 @@ from database.historical.tennis.player_sync_status import (
 # código existente.
 from database.historical.tennis.matchtracking import (
     register_scanned_match, register_scanned_matches, get_open_scanned_matches,
-    save_probability_tick, mark_match_settled, backfill_missing_tournaments,
+    save_probability_tick, save_set_probability_tick, mark_match_settled,
+    backfill_missing_tournaments,
     backfill_missing_rounds, filter_new_markets,
     ensure_match_history_for_scanned_match, backfill_scanned_matches_to_history,
     get_probability_history,
@@ -95,11 +97,13 @@ __all__ = [
     "save_tennisabstract_elo_snapshot", "get_current_tennisabstract_elo",
     "save_tennisabstract_career_splits", "get_current_career_splits",
     "get_all_career_splits_for_surface", "get_latest_rankings", "get_all_surface_matches",
-    "TennisScannedMatch", "TennisMatchProbabilityTick", "TennisFavouriteShadowDecision",
+    "TennisScannedMatch", "TennisMatchProbabilityTick", "TennisSetProbabilityTick",
+    "TennisFavouriteShadowDecision",
     "TennisLivePointSnapshot", "TennisLiveStatsSnapshot",
     "TennisLiveLimitArbDecision",
     "register_scanned_match", "register_scanned_matches", "get_open_scanned_matches",
-    "save_probability_tick", "mark_match_settled", "backfill_missing_tournaments",
+    "save_probability_tick", "save_set_probability_tick", "mark_match_settled",
+    "backfill_missing_tournaments",
     "backfill_missing_rounds", "filter_new_markets",
     "ensure_match_history_for_scanned_match", "backfill_scanned_matches_to_history",
     "get_probability_history",

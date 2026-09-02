@@ -427,6 +427,33 @@ class ProbabilityTick(HistoricalBaseModel):
     model_fair_b = FloatField(null=True)
 
 
+class SetProbabilityTick(HistoricalBaseModel):
+    """Precio REAL de mercado de Kalshi para un mercado "quién gana el
+    set" (`KXATPSETWINNER`/`KXWTASETWINNER`, ver
+    `outer_apis/kalshi/markets/tennis_set_winner.py`) -- 2026-09-01,
+    pedido explícito del usuario para ampliar Closing Scalp a entradas
+    "saca para ganar UN SET" (no necesariamente el que cierra el
+    partido). Hermano de `ProbabilityTick` (mercado de PARTIDO), mismo
+    patrón `match`/`observed_at`/`market_price_a`/`market_price_b`, más
+    `set_number` porque un mismo `Match` puede tener hasta 3 eventos
+    KXATPSETWINNER distintos a lo largo de su vida (uno activo por vez,
+    el del set que se está jugando). Sin `model_fair_a`/`model_fair_b`:
+    no existe todavía un modelo de fair-value para sets individuales, y
+    no se inventa uno acá -- si algún día se construye, se agrega en una
+    migración aparte, nunca con un default fabricado."""
+
+    class Meta:
+        table_name = "tennis_set_probability_tick"
+        indexes = ((("match", "set_number", "observed_at"), False),)
+
+    match = ForeignKeyField(Match, backref="set_ticks", on_delete="CASCADE")
+    set_number = IntegerField()
+    observed_at = DateTimeField()
+    event_ticker = CharField()
+    market_price_a = FloatField(null=True)
+    market_price_b = FloatField(null=True)
+
+
 class FavouriteShadowDecision(HistoricalBaseModel):
     """Decisión pre-match inmutable, enlazada al tick exacto observado."""
 

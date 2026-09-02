@@ -40,12 +40,13 @@ def historical_models():
         TennisScannedMatch,
         Tournament,
         TennisPlayerStrength, TennisEloCalibration,
+        TennisSetProbabilityTick,
     )
 
     models = [
         KalshiMarketTick, CryptoPriceSnapshot, TeamRating, TennisPlayerRanking,
         TennisHistoricalOdds, PlayerStats, TennisScannedMatch,
-        TennisMatchProbabilityTick, TennisMatchWeather,
+        TennisMatchProbabilityTick, TennisSetProbabilityTick, TennisMatchWeather,
         TennisFavouriteShadowDecision,
         TennisLivePointSnapshot, TennisLiveStatsSnapshot, TennisLiveLimitArbDecision,
         TennisMatchStats, TennisMatchStatsSet, Player, MatchDuration, MatchHistory,
@@ -386,6 +387,14 @@ def _add_match_history_qualifying_classification(database: Database) -> None:
     """)
 
 
+def _add_tennis_set_probability_tick(database: Database) -> None:
+    """Ticks de precio real para mercados "quién gana el set"
+    (`KXATPSETWINNER`/`KXWTASETWINNER`) -- 2026-09-01, ver
+    `SetProbabilityTick` en models.py para el razonamiento completo."""
+    from database.historical.tennis import TennisSetProbabilityTick
+    database.create_tables([TennisSetProbabilityTick], safe=True)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -411,5 +420,9 @@ HISTORICAL_MIGRATIONS = (
     Migration(
         19, "classify_match_history_qualifying_20260901",
         _add_match_history_qualifying_classification,
+    ),
+    Migration(
+        20, "add_tennis_set_probability_tick_20260901",
+        _add_tennis_set_probability_tick,
     ),
 )
