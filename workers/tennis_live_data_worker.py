@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 from datetime import datetime, timezone, timedelta
 
 from database.db import init_db_historical
 from database.historical.tennis.live_tracking import persist_live_snapshots
-from database.historical.tennis.matchtracking import ensure_match_history_for_scanned_match
+from database.historical.tennis.matchtracking import (
+    ensure_match_history_for_scanned_match, resolve_scanned_match_date,
+)
 from database.historical.tennis.models import (
-    LivePointSnapshot, LiveStatsSnapshot, Match, ProbabilityTick,
+    Match, ProbabilityTick,
 )
 from database.historical.workerstate import (
     mark_cycle_failed, mark_cycle_finished, mark_cycle_started,
@@ -21,9 +22,6 @@ from outer_apis.scrapers.tennis.flashscore_scraper import (
     find_live_match_identity, get_match_statistics, get_point_by_point,
 )
 from scripts.tennis.rotating_batch import take_rotating_batch
-from strategies.live_limit_arb import (
-    evaluate_live_limit_arb, settle_live_limit_arb_decisions,
-)
 
 _WORKER_NAME = "tennis_live_data_worker"
 _INTERVAL_S = int(os.getenv("TENNIS_LIVE_DATA_INTERVAL_SECONDS", "300"))
@@ -31,19 +29,12 @@ _BATCH_SIZE = int(os.getenv("TENNIS_LIVE_DATA_BATCH_SIZE", "12"))
 
 
 def _match_date(match: Match) -> str | None:
-    # En mercados KX*MATCH, close_time puede ser la expiración de la serie
-    # (p.ej. 31-AUG) y no el día real. El ticker sí codifica YYMONDD.
-    ticker_date = re.search(r"-(\d{2}[A-Z]{3}\d{2})", match.market_id.upper())
-    if ticker_date:
-        try:
-            return datetime.strptime(ticker_date.group(1), "%y%b%d").date().isoformat()
-        except ValueError:
-            pass
-    value = (match.close_time or "")[:10]
-    try:
-        return datetime.fromisoformat(value).date().isoformat()
-    except ValueError:
-        return None
+    # 2026-08-28: factorizado a `matchtracking.resolve_scanned_match_date`
+    # -- esta función vivía duplicada acá y en `ensure_match_history_for_
+    # scanned_match` con comportamiento DISTINTO (esta sí prefería el
+    # ticker, la otra no), causa raíz confirmada de 108/175 partidos con
+    # `tournament=None`. Un solo lugar ahora, ver docstring allá.
+    return resolve_scanned_match_date(match.market_id, match.close_time)
 
 
 def _has_fresh_market_tick(match: Match) -> bool:
@@ -76,7 +67,6 @@ def run_once() -> dict[str, int]:
         cursor_key="tennis_live_data_worker",
     )
     resolved = point_rows = stats_rows = unavailable = deferred = errors = 0
-    decisions_evaluated = 0
     for match in matches:
         try:
             # No scrapea partidos sin precio reciente: además de ahorrar carga,
@@ -111,42 +101,21 @@ def run_once() -> dict[str, int]:
             saved = persist_live_snapshots(match, points, stats)
             point_rows += int(saved["points"])
             stats_rows += int(saved["stats"])
-
-            # 2026-08-17, pedido explícito del usuario ("termina lo que
-            # estaba haciendo codex"): evalúa LiveLimitArb (shadow, NUNCA
-            # coloca órdenes) sobre el corte más reciente de este ciclo --
-            # usa lo recién persistido si hubo, o lo último ya guardado
-            # (partido puede seguir jugándose entre ciclos sin cambios
-            # de precio suficientes para un tick nuevo).
-            latest_point = (
-                LivePointSnapshot.select()
-                .where(LivePointSnapshot.match == match)
-                .order_by(LivePointSnapshot.observed_at.desc())
-                .first()
-            )
-            latest_stats = (
-                LiveStatsSnapshot.select()
-                .where(LiveStatsSnapshot.match == match)
-                .order_by(LiveStatsSnapshot.observed_at.desc())
-                .first()
-            )
-            if evaluate_live_limit_arb(match, latest_point, latest_stats) is not None:
-                decisions_evaluated += 1
         except Exception as exc:
             errors += 1
             print(f"[{_WORKER_NAME}] {match.market_id}: {exc}")
 
-    # Resuelve propuestas shadow de ciclos anteriores contra partidos ya
-    # cerrados -- barato (solo status="open"), corre siempre, no depende
-    # del lote de este ciclo.
-    settled = settle_live_limit_arb_decisions()
-
+    # 2026-08-27, pedido explícito del usuario: se eliminan las 3 capas de
+    # shadow-trading existentes (BetOnFavourite shadow, LimitArb monitor+
+    # fill-verification, y LiveLimitArb acá mismo) -- van a construir UN
+    # solo worker nuevo para probar Closing Scalp. Este worker sigue
+    # recolectando y persistiendo punto-a-punto/stats en vivo (la
+    # infraestructura de datos que el worker nuevo va a necesitar); solo se
+    # quitó la evaluación/liquidación de LiveLimitArb que vivía acá.
     result = {
         "open": len(matches), "resolved": resolved, "point_rows": point_rows,
         "stats_rows": stats_rows, "unavailable": unavailable,
         "deferred_no_fresh_tick": deferred, "errors": errors,
-        "live_limit_arb_decisions_evaluated": decisions_evaluated,
-        "live_limit_arb_settled": settled,
     }
     print(f"[{_WORKER_NAME}] {result}")
     return result

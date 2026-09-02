@@ -250,29 +250,6 @@ services:
     networks:
       - kairos_net
 
-  tennis_ml_optimizer_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_tennis_ml_optimizer_worker
-    build: .
-    command: ["python", "-m", "workers.tennis_ml_optimizer_worker"]
-    env_file:
-      - .env
-    environment:
-      <<: *kairos-db-environment
-      TENNIS_ML_INTERVAL_SECONDS: "86400"
-      TENNIS_ML_ARTIFACT_DIR: "/data/ml/tennis"
-      OMP_NUM_THREADS: "1"
-      OPENBLAS_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    mem_limit: 1g
-    cpus: 1.0
-    networks:
-      - kairos_net
-    volumes:
-      - kairos_data:/data
-
   tennis_player_bio_backfill_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_tennis_player_bio_backfill_worker
@@ -376,19 +353,6 @@ services:
     restart: unless-stopped
     networks:
       - kairos_net
-
-  tennis_favourite_shadow_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_tennis_favourite_shadow_worker
-    build: .
-    command: ["python", "-m", "workers.tennis_favourite_shadow_worker"]
-    env_file: [.env]
-    environment:
-      <<: *kairos-db-environment
-      TENNIS_FAVOURITE_SHADOW_INTERVAL_SECONDS: "300"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    networks: [kairos_net]
 
   tennis_live_data_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
@@ -507,27 +471,6 @@ services:
     volumes:
       - kairos_data:/data
 
-  limitarb_monitor_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_limitarb_monitor_worker
-    build: .
-    command: ["python", "-m", "workers.limitarb_monitor_worker"]
-    env_file:
-      - .env
-    environment:
-      <<: *kairos-db-environment
-      # 30s -- see workers/limitarb_monitor_worker.py: rule A counts one
-      # "attempt" per cycle where the limit leg isn't marketable yet, 3
-      # attempts triggers timeout, so the interval directly drives that
-      # timing (user-confirmed 30s).
-      LIMITARB_MONITOR_INTERVAL_SECONDS: "30"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    networks:
-      - kairos_net
-    volumes:
-      - kairos_data:/data
-
   historical_collector_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_historical_collector_worker
@@ -546,25 +489,6 @@ services:
       - kairos_net
     volumes:
       - kairos_data_historical:/data_historical
-
-  fill_verification_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_fill_verification_worker
-    build: .
-    command: ["python", "-m", "workers.fill_verification_worker"]
-    env_file:
-      - .env
-    environment:
-      <<: *kairos-db-environment
-      # 10min -- retrospective analysis, not time-critical like
-      # limitarb_monitor_worker's 30s (see workers/fill_verification_worker.py).
-      FILL_VERIFICATION_INTERVAL_SECONDS: "600"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    networks:
-      - kairos_net
-    volumes:
-      - kairos_data:/data
 
   api:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}

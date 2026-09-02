@@ -10,6 +10,7 @@ es un side-effect, nunca debe tumbar el scan real."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,7 +24,32 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _match_date_from_close_time(close_time: str | None) -> str | None:
+def resolve_scanned_match_date(market_id: str, close_time: str | None) -> str | None:
+    """Fecha real del partido para un `TennisScannedMatch` -- 2026-08-28,
+    bug real encontrado auditando por qué 108/175 partidos con punto-a-
+    punto en vivo tenían `tournament=None`: en mercados KX*MATCH,
+    `close_time` puede ser la expiración de la SERIE (ej. un partido
+    jugado el 24-AUG con `close_time` recién el 07-SEP), no el día real
+    del partido. El ticker sí codifica la fecha real (`YYMONDD`). Esta
+    función existía YA duplicada (y correcta) en
+    `workers/tennis_live_data_worker.py::_match_date()` -- acá se
+    factoriza a un solo lugar para que las dos formas de resolver la
+    fecha de un `TennisScannedMatch` (vinculación a `MatchHistory` acá,
+    y resolución de identidad en Flashscore allá) usen la MISMA lógica,
+    en vez de que una tenga el fix y la otra no. `_match_date_from_close_time`
+    (el nombre viejo, solo `close_time[:10]` sin preferir el ticker) causaba
+    que `ensure_match_history_for_scanned_match` calculara mal la fecha,
+    la búsqueda de `MatchHistory` existente (por jugadores+fecha) nunca
+    encontraba el partido real ya scrapeado de TennisExplorer, y se creaba
+    un `MatchHistory` duplicado sin torneo/superficie/ranking reales --
+    causa raíz confirmada del gap de torneo, no solo un límite del
+    diccionario estático de superficies."""
+    ticker_date = re.search(r"-(\d{2}[A-Z]{3}\d{2})", market_id.upper())
+    if ticker_date:
+        try:
+            return datetime.strptime(ticker_date.group(1), "%y%b%d").date().isoformat()
+        except ValueError:
+            pass
     if not close_time or len(close_time) < 10:
         return None
     candidate = close_time[:10]
@@ -43,7 +69,7 @@ def ensure_match_history_for_scanned_match(match: TennisScannedMatch) -> MatchHi
         player_b_id = _resolve_player_id(match.player_b_name, tour=match.tour)
         if player_a_id is None or player_b_id is None:
             return None
-        match_date = _match_date_from_close_time(match.close_time)
+        match_date = resolve_scanned_match_date(match.market_id, match.close_time)
         condition = (
             ((MatchHistory.player_a == player_a_id) & (MatchHistory.player_b == player_b_id))
             | ((MatchHistory.player_a == player_b_id) & (MatchHistory.player_b == player_a_id))

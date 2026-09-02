@@ -46,6 +46,10 @@ _SURFACE_BY_TOURNAMENT: dict[str, str] = {
     "dubai": "Hard",
     "doha": "Hard",
     "acapulco": "Hard",
+    # 2026-08-27: verificado contra histórico real (MatchHistory) antes de
+    # agregar -- WTA Monterrey (308 partidos) y ATP Monterrey Challenger
+    # (103 partidos) son unánimemente "hard", mismo valor para ambos tours.
+    "monterrey": "Hard",
     "basel": "Hard",
     "vienna": "Hard",
     "paris masters": "Hard",
