@@ -63,6 +63,15 @@ def test_creates_new_row_on_first_save():
     assert row.player_a_ranking == 10
     assert row.player_a.birthdate.isoformat() == "2001-08-31"
     assert row.tour == "WTA"
+    assert row.is_qualifying is False
+
+
+def test_persists_qualifying_from_tennisexplorer_round():
+    status = save_match_detail(_detail(round="Qualification - 2. round"))
+
+    assert status == "created"
+    row = MatchHistory.get(MatchHistory.match_id == "2692781")
+    assert row.is_qualifying is True
 
 
 def test_retirement_persists_retired_flag_and_loser_as_player_retired():

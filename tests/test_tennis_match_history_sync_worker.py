@@ -321,6 +321,7 @@ def test_backfill_qualifying_status_links_real_history():
     match = TennisScannedMatch.get_by_id(match.id)
     assert match.match_history_id == history.id
     assert match.is_qualifying is True
+    assert MatchHistory.get_by_id(history.id).is_qualifying is True
     assert match.qualifying_source == "tennisexplorer_round"
     assert match.qualifying_checked_at is not None
     assert match.qualifying_validated_at is not None

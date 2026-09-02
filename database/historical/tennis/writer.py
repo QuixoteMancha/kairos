@@ -33,6 +33,7 @@ from database.historical.tennis.models import (
     PlayerStats,
     MatchHistory, MatchDuration, Player, Tournament,
 )
+from database.historical.tennis.qualifying import classify_qualifying_labels
 
 # 2026-08-09, pedido explícito del usuario -- "cualquier tabla de matches
 # independiente del deporte debe tener la estructura 1 fila por match" --
@@ -425,7 +426,7 @@ _MATCH_DETAIL_COMPARABLE_FIELDS = (
     # texto libre, es FK real (`tournament_id`) contra `Tournament`, ver
     # `_resolve_tournament_id`.
     "tournament_id",
-    "tour", "round", "surface", "score", "winner_id",
+    "tour", "round", "is_qualifying", "surface", "score", "winner_id",
     "player_a_ranking", "player_b_ranking",
     "player_a_id", "player_b_id",
     # 2026-08-11, pedido explícito del usuario ("hay que agregar los
@@ -777,6 +778,9 @@ def save_match_detail(detail: dict[str, Any]) -> str:
         # `_resolve_player_id` (ver `_resolve_tournament_id`).
         fields["tournament_id"] = _resolve_tournament_id(
             detail.get("tournament"), fields.get("match_date"), tour=fields.get("tour"),
+        )
+        fields["is_qualifying"] = classify_qualifying_labels(
+            fields["round"], detail.get("tournament"),
         )
 
         # 2026-08-10, pedido explícito del usuario ("player_name no

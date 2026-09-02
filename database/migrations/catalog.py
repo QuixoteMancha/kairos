@@ -360,6 +360,32 @@ def _add_scanned_match_qualifying_classification(database: Database) -> None:
         )
 
 
+def _add_match_history_qualifying_classification(database: Database) -> None:
+    """Añade y rellena la clasificación canónica del historial existente."""
+    database.execute_sql(
+        "ALTER TABLE match_history ADD COLUMN IF NOT EXISTS is_qualifying BOOLEAN"
+    )
+    database.execute_sql("""
+        UPDATE match_history mh
+        SET is_qualifying = CASE
+            WHEN left(lower(mh.match_id), 7) <> 'kalshi:'
+             AND left(lower(mh.match_id), 11) <> 'recentform:'
+             AND (
+                position('qual' in lower(coalesce(mh.round, ''))) > 0
+                OR EXISTS (
+                    SELECT 1 FROM tournament t
+                    WHERE t.id = mh.tournament_id
+                      AND position('qual' in lower(t.tournament_name)) > 0
+                )
+             ) THEN TRUE
+            WHEN left(lower(mh.match_id), 7) <> 'kalshi:'
+             AND left(lower(mh.match_id), 11) <> 'recentform:'
+             AND trim(coalesce(mh.round, '')) <> '' THEN FALSE
+            ELSE NULL
+        END
+    """)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -381,5 +407,9 @@ HISTORICAL_MIGRATIONS = (
     Migration(
         18, "classify_scanned_match_qualifying_20260901",
         _add_scanned_match_qualifying_classification,
+    ),
+    Migration(
+        19, "classify_match_history_qualifying_20260901",
+        _add_match_history_qualifying_classification,
     ),
 )

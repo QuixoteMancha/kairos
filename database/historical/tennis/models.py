@@ -273,6 +273,9 @@ class MatchHistory(HistoricalBaseModel):
     # quedan sin FK, nunca se fabrica un `Tournament` fantasma.
     tournament = ForeignKeyField(Tournament, backref="matches", null=True, on_delete="SET NULL")
     round = CharField(null=True)
+    # Derivado únicamente de la ronda/torneo canónicos de TennisExplorer.
+    # NULL para historiales sintéticos o sin evidencia suficiente.
+    is_qualifying = BooleanField(null=True)
     surface = CharField(null=True)
     score = CharField(null=True)
 
