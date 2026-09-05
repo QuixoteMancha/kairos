@@ -44,10 +44,18 @@ from scripts.tennis.rotating_batch import take_rotating_batch
 _WORKER_NAME = "tennis_match_timing_worker"
 _INTERVAL_S = int(os.getenv("TENNIS_MATCH_TIMING_INTERVAL_SECONDS", "300"))
 _BATCH_SIZE = int(os.getenv("TENNIS_MATCH_TIMING_BATCH_SIZE", "40"))
-# El feed diario solo cubre ayer/hoy/mañana (ver `get_match_timing`) --
-# un margen algo más ancho (detected_at, no la fecha real todavía) para
-# no re-filtrar dos veces la misma lógica antes de tener la fecha real.
-_LOOKBACK_DAYS = 5
+# 2026-09-05, bug real encontrado en el primer deploy: `get_match_timing`
+# busca el partido SOLO en el feed diario de ayer/hoy/mañana (día -1/0/+1
+# respecto a AHORA, ver su propio docstring) -- un `_LOOKBACK_DAYS` más
+# ancho (se probó con 5) deja pasar el filtro a partidos de 3-5 días de
+# antigüedad que jamás va a encontrar, pegándole a la red cada ciclo
+# para siempre, reportados como "todavía no disponible" cuando en
+# realidad ya son inalcanzables por este método. `1` alinea la ventana
+# de este worker exactamente con la ventana real de la función que
+# consume, así esos casos caen en `out_of_window` (barato, sin red) en
+# vez de `not_yet_available` (red desperdiciada, sin ningún resultado
+# posible).
+_LOOKBACK_DAYS = 1
 
 
 def _within_capture_window(match: Match) -> bool:
@@ -68,7 +76,14 @@ def _within_capture_window(match: Match) -> bool:
 
 def run_once() -> dict[str, int]:
     init_db_historical()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS + 2)
+    # `detected_at` (cuándo Kalshi listó el mercado) NO se corresponde
+    # de forma confiable con la fecha real del partido -- mismo patrón
+    # de campos de fecha poco confiables ya documentado varias veces en
+    # este paquete (`resolve_scanned_match_date`). Este cutoff es
+    # deliberadamente ancho, solo para acotar el tamaño de la query;
+    # la precisión real de la ventana la da `_within_capture_window`
+    # (que sí usa la fecha real resuelta), no este filtro.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     query = Match.select().where(
         Match.winner.is_null(False)
         & Match.flashscore_match_id.is_null(False)
