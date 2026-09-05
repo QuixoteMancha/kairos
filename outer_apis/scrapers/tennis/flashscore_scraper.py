@@ -1041,12 +1041,34 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
           por si un análisis futuro los necesita).
       'A1÷' -- marcador de fin de feed, ignorado.
 
+    2026-09-04, bug real encontrado en vivo (Noskova/Li, set 2 a 6-6):
+    cuando un set llega a 6-6, el feed inserta un bloque especial
+    'HB÷Tiebreak - Set N' seguido de los puntos del tiebreak -- pero
+    esos puntos NO traen 'HL÷' (secuencia), solo 'HC/HE/HG/HH/HK'
+    (contadores + ganador del punto). El filtro fail-closed original
+    (`if sequence is None: continue`) descartaba TODOS esos puntos,
+    incluido el punto final que decide el set -- el resultado del
+    tiebreak (y por lo tanto del set) quedaba invisible para cualquier
+    consumidor (Closing Scalp nunca podía detectar "sacar para cerrar"
+    en el escenario de mayor valor: un set/partido definiéndose en
+    tiebreak). Fix: los puntos dentro de un bloque de tiebreak se
+    guardan igual, como un "juego" sintético más al final de la lista
+    de `games` del set (`"tiebreak": True`), usando los pares
+    "HC:HE" corridos como marcador de puntos (no hay notación 0/15/30
+    real para tiebreaks en este feed) y el `HK` del último punto como
+    ganador del set. El resumen 'HC÷N¬HD÷..¬HE÷N¬HF÷..¬HK÷{1|2}' que
+    Flashscore manda justo ANTES del header 'HB÷Tiebreak' (fuera de
+    cualquier tiebreak todavía) sigue descartándose igual que antes --
+    no aporta nada que el juego sintético de tiebreak no dé ya.
+
     Returns:
         {"set_1": {"label": "Point by point - Set 1", "games": [
             {"winner_side": 1, "points": ["0:15", "15:15", ...],
              "break_points": [{"point_index": 3, "sequence_raw": "40:15"}],
              "raw": {"HC": "1", "HE": "0", "HG": "2", "HH": "2"}},
-            ...
+            ..., {"winner_side": 1, "points": ["0:1", "1:1", ..., "8:6"],
+             "break_points": [], "raw": {...último punto...},
+             "tiebreak": True},
         ]}, "set_2": {...}, ...} -- Fail-closed: None si falla la
         request, el partido no tiene punto a punto trackeado, o el feed
         viene vacío. Nunca fabrica valores.
@@ -1078,10 +1100,31 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
     sets: dict[str, Any] = {}
     current_key: str | None = None
     set_count = 0
+    in_tiebreak = False
+    tb_points: list[str] = []
+    tb_last_raw: dict[str, str] = {}
+    tb_last_winner: str | None = None
+
+    def _flush_tiebreak() -> None:
+        nonlocal in_tiebreak, tb_points, tb_last_raw, tb_last_winner
+        if in_tiebreak and tb_points and current_key is not None:
+            sets[current_key]["games"].append({
+                "winner_side": int(tb_last_winner) if tb_last_winner and tb_last_winner.isdigit() else None,
+                "points": tb_points,
+                "break_points": [],
+                "raw": tb_last_raw,
+                "tiebreak": True,
+            })
+        in_tiebreak = False
+        tb_points = []
+        tb_last_raw = {}
+        tb_last_winner = None
+
     for chunk in text.split("¬~"):
         parts = chunk.split("¬")
         head = parts[0]
         if head.startswith("HA÷"):
+            _flush_tiebreak()
             set_count += 1
             current_key = f"set_{set_count}"
             label = None
@@ -1089,6 +1132,8 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
                 if p.startswith("HB÷"):
                     label = p[len("HB÷"):].strip()
             sets[current_key] = {"label": label, "games": []}
+        elif head.startswith("HB÷Tiebreak") and current_key is not None:
+            in_tiebreak = True
         elif head.startswith("HC÷") and current_key is not None:
             raw: dict[str, str] = {}
             winner_side = None
@@ -1107,6 +1152,10 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
                 elif p.startswith("HL÷"):
                     sequence = p[len("HL÷"):].strip()
             if sequence is None:
+                if in_tiebreak and winner_side is not None:
+                    tb_points.append(f"{raw.get('HC', '?')}:{raw.get('HE', '?')}")
+                    tb_last_raw = raw
+                    tb_last_winner = winner_side
                 continue
             points = [s.strip() for s in sequence.split(",") if s.strip()]
             break_points = []
@@ -1120,6 +1169,7 @@ def get_point_by_point(match_id: str) -> dict[str, Any] | None:
                 "raw": raw,
             })
 
+    _flush_tiebreak()
     return sets if sets else None
 
 
