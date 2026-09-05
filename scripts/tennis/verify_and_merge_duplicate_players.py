@@ -26,10 +26,12 @@ corrida de este mismo script ya no las vuelva a agrupar por error.
 
 FUSIÓN (solo cuando el slug real coincide): se reasignan todos los FKs
 reales (`MatchHistory.player_a/player_b/winner/player_retired`,
-`TennisPlayerStrength.player`, `TennisPlayerRanking.player`) de la fila
-MENOR (menos partidos totales) hacia la fila MAYOR, y se borra la
-menor. Nunca se fusiona sin verificación en vivo -- fail-closed: un
-grupo cuyo `match_id` no resuelve (fetch falla, header no parsea) se
+`TennisPlayerStrength`, `TennisPlayerRanking`, `TennisAbstractElo`,
+`PlayerStats`, `PlayerRankingHistory`) de la fila MENOR (menos partidos
+totales) hacia la fila MAYOR, y se borra la menor. Las relaciones con
+índices únicos conservan el snapshot más reciente si ambas filas ya
+tenían uno. Nunca se fusiona sin verificación en vivo -- fail-closed:
+un grupo cuyo `match_id` no resuelve (fetch falla, header no parsea) se
 reporta como NO VERIFICADO y se deja intacto, nunca se asume identidad.
 
 Por default corre en modo DRY-RUN (solo imprime el plan). Pasar
@@ -52,11 +54,17 @@ from __future__ import annotations
 
 import sys
 from collections import defaultdict
+from pathlib import Path
 
-from peewee import fn
+# Permite tanto ``python3 -m scripts.tennis...`` como ejecutar este archivo
+# directamente desde cualquier directorio.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import (
-    Player, MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
+    MatchHistory, Player, PlayerRankingHistory, PlayerStats, TennisAbstractElo,
+    TennisPlayerRanking, TennisPlayerStrength,
 )
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
 
@@ -96,22 +104,19 @@ def _sample_match_id(player: Player) -> tuple[str, str] | None:
     None si `player` no tiene NINGÚN `match_id` real (todas sus filas
     son sintéticas -- jugador detectado solo vía Kalshi, TennisExplorer
     no lo publicó todavía), nunca se intenta con el placeholder."""
-    row = (MatchHistory
-           .select()
-           .where((MatchHistory.player_a == player.id)
-                  & MatchHistory.match_id.is_null(False)
-                  & ~MatchHistory.match_id.startswith("kalshi:"))
-           .first())
-    if row is not None:
-        return row.match_id, "a"
-    row = (MatchHistory
-           .select()
-           .where((MatchHistory.player_b == player.id)
-                  & MatchHistory.match_id.is_null(False)
-                  & ~MatchHistory.match_id.startswith("kalshi:"))
-           .first())
-    if row is not None:
-        return row.match_id, "b"
+    for side, field in (("a", MatchHistory.player_a), ("b", MatchHistory.player_b)):
+        rows = (MatchHistory
+                .select(MatchHistory.match_id)
+                .where(
+                    (field == player.id)
+                    & (MatchHistory.source == "tennisexplorer")
+                    & MatchHistory.match_id.is_null(False)
+                ))
+        for row in rows:
+            # Los ids de ``match-detail`` de TennisExplorer son numéricos;
+            # así se excluyen placeholders ``kalshi:`` y ``recentform:``.
+            if row.match_id.isdigit():
+                return row.match_id, side
     return None
 
 
@@ -124,10 +129,59 @@ def _verify_real_slug(player: Player) -> str | None:
     if sample is None:
         return None
     match_id, side = sample
-    detail = get_match_detail(match_id)
+    try:
+        detail = get_match_detail(match_id)
+    except Exception:
+        # El contrato es fail-closed aun si el cliente HTTP/proxy lanza.
+        return None
     if detail is None:
         return None
     return detail.get(f"player_{side}_slug")
+
+
+def _newer(left, right) -> bool:
+    """True si ``left`` representa el snapshot más reciente."""
+    return left.fetched_at > right.fetched_at
+
+
+def _merge_strengths(minor: Player, major: Player) -> None:
+    """Mueve strengths sin violar la unicidad ``(player, tour)``."""
+    for strength in TennisPlayerStrength.select().where(TennisPlayerStrength.player == minor.id):
+        existing = TennisPlayerStrength.get_or_none(
+            (TennisPlayerStrength.player == major.id)
+            & (TennisPlayerStrength.tour == strength.tour)
+        )
+        if existing is None:
+            strength.player = major.id
+            strength.save(only=[TennisPlayerStrength.player])
+            continue
+        if strength.updated_at > existing.updated_at:
+            existing.overall_elo = strength.overall_elo
+            existing.hard_elo = strength.hard_elo
+            existing.clay_elo = strength.clay_elo
+            existing.grass_elo = strength.grass_elo
+            existing.last_match_date = strength.last_match_date
+            existing.updated_at = strength.updated_at
+            existing.save()
+        strength.delete_instance()
+
+
+def _merge_ranking_history(minor: Player, major: Player) -> None:
+    """Mueve ranking semanal, resolviendo la unicidad ``player+fecha``."""
+    for snapshot in PlayerRankingHistory.select().where(PlayerRankingHistory.player == minor.id):
+        existing = PlayerRankingHistory.get_or_none(
+            (PlayerRankingHistory.player == major.id)
+            & (PlayerRankingHistory.ranked_at == snapshot.ranked_at)
+        )
+        if existing is None:
+            snapshot.player = major.id
+            snapshot.save(only=[PlayerRankingHistory.player])
+            continue
+        if _newer(snapshot, existing):
+            existing.singles_ranking = snapshot.singles_ranking
+            existing.fetched_at = snapshot.fetched_at
+            existing.save()
+        snapshot.delete_instance()
 
 
 def _merge(minor: Player, major: Player, apply: bool) -> None:
@@ -136,13 +190,27 @@ def _merge(minor: Player, major: Player, apply: bool) -> None:
           f"{_match_count(major)} partidos)")
     if not apply:
         return
-    with Player._meta.database.atomic():
+    with db_historical.atomic():
         MatchHistory.update(player_a=major.id).where(MatchHistory.player_a == minor.id).execute()
         MatchHistory.update(player_b=major.id).where(MatchHistory.player_b == minor.id).execute()
         MatchHistory.update(winner=major.id).where(MatchHistory.winner == minor.id).execute()
         MatchHistory.update(player_retired=major.id).where(MatchHistory.player_retired == minor.id).execute()
-        TennisPlayerStrength.update(player=major.id).where(TennisPlayerStrength.player == minor.id).execute()
         TennisPlayerRanking.update(player=major.id).where(TennisPlayerRanking.player == minor.id).execute()
+        PlayerStats.update(player=major.id).where(PlayerStats.player == minor.id).execute()
+        _merge_strengths(minor, major)
+        # `TennisAbstractElo`/`PlayerRankingHistory` -- 2026-09-05, bug
+        # real encontrado antes del primer --apply de esta versión: sus
+        # tablas (`tennis_abstract_elo`/`wta_player_ranking_history`) NO
+        # existen en producción (modelos huérfanos, ver sus propios
+        # docstrings de "eliminada"/nunca migrada). Como este merge corre
+        # dentro de `db_historical.atomic()`, tocarlas sin chequeo hacía
+        # fallar (rollback) CUALQUIER fusión real, no solo estas dos
+        # tablas -- se guardan detrás de `table_exists` para que una
+        # migración futura las reactive sin tocar este código.
+        if db_historical.table_exists(TennisAbstractElo._meta.table_name):
+            TennisAbstractElo.update(player=major.id).where(TennisAbstractElo.player == minor.id).execute()
+        if db_historical.table_exists(PlayerRankingHistory._meta.table_name):
+            _merge_ranking_history(minor, major)
         # Enriquecimiento progresivo: si la fila mayor tiene campos NULL
         # que la menor sí tenía, se completan antes de borrar la menor.
         changed = False
@@ -164,54 +232,74 @@ def _fix_slug(player: Player, real_slug: str, apply: bool) -> None:
     player.save()
 
 
+def _reconcile_verified_group(
+    group: list[Player], real_slugs: dict[int, str], apply: bool,
+) -> tuple[int, int]:
+    """Fusiona cada subgrupo de identidad confirmada y corrige sus slugs.
+
+    Un grupo de slug guardado puede contener ``A, A, B``. La presencia de
+    B no debe impedir fusionar las dos filas que TennisExplorer confirmó
+    como A.
+    """
+    by_real_slug: dict[str, list[Player]] = defaultdict(list)
+    for player in group:
+        by_real_slug[real_slugs[player.id]].append(player)
+
+    merged_identities = 0
+    corrected_slugs = 0
+    for real_slug, same_identity in by_real_slug.items():
+        ordered = sorted(same_identity, key=_match_count, reverse=True)
+        major = ordered[0]
+        if major.slug != real_slug:
+            _fix_slug(major, real_slug, apply)
+            corrected_slugs += 1
+        if len(ordered) > 1:
+            for minor in ordered[1:]:
+                _merge(minor, major, apply)
+            merged_identities += 1
+
+    return merged_identities, corrected_slugs
+
+
 def main() -> None:
     apply = "--apply" in sys.argv
     mode = "APLICANDO CAMBIOS" if apply else "DRY-RUN (nada se modifica)"
     print(f"Modo: {mode}\n")
 
-    groups = _find_ambiguous_groups()
-    print(f"Grupos ambiguos a verificar: {len(groups)}\n")
+    init_db_historical()
+    with db_historical.connection_context():
+        groups = _find_ambiguous_groups()
+        print(f"Grupos ambiguos a verificar: {len(groups)}\n")
 
-    n_merged = 0
-    n_kept_separate = 0
-    n_unverified = 0
+        n_merged = 0
+        n_kept_separate = 0
+        n_unverified = 0
+        n_corrected = 0
 
-    for group in groups:
-        names = [p.canonical_name for p in group]
-        print(f"=== slug={group[0].slug!r}: {names} ===")
+        for group in groups:
+            names = [p.canonical_name for p in group]
+            print(f"=== slug={group[0].slug!r}: {names} ===")
 
-        real_slugs: dict[int, str | None] = {}
-        for p in group:
-            real_slugs[p.id] = _verify_real_slug(p)
-            print(f"  id={p.id} ({p.canonical_name!r}) -> slug real verificado: {real_slugs[p.id]!r}")
-
-        if any(s is None for s in real_slugs.values()):
-            print("  -> NO VERIFICADO (algún match_id no resolvió contra TennisExplorer), se deja intacto.\n")
-            n_unverified += 1
-            continue
-
-        by_real_slug: dict[str, list[Player]] = defaultdict(list)
-        for p in group:
-            by_real_slug[real_slugs[p.id]].append(p)
-
-        if len(by_real_slug) == 1:
-            # Misma persona real -- fusionar todo hacia la fila con más partidos.
-            ordered = sorted(group, key=_match_count, reverse=True)
-            major = ordered[0]
-            for minor in ordered[1:]:
-                _merge(minor, major, apply)
-            n_merged += 1
-        else:
-            # Personas distintas confirmadas -- no se fusiona, solo se
-            # corrige el slug guardado de cada una al real verificado.
-            print("  -> Personas DISTINTAS confirmadas por TennisExplorer, no se fusiona.")
+            real_slugs: dict[int, str | None] = {}
             for p in group:
-                if p.slug != real_slugs[p.id]:
-                    _fix_slug(p, real_slugs[p.id], apply)
-            n_kept_separate += 1
-        print()
+                real_slugs[p.id] = _verify_real_slug(p)
+                print(f"  id={p.id} ({p.canonical_name!r}) -> slug real verificado: {real_slugs[p.id]!r}")
 
-    print(f"Resumen: fusionados={n_merged}  mantenidos_separados={n_kept_separate}  no_verificados={n_unverified}")
+            if any(slug is None for slug in real_slugs.values()):
+                print("  -> NO VERIFICADO (algún match_id no resolvió contra TennisExplorer), se deja intacto.\n")
+                n_unverified += 1
+                continue
+
+            verified_slugs = {player_id: slug for player_id, slug in real_slugs.items() if slug is not None}
+            merged, corrected = _reconcile_verified_group(group, verified_slugs, apply)
+            n_merged += merged
+            n_corrected += corrected
+            if len(set(verified_slugs.values())) > 1:
+                n_kept_separate += 1
+                print("  -> Personas distintas confirmadas; se fusionaron solo los subgrupos con slug real idéntico.")
+            print()
+
+    print(f"Resumen: identidades_fusionadas={n_merged}  grupos_con_personas_distintas={n_kept_separate}  slugs_corregidos={n_corrected}  no_verificados={n_unverified}")
     if not apply:
         print("\n(dry-run: correr de nuevo con --apply para ejecutar los cambios de verdad)")
 
