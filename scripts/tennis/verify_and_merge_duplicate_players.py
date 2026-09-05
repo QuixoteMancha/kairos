@@ -33,7 +33,20 @@ grupo cuyo `match_id` no resuelve (fetch falla, header no parsea) se
 reporta como NO VERIFICADO y se deja intacto, nunca se asume identidad.
 
 Por default corre en modo DRY-RUN (solo imprime el plan). Pasar
-`--apply` para ejecutar los merges/correcciones de verdad."""
+`--apply` para ejecutar los merges/correcciones de verdad.
+
+2026-09-05, bug real encontrado corriendo esto en producción: 11 de los
+40 grupos originales quedaban "NO VERIFICADO" de forma consistente entre
+corridas (no era flakeo de red) -- el `match_id` de muestra elegido era
+un placeholder SINTÉTICO (`"kalshi:KXATPMATCH-..."`, se crea cuando
+Kalshi ya detectó el partido pero TennisExplorer todavía no lo publicó),
+no fetcheable contra `/match-detail/`. Fix en `_sample_match_id`: excluye
+esos ids explícitamente. Con el fix, los grupos que SÍ tenían algún
+`match_id` real quedaron resueltos; los que persisten como NO VERIFICADO
+tienen el 100% de sus partidos sintéticos (jugador visto solo vía Kalshi,
+sin historial publicado todavía) -- límite real de la fuente, no del
+script, va a resolverse solo cuando TennisExplorer publique esos
+partidos."""
 
 from __future__ import annotations
 
@@ -73,19 +86,29 @@ def _match_count(player: Player) -> int:
 
 
 def _sample_match_id(player: Player) -> tuple[str, str] | None:
-    """Un `match_id` real cualquiera de `player`, con el lado (a/b) en
-    el que aparece. Fail-closed: None si no tiene ningún `match_id`
-    usable (no debería pasar acá, ya se filtró por `_match_count>0`,
-    pero un `match_id` vacío/None de una fila vieja es posible)."""
+    """Un `match_id` REAL de TennisExplorer de `player`, con el lado
+    (a/b) en el que aparece. 2026-09-05, bug real encontrado en vivo:
+    algunas filas de `MatchHistory` tienen un `match_id` SINTÉTICO
+    (`"kalshi:KXATPMATCH-..."`, placeholder que se crea cuando Kalshi ya
+    detectó el partido pero TennisExplorer todavía no lo publicó, ver
+    `MatchHistory` synthetic rows) -- ese id NO es fetcheable contra
+    `/match-detail/`, así que se excluye explícitamente. Fail-closed:
+    None si `player` no tiene NINGÚN `match_id` real (todas sus filas
+    son sintéticas -- jugador detectado solo vía Kalshi, TennisExplorer
+    no lo publicó todavía), nunca se intenta con el placeholder."""
     row = (MatchHistory
            .select()
-           .where((MatchHistory.player_a == player.id) & MatchHistory.match_id.is_null(False))
+           .where((MatchHistory.player_a == player.id)
+                  & MatchHistory.match_id.is_null(False)
+                  & ~MatchHistory.match_id.startswith("kalshi:"))
            .first())
     if row is not None:
         return row.match_id, "a"
     row = (MatchHistory
            .select()
-           .where((MatchHistory.player_b == player.id) & MatchHistory.match_id.is_null(False))
+           .where((MatchHistory.player_b == player.id)
+                  & MatchHistory.match_id.is_null(False)
+                  & ~MatchHistory.match_id.startswith("kalshi:"))
            .first())
     if row is not None:
         return row.match_id, "b"
