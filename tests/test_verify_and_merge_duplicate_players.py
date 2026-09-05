@@ -8,9 +8,10 @@ from database.db import db_historical, init_db_historical
 from database.historical.tennis import MatchHistory, Player
 from database.historical.tennis.models import (
     PlayerRankingHistory, PlayerStats, TennisAbstractElo, TennisPlayerRanking,
-    TennisPlayerStrength,
+    TennisPlayerStrength, Tournament,
 )
 from scripts.tennis import normalize_abbreviated_player_names as name_normalizer
+from scripts.tennis import tennisexplorer_identity as identity_helpers
 from scripts.tennis.verify_and_merge_duplicate_players import (
     _merge, _reconcile_verified_group, _sample_match_id,
 )
@@ -22,14 +23,14 @@ def clean_db():
     with db_historical.connection_context():
         for model in (
             MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
-            TennisAbstractElo, PlayerStats, PlayerRankingHistory, Player,
+            TennisAbstractElo, PlayerStats, PlayerRankingHistory, Tournament, Player,
         ):
             model.delete().execute()
     yield
     with db_historical.connection_context():
         for model in (
             MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
-            TennisAbstractElo, PlayerStats, PlayerRankingHistory, Player,
+            TennisAbstractElo, PlayerStats, PlayerRankingHistory, Tournament, Player,
         ):
             model.delete().execute()
 
@@ -189,3 +190,86 @@ def test_name_normalizer_fails_closed_when_live_lookup_raises(monkeypatch):
     monkeypatch.setattr(name_normalizer, "get_match_detail", fail_lookup)
 
     assert name_normalizer._verify_full_name(player) is None
+
+
+def test_identity_fallback_uses_only_a_validated_verified_rivals_next_match(monkeypatch):
+    unknown = _player("Cirstea S.", "cirstea")
+    rival = _player("Jessica Pegula", "pegula")
+    other = _player("Other Rival", "other")
+    tournament = Tournament.create(
+        year=2026, tournament_name="US Open WTA", city="",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    # The rival already has a direct TE row, making their profile a valid
+    # bridge. The unresolved player has only the synthetic Kalshi row.
+    _match("8001", rival, other)
+    MatchHistory.create(
+        match_id="kalshi:KXWTAMATCH-26SEP06PEGCIR", source="kalshi",
+        match_date="2026-09-06", tournament=tournament,
+        player_a=rival, player_b=unknown, fetched_at=datetime.now(timezone.utc),
+    )
+    next_match = {
+        "match_id": "9001",
+        "tournament": "US Open Women",
+        "start_raw": "06.09. 12:00",
+        "match_text": "Pegula J. - Cirstea S.",
+    }
+    monkeypatch.setattr(identity_helpers, "get_next_match", lambda name: next_match)
+    detail = {
+        "player_a_name": "Jessica Pegula",
+        "player_a_slug": "pegula",
+        "player_b_name": "Sorana-Mihaela Cirstea",
+        "player_b_slug": "cirstea",
+    }
+    monkeypatch.setattr(name_normalizer, "get_match_detail", lambda match_id: detail)
+
+    assert identity_helpers.sample_tennisexplorer_match_id(unknown) == ("9001", None)
+    assert name_normalizer._verify_full_name(unknown) == "Sorana-Mihaela Cirstea"
+
+
+def test_identity_fallback_recovers_historical_kalshi_row_from_one_real_match():
+    unknown = _player("Cirstea S.", "cirstea")
+    rival = _player("Jessica Pegula", "pegula")
+    resolved_identity = _player("Sorana-Mihaela Cirstea", "cirstea")
+    other = _player("Other Rival", "other")
+    tournament = Tournament.create(
+        year=2026, tournament_name="Cincinnati", city="",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    _match("8001", rival, other)  # proves the rival has a TE identity
+    MatchHistory.create(
+        match_id="kalshi:KXWTAMATCH-26AUG19CIRPEG", source="kalshi",
+        match_date="2026-08-19", tournament=tournament,
+        player_a=rival, player_b=unknown, fetched_at=datetime.now(timezone.utc),
+    )
+    MatchHistory.create(
+        match_id="9001", source="tennisexplorer", match_date="2026-08-19",
+        tournament=tournament, player_a=rival, player_b=resolved_identity,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+    assert identity_helpers.sample_tennisexplorer_match_id(unknown) == ("9001", None)
+
+
+def test_identity_fallback_rejects_next_match_without_exact_date_tournament_and_pair(monkeypatch):
+    unknown = _player("Cirstea S.", "cirstea")
+    rival = _player("Jessica Pegula", "pegula")
+    other = _player("Other Rival", "other")
+    tournament = Tournament.create(
+        year=2026, tournament_name="US Open WTA", city="",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    _match("8001", rival, other)
+    MatchHistory.create(
+        match_id="kalshi:KXWTAMATCH-26SEP06PEGCIR", source="kalshi",
+        match_date="2026-09-06", tournament=tournament,
+        player_a=rival, player_b=unknown, fetched_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(identity_helpers, "get_next_match", lambda name: {
+        "match_id": "9001",
+        "tournament": "Guadalajara WTA",
+        "start_raw": "07.09. 12:00",
+        "match_text": "Pegula J. - Someone E.",
+    })
+
+    assert identity_helpers.sample_tennisexplorer_match_id(unknown) is None

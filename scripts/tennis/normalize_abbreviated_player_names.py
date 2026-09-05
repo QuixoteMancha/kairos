@@ -40,7 +40,7 @@ if __package__ in {None, ""}:
 from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import Player
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
-from scripts.tennis.tennisexplorer_identity import sample_tennisexplorer_match_id
+from scripts.tennis.tennisexplorer_identity import detail_side_for_player, sample_tennisexplorer_match_id
 
 _ABBREVIATED_RE = re.compile(r"^.+ [A-Z]\.$")
 
@@ -49,7 +49,7 @@ def _find_abbreviated_players() -> list[Player]:
     return [p for p in Player.select() if _ABBREVIATED_RE.match(p.canonical_name)]
 
 
-def _sample_match_id(player: Player) -> tuple[str, str] | None:
+def _sample_match_id(player: Player) -> tuple[str, str | None] | None:
     """Delegates to the shared, fail-closed TennisExplorer id selector."""
     return sample_tennisexplorer_match_id(player)
 
@@ -65,7 +65,10 @@ def _verify_full_name(player: Player) -> str | None:
         return None
     if detail is None:
         return None
-    return detail.get(f"player_{side}_name")
+    verified_side = detail_side_for_player(player, detail)
+    if verified_side is None:
+        return None
+    return detail.get(f"player_{verified_side}_name")
 
 
 def main() -> None:

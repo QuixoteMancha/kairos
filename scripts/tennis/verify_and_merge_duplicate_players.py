@@ -67,7 +67,7 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisPlayerStrength,
 )
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
-from scripts.tennis.tennisexplorer_identity import sample_tennisexplorer_match_id
+from scripts.tennis.tennisexplorer_identity import detail_side_for_player, sample_tennisexplorer_match_id
 
 
 def _find_ambiguous_groups() -> list[list[Player]]:
@@ -94,7 +94,7 @@ def _match_count(player: Player) -> int:
             + MatchHistory.select().where(MatchHistory.player_b == player.id).count())
 
 
-def _sample_match_id(player: Player) -> tuple[str, str] | None:
+def _sample_match_id(player: Player) -> tuple[str, str | None] | None:
     """Un `match_id` REAL de TennisExplorer de `player`, con el lado
     (a/b) en el que aparece. 2026-09-05, bug real encontrado en vivo:
     algunas filas de `MatchHistory` tienen un `match_id` SINTÉTICO
@@ -124,7 +124,10 @@ def _verify_real_slug(player: Player) -> str | None:
         return None
     if detail is None:
         return None
-    return detail.get(f"player_{side}_slug")
+    verified_side = detail_side_for_player(player, detail)
+    if verified_side is None:
+        return None
+    return detail.get(f"player_{verified_side}_slug")
 
 
 def _newer(left, right) -> bool:
