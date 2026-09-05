@@ -10,10 +10,14 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from database.historical.tennis.models import MatchHistory, Player
-from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_next_match
+from database.historical.tennis.matchtracking import resolve_scanned_match_date
+from database.historical.tennis.models import Match, MatchHistory, Player
+from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import (
+    get_next_match, get_player_match_history,
+)
 
 _TOURNAMENT_NOISE = frozenset({"atp", "wta", "itf", "men", "women"})
+_MAX_TICKER_TO_MATCH_DAYS = 3
 
 
 def _direct_tennisexplorer_match_id(player: Player) -> tuple[str, str] | None:
@@ -123,6 +127,104 @@ def _sample_from_existing_verified_match(player: Player) -> tuple[str, None] | N
     return None
 
 
+def _history_row_date(raw_date: str | None, reference_date: str) -> str | None:
+    """Convert TE's current-year ``DD.MM.`` history date to ISO."""
+    if not raw_date:
+        return None
+    match = re.fullmatch(r"\s*(\d{1,2})\.(\d{1,2})\.\s*", raw_date)
+    if match is None:
+        return None
+    try:
+        return date(
+            int(reference_date[:4]), int(match.group(2)), int(match.group(1)),
+        ).isoformat()
+    except ValueError:
+        return None
+
+
+def _is_ticker_date_window(history_date: str | None, ticker_date: str) -> bool:
+    """Whether a TE result is within the observed Kalshi listing window.
+
+    KX*MATCH tickers are published up to three calendar days before the
+    scheduled match (not necessarily on the match date). A negative or wider
+    gap is never accepted; candidate selection still requires the exact rival
+    name and final match-detail identity confirmation below.
+    """
+    if history_date is None:
+        return False
+    try:
+        delta = (date.fromisoformat(history_date) - date.fromisoformat(ticker_date)).days
+    except ValueError:
+        return False
+    return 0 <= delta <= _MAX_TICKER_TO_MATCH_DAYS
+
+
+def _sample_from_verified_opponent_history(player: Player) -> tuple[str, None] | None:
+    """Recover a synthetic player from the verified rival's TE history.
+
+    Old Kalshi rows can carry the series expiration as ``match_date`` and
+    omit a tournament entirely. The ticker is the listing date; TE results
+    can be up to three days later. We find exactly one numeric TE history row
+    in that narrow forward window on the known rival's verified profile; its
+    opponent text must also confirm the unresolved player's name.
+    ``get_match_detail`` remains the final identity confirmation performed
+    by the caller.
+    """
+    synthetic_rows = (MatchHistory
+                      .select()
+                      .where(
+                          ((MatchHistory.player_a == player.id) | (MatchHistory.player_b == player.id))
+                          & MatchHistory.match_id.startswith("kalshi:")
+                      ))
+    history_cache: dict[tuple[int, int], list[dict]] = {}
+    for synthetic in synthetic_rows:
+        scanned = Match.get_or_none(Match.match_history == synthetic.id)
+        if scanned is None:
+            continue
+        ticker_date = resolve_scanned_match_date(scanned.market_id, scanned.close_time)
+        if ticker_date is None:
+            continue
+        opponent = synthetic.player_b if synthetic.player_a_id == player.id else synthetic.player_a
+        if (
+            opponent is None
+            or not opponent.slug
+            or _direct_tennisexplorer_match_id(opponent) is None
+        ):
+            continue
+        cache_key = opponent.id, int(ticker_date[:4])
+        if cache_key not in history_cache:
+            try:
+                history_cache[cache_key] = get_player_match_history(
+                    opponent.slug, opponent.canonical_name, years=[cache_key[1]],
+                )
+            except Exception:
+                history_cache[cache_key] = []
+        candidates = [
+            match for match in history_cache[cache_key]
+            if str(match.get("match_id") or "").isdigit()
+            and _is_ticker_date_window(
+                _history_row_date(match.get("date"), ticker_date), ticker_date,
+            )
+            and _match_text_identifies_pair(
+                f"{opponent.canonical_name} - {match.get('opponent') or ''}",
+                player.canonical_name,
+                opponent.canonical_name,
+            )
+        ]
+        # A missing synthetic tournament is the fact being repaired, not
+        # evidence we can fabricate.  A present one must still agree.
+        if synthetic.tournament_id:
+            candidates = [
+                match for match in candidates
+                if _same_tournament(
+                    synthetic.tournament.tournament_name, match.get("tournament"),
+                )
+            ]
+        if len(candidates) == 1:
+            return str(candidates[0]["match_id"]), None
+    return None
+
+
 def _sample_from_verified_opponent_next_match(player: Player) -> tuple[str, None] | None:
     """Use a rival's next match only after validating it against a Kalshi row.
 
@@ -169,16 +271,16 @@ def sample_tennisexplorer_match_id(player: Player) -> tuple[str, str | None] | N
     """Return a verifiable TennisExplorer match id and the player's side.
 
     First prefers a numeric id directly attached to the player. It then
-    checks for exactly one already-stored real match matching a synthetic
-    row's opponent/date/tournament (the historical ordering-race repair).
-    Finally, it can use a *verified rival's* next match, but only after that
-    next match agrees with the player's Kalshi row on date, tournament, and
+    checks an already-stored real match and the verified rival's TE history,
+    both with an exact pair/date match. Finally, it can use a *verified
+    rival's* next match after validating the Kalshi date, tournament, and
     both abbreviated names. Fallback sides are unknown until the real
     match-detail is fetched, so they return ``None`` as the side marker.
     """
     return (
         _direct_tennisexplorer_match_id(player)
         or _sample_from_existing_verified_match(player)
+        or _sample_from_verified_opponent_history(player)
         or _sample_from_verified_opponent_next_match(player)
     )
 
@@ -191,5 +293,22 @@ def detail_side_for_player(player: Player, detail: dict) -> str | None:
         side for side in ("a", "b")
         if detail.get(f"player_{side}_name")
         and _names_confirm_identity(player.canonical_name, detail[f"player_{side}_name"])
+    ]
+    return sides[0] if len(sides) == 1 else None
+
+
+def detail_side_for_verified_slug(player: Player, detail: dict) -> str | None:
+    """Find a unique detail side by the pre-verified TE slug.
+
+    This is deliberately reserved for the rival-history fallback, whose
+    date+rival+abbreviated-name chain already identified the match. It covers
+    benign full-name variants such as ``Greet``/``Greetje`` that the strict
+    name matcher correctly refuses to equate on its own.
+    """
+    if not player.slug:
+        return None
+    sides = [
+        side for side in ("a", "b")
+        if detail.get(f"player_{side}_slug") == player.slug
     ]
     return sides[0] if len(sides) == 1 else None

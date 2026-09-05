@@ -40,7 +40,10 @@ if __package__ in {None, ""}:
 from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import Player
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
-from scripts.tennis.tennisexplorer_identity import detail_side_for_player, sample_tennisexplorer_match_id
+from scripts.tennis.tennisexplorer_identity import (
+    detail_side_for_player, detail_side_for_verified_slug,
+    sample_tennisexplorer_match_id,
+)
 
 _ABBREVIATED_RE = re.compile(r"^.+ [A-Z]\.$")
 
@@ -66,6 +69,8 @@ def _verify_full_name(player: Player) -> str | None:
     if detail is None:
         return None
     verified_side = detail_side_for_player(player, detail)
+    if verified_side is None and side is None:
+        verified_side = detail_side_for_verified_slug(player, detail)
     if verified_side is None:
         return None
     return detail.get(f"player_{verified_side}_name")

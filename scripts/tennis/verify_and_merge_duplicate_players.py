@@ -67,7 +67,10 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisPlayerStrength,
 )
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
-from scripts.tennis.tennisexplorer_identity import detail_side_for_player, sample_tennisexplorer_match_id
+from scripts.tennis.tennisexplorer_identity import (
+    detail_side_for_player, detail_side_for_verified_slug,
+    sample_tennisexplorer_match_id,
+)
 
 
 def _find_ambiguous_groups() -> list[list[Player]]:
@@ -125,6 +128,8 @@ def _verify_real_slug(player: Player) -> str | None:
     if detail is None:
         return None
     verified_side = detail_side_for_player(player, detail)
+    if verified_side is None and side is None:
+        verified_side = detail_side_for_verified_slug(player, detail)
     if verified_side is None:
         return None
     return detail.get(f"player_{verified_side}_slug")

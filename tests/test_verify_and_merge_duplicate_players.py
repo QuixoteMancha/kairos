@@ -7,7 +7,7 @@ import pytest
 from database.db import db_historical, init_db_historical
 from database.historical.tennis import MatchHistory, Player
 from database.historical.tennis.models import (
-    PlayerRankingHistory, PlayerStats, TennisAbstractElo, TennisPlayerRanking,
+    Match, PlayerRankingHistory, PlayerStats, TennisAbstractElo, TennisPlayerRanking,
     TennisPlayerStrength, Tournament,
 )
 from scripts.tennis import normalize_abbreviated_player_names as name_normalizer
@@ -22,14 +22,14 @@ def clean_db():
     init_db_historical()
     with db_historical.connection_context():
         for model in (
-            MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
+            Match, MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
             TennisAbstractElo, PlayerStats, PlayerRankingHistory, Tournament, Player,
         ):
             model.delete().execute()
     yield
     with db_historical.connection_context():
         for model in (
-            MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
+            Match, MatchHistory, TennisPlayerStrength, TennisPlayerRanking,
             TennisAbstractElo, PlayerStats, PlayerRankingHistory, Tournament, Player,
         ):
             model.delete().execute()
@@ -251,6 +251,83 @@ def test_identity_fallback_recovers_historical_kalshi_row_from_one_real_match():
     assert identity_helpers.sample_tennisexplorer_match_id(unknown) == ("9001", None)
 
 
+def test_identity_fallback_recovers_from_verified_rival_history_at_ticker_date(monkeypatch):
+    unknown = _player("Marcelo Tomas Barrios Vera", "barrios-vera")
+    rival = _player("Alexander Blockx", "blockx")
+    real_identity = _player("Tomas Barrios Vera", "barrios-vera")
+    other = _player("Other Rival", "other")
+    _match("8001", rival, other)  # proves the rival has a direct TE match
+    synthetic = MatchHistory.create(
+        match_id="kalshi:KXATPMATCH-26AUG30BLOBAR", source="kalshi",
+        # This is the incorrect series-expiration date persisted before the
+        # ticker-date fix; it must not be used for the history lookup.
+        match_date="2026-09-13", player_a=rival, player_b=unknown,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    Match.create(
+        market_id="KXATPMATCH-26AUG30BLOBAR", ticker_a="A", ticker_b="B",
+        tour="ATP", player_a_name=rival.canonical_name,
+        player_b_name=unknown.canonical_name, best_of=3,
+        close_time="2026-09-13T15:00:00Z", detected_at=datetime.now(timezone.utc),
+        match_history=synthetic,
+    )
+    monkeypatch.setattr(identity_helpers, "get_player_match_history", lambda *args, **kwargs: [{
+        "date": "31.08.", "tournament": "US Open",
+        "opponent": "Barrios Vera M. T.", "match_id": "9001",
+    }])
+
+    assert identity_helpers.sample_tennisexplorer_match_id(unknown) == ("9001", None)
+
+
+def test_identity_history_fallback_rejects_ambiguous_or_wrong_date_candidates(monkeypatch):
+    unknown = _player("Marcelo Tomas Barrios Vera", "barrios-vera")
+    rival = _player("Alexander Blockx", "blockx")
+    other = _player("Other Rival", "other")
+    _match("8001", rival, other)
+    synthetic = MatchHistory.create(
+        match_id="kalshi:KXATPMATCH-26AUG30BLOBAR", source="kalshi",
+        player_a=rival, player_b=unknown, fetched_at=datetime.now(timezone.utc),
+    )
+    Match.create(
+        market_id="KXATPMATCH-26AUG30BLOBAR", ticker_a="A", ticker_b="B",
+        tour="ATP", player_a_name=rival.canonical_name,
+        player_b_name=unknown.canonical_name, best_of=3,
+        close_time="2026-09-13T15:00:00Z", detected_at=datetime.now(timezone.utc),
+        match_history=synthetic,
+    )
+    monkeypatch.setattr(identity_helpers, "get_player_match_history", lambda *args, **kwargs: [
+        {"date": "30.08.", "opponent": "Barrios Vera M. T.", "match_id": "9001"},
+        {"date": "30.08.", "opponent": "Barrios Vera M. T.", "match_id": "9002"},
+    ])
+
+    assert identity_helpers.sample_tennisexplorer_match_id(unknown) is None
+
+
+def test_history_fallback_can_confirm_a_full_name_variant_by_unique_slug(monkeypatch):
+    unknown = _player("Greet Minnen", "minnen")
+    rival = _player("Jeline Vandromme", "vandromme")
+    other = _player("Other Rival", "other")
+    _match("8001", rival, other)
+    synthetic = MatchHistory.create(
+        match_id="kalshi:KXWTAMATCH-26AUG24MINVAN", source="kalshi",
+        player_a=rival, player_b=unknown, fetched_at=datetime.now(timezone.utc),
+    )
+    Match.create(
+        market_id="KXWTAMATCH-26AUG24MINVAN", ticker_a="A", ticker_b="B",
+        tour="WTA", player_a_name=rival.canonical_name,
+        player_b_name=unknown.canonical_name, best_of=3,
+        close_time="2026-09-07T15:00:00Z", detected_at=datetime.now(timezone.utc),
+        match_history=synthetic,
+    )
+    monkeypatch.setattr(identity_helpers, "get_player_match_history", lambda *args, **kwargs: [{
+        "date": "24.08.", "opponent": "Minnen G.", "match_id": "9001",
+    }])
+    monkeypatch.setattr(name_normalizer, "get_match_detail", lambda match_id: {
+        "player_a_name": "Jeline Vandromme", "player_a_slug": "vandromme",
+        "player_b_name": "Greetje Minnen", "player_b_slug": "minnen",
+    })
+
+    assert name_normalizer._verify_full_name(unknown) == "Greetje Minnen"
 def test_identity_fallback_rejects_next_match_without_exact_date_tournament_and_pair(monkeypatch):
     unknown = _player("Cirstea S.", "cirstea")
     rival = _player("Jessica Pegula", "pegula")
