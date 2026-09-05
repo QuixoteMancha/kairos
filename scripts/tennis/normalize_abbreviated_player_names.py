@@ -32,10 +32,15 @@ from __future__ import annotations
 
 import re
 import sys
-from collections import defaultdict
+from pathlib import Path
 
-from database.historical.tennis.models import MatchHistory, Player
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from database.db import db_historical, init_db_historical
+from database.historical.tennis.models import Player
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
+from scripts.tennis.tennisexplorer_identity import sample_tennisexplorer_match_id
 
 _ABBREVIATED_RE = re.compile(r"^.+ [A-Z]\.$")
 
@@ -45,26 +50,8 @@ def _find_abbreviated_players() -> list[Player]:
 
 
 def _sample_match_id(player: Player) -> tuple[str, str] | None:
-    """Ver docstring equivalente en `verify_and_merge_duplicate_players.py`
-    -- excluye `match_id` sintéticos (`"kalshi:..."`), fail-closed si no
-    hay ninguno real."""
-    row = (MatchHistory
-           .select()
-           .where((MatchHistory.player_a == player.id)
-                  & MatchHistory.match_id.is_null(False)
-                  & ~MatchHistory.match_id.startswith("kalshi:"))
-           .first())
-    if row is not None:
-        return row.match_id, "a"
-    row = (MatchHistory
-           .select()
-           .where((MatchHistory.player_b == player.id)
-                  & MatchHistory.match_id.is_null(False)
-                  & ~MatchHistory.match_id.startswith("kalshi:"))
-           .first())
-    if row is not None:
-        return row.match_id, "b"
-    return None
+    """Delegates to the shared, fail-closed TennisExplorer id selector."""
+    return sample_tennisexplorer_match_id(player)
 
 
 def _verify_full_name(player: Player) -> str | None:
@@ -72,7 +59,10 @@ def _verify_full_name(player: Player) -> str | None:
     if sample is None:
         return None
     match_id, side = sample
-    detail = get_match_detail(match_id)
+    try:
+        detail = get_match_detail(match_id)
+    except Exception:
+        return None
     if detail is None:
         return None
     return detail.get(f"player_{side}_name")
@@ -83,38 +73,40 @@ def main() -> None:
     mode = "APLICANDO CAMBIOS" if apply else "DRY-RUN (nada se modifica)"
     print(f"Modo: {mode}\n")
 
-    players = _find_abbreviated_players()
-    print(f"Jugadores con nombre abreviado a verificar: {len(players)}\n")
+    init_db_historical()
+    with db_historical.connection_context():
+        players = _find_abbreviated_players()
+        print(f"Jugadores con nombre abreviado a verificar: {len(players)}\n")
 
-    n_renamed = 0
-    n_needs_merge = 0
-    n_unverified = 0
+        n_renamed = 0
+        n_needs_merge = 0
+        n_unverified = 0
 
-    for p in players:
-        full_name = _verify_full_name(p)
-        if full_name is None:
-            print(f"id={p.id} ({p.canonical_name!r}) -> NO VERIFICADO (sin match_id real o fetch falló)")
-            n_unverified += 1
-            continue
+        for p in players:
+            full_name = _verify_full_name(p)
+            if full_name is None:
+                print(f"id={p.id} ({p.canonical_name!r}) -> NO VERIFICADO (sin match_id real o fetch falló)")
+                n_unverified += 1
+                continue
 
-        if full_name == p.canonical_name:
-            # Ya estaba completo pese a matchear el regex (raro, pero
-            # posible con nombres de un solo apellido real de 1 letra).
-            continue
+            if full_name == p.canonical_name:
+                # Ya estaba completo pese a matchear el regex (raro, pero
+                # posible con nombres de un solo apellido real de 1 letra).
+                continue
 
-        collision = Player.get_or_none((Player.canonical_name == full_name) & (Player.id != p.id))
-        if collision is not None:
-            print(f"id={p.id} ({p.canonical_name!r}) -> REQUIERE FUSIÓN: nombre completo real "
-                  f"{full_name!r} ya existe como id={collision.id} -- no se renombra, "
-                  f"revisar con verify_and_merge_duplicate_players.py")
-            n_needs_merge += 1
-            continue
+            collision = Player.get_or_none((Player.canonical_name == full_name) & (Player.id != p.id))
+            if collision is not None:
+                print(f"id={p.id} ({p.canonical_name!r}) -> REQUIERE FUSIÓN: nombre completo real "
+                      f"{full_name!r} ya existe como id={collision.id} -- no se renombra, "
+                      f"revisar con verify_and_merge_duplicate_players.py")
+                n_needs_merge += 1
+                continue
 
-        print(f"id={p.id}: {p.canonical_name!r} -> {full_name!r}")
-        if apply:
-            p.canonical_name = full_name
-            p.save()
-        n_renamed += 1
+            print(f"id={p.id}: {p.canonical_name!r} -> {full_name!r}")
+            if apply:
+                p.canonical_name = full_name
+                p.save()
+            n_renamed += 1
 
     print(f"\nResumen: renombrados={n_renamed}  requieren_fusion={n_needs_merge}  no_verificados={n_unverified}")
     if not apply:

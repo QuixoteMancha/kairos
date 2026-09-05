@@ -10,6 +10,7 @@ from database.historical.tennis.models import (
     PlayerRankingHistory, PlayerStats, TennisAbstractElo, TennisPlayerRanking,
     TennisPlayerStrength,
 )
+from scripts.tennis import normalize_abbreviated_player_names as name_normalizer
 from scripts.tennis.verify_and_merge_duplicate_players import (
     _merge, _reconcile_verified_group, _sample_match_id,
 )
@@ -44,6 +45,33 @@ def _match(match_id: str, player_a: Player, player_b: Player) -> MatchHistory:
         match_id=match_id, source="tennisexplorer", player_a=player_a,
         player_b=player_b, fetched_at=datetime.now(timezone.utc),
     )
+
+
+def test_merge_skips_orphan_model_tables_without_rolling_back(monkeypatch):
+    major = _player("Major Player", "major-real")
+    minor = _player("Minor Player", "minor-real")
+    match = _match("1001", minor, major)
+    PlayerStats.create(
+        player_name=minor.canonical_name, surface="Hard", player=minor,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+    real_table_exists = db_historical.table_exists
+    absent_tables = {
+        TennisAbstractElo._meta.table_name,
+        PlayerRankingHistory._meta.table_name,
+    }
+    monkeypatch.setattr(
+        db_historical,
+        "table_exists",
+        lambda table_name: False if table_name in absent_tables else real_table_exists(table_name),
+    )
+
+    _merge(minor, major, apply=True)
+
+    assert Player.get_or_none(Player.id == minor.id) is None
+    assert MatchHistory.get_by_id(match.id).player_a_id == major.id
+    assert PlayerStats.get().player_id == major.id
 
 
 def test_merge_moves_all_player_references_and_keeps_latest_conflicts():
@@ -131,3 +159,33 @@ def test_sample_match_id_ignores_synthetic_ids():
     _match("3001", player, opponent)
 
     assert _sample_match_id(player) == ("3001", "a")
+
+
+def test_both_identity_scripts_only_use_numeric_tennisexplorer_ids():
+    player = _player("Verified Player")
+    opponent = _player("Opponent")
+    MatchHistory.create(
+        match_id="recentform:verified|opponent", source="recentform",
+        player_a=player, player_b=opponent, fetched_at=datetime.now(timezone.utc),
+    )
+    MatchHistory.create(
+        match_id="not-a-match-detail-id", source="tennisexplorer",
+        player_a=player, player_b=opponent, fetched_at=datetime.now(timezone.utc),
+    )
+    _match("3001", player, opponent)
+
+    assert _sample_match_id(player) == ("3001", "a")
+    assert name_normalizer._sample_match_id(player) == ("3001", "a")
+
+
+def test_name_normalizer_fails_closed_when_live_lookup_raises(monkeypatch):
+    player = _player("Player V.")
+    opponent = _player("Opponent")
+    _match("3001", player, opponent)
+
+    def fail_lookup(_match_id):
+        raise RuntimeError("network unavailable")
+
+    monkeypatch.setattr(name_normalizer, "get_match_detail", fail_lookup)
+
+    assert name_normalizer._verify_full_name(player) is None

@@ -67,6 +67,7 @@ from database.historical.tennis.models import (
     TennisPlayerRanking, TennisPlayerStrength,
 )
 from outer_apis.scrapers.tennis.tennisexplorer_player_scraper import get_match_detail
+from scripts.tennis.tennisexplorer_identity import sample_tennisexplorer_match_id
 
 
 def _find_ambiguous_groups() -> list[list[Player]]:
@@ -104,20 +105,7 @@ def _sample_match_id(player: Player) -> tuple[str, str] | None:
     None si `player` no tiene NINGÚN `match_id` real (todas sus filas
     son sintéticas -- jugador detectado solo vía Kalshi, TennisExplorer
     no lo publicó todavía), nunca se intenta con el placeholder."""
-    for side, field in (("a", MatchHistory.player_a), ("b", MatchHistory.player_b)):
-        rows = (MatchHistory
-                .select(MatchHistory.match_id)
-                .where(
-                    (field == player.id)
-                    & (MatchHistory.source == "tennisexplorer")
-                    & MatchHistory.match_id.is_null(False)
-                ))
-        for row in rows:
-            # Los ids de ``match-detail`` de TennisExplorer son numéricos;
-            # así se excluyen placeholders ``kalshi:`` y ``recentform:``.
-            if row.match_id.isdigit():
-                return row.match_id, side
-    return None
+    return sample_tennisexplorer_match_id(player)
 
 
 def _verify_real_slug(player: Player) -> str | None:
