@@ -1295,3 +1295,75 @@ def get_match_duration(match_id: str) -> dict[str, Any] | None:
     if result["total_minutes"] is None and all(result[f"set_{i}_minutes"] is None for i in range(1, 6)):
         return None
     return result
+
+
+# 2026-09-05, pedido explícito del usuario ("investiga si Flashscore
+# expone timestamps de inicio/fin real") -- encontrados en vivo en el
+# MISMO feed diario que ya se pide para `find_live_match_identity`
+# (`_fetch_daily_matches`, `f_2_{day}_3_en_1`), dos campos nunca
+# mapeados antes: `AD` (epoch de inicio real, no solo la fecha
+# programada -- ya se usaba como `timestamp` en `_parse_record`, pero
+# solo para la FECHA, tirando la hora) y `AO` (epoch de fin real, sin
+# mapear hasta ahora). Verificado en vivo contra 9 partidos reales
+# finalizados: `(AO-AD)/60` coincide con `get_match_duration()['total_minutes']`
+# dentro de +/-1 minuto (la diferencia es solo redondeo a minuto entero
+# de `RB` en el feed de duración) -- confirma que `AD`/`AO` son de
+# verdad el reloj real del partido, no un artefacto.
+#
+# LÍMITE investigado y confirmado: no hay forma de saber cuándo terminó
+# CADA SET por separado -- ni este feed ni `df_su_1` (duración por set,
+# sin hora de reloj) ni `df_mh_1` (punto a punto, sin ningún timestamp)
+# la exponen. Peor: la suma de las duraciones por set de `df_su_1`
+# coincide EXACTO con el total (`RB`) -- el descanso entre sets no
+# aparece como partida aparte, queda mezclado dentro de la duración de
+# alguno de los sets adyacentes, sin poder aislarlo. Por eso esta
+# función solo devuelve el timing del PARTIDO completo -- deliberadamente
+# NO ofrece límites de set (sería fabricar precisión que no existe).
+def get_match_timing(match_id: str) -> dict[str, Any] | None:
+    """Hora real de inicio/fin de un partido YA FINALIZADO, vía los
+    campos `AD`/`AO` del feed diario de Flashscore (`f_2_{day}_3_en_1`,
+    el mismo que usa `find_live_match_identity`/`_fetch_daily_matches`).
+
+    Busca el partido en los feeds de ayer/hoy/mañana (mismo margen que
+    `find_live_match_identity`, un partido finalizado hoy pudo haber
+    empezado ayer en huso horario distinto). Fail-closed: `None` si no
+    se encuentra el `match_id` en ninguno de los 3 días, si el partido
+    todavía no finalizó (`AB` != 3, `AO` ausente -- no hay hora de fin
+    real todavía), o si `AD` falta.
+
+    Returns: {"start_at": "2026-09-05T18:30:00+00:00",
+    "end_at": "2026-09-05T21:13:57+00:00", "duration_minutes": 164} --
+    timestamps ISO-8601 en UTC. `duration_minutes` es `(AO-AD)/60`
+    redondeado, NO el mismo valor que `get_match_duration()['total_minutes']`
+    (ese viene de `RB`, un campo de texto "H:MM" ya redondeado a minuto
+    por Flashscore) -- pueden diferir en +/-1 minuto, ambos son
+    correctos, miden lo mismo con distinta fuente/redondeo.
+
+    NO incluye timing por set -- ver el comentario arriba de esta
+    función para el porqué (límite real de los datos, no un TODO)."""
+    for day_offset in (-1, 0, 1):
+        try:
+            html = _fetch_daily_matches(day_offset)
+        except Exception:
+            continue
+        if html is None:
+            continue
+        for block in html.split("~AA÷")[1:]:
+            if block.split("¬", 1)[0] != match_id:
+                continue
+            status = _field(block, "AB")
+            if status != "3":
+                return None  # partido no finalizado -- sin hora de fin real todavía
+            start_raw = _field(block, "AD")
+            end_raw = _field(block, "AO")
+            if not start_raw or not start_raw.isdigit() or not end_raw or not end_raw.isdigit():
+                return None
+            start_ts, end_ts = int(start_raw), int(end_raw)
+            if end_ts <= start_ts:
+                return None  # fail-closed: nunca un fin antes/igual al inicio
+            return {
+                "start_at": datetime.fromtimestamp(start_ts, tz=UTC).isoformat(),
+                "end_at": datetime.fromtimestamp(end_ts, tz=UTC).isoformat(),
+                "duration_minutes": round((end_ts - start_ts) / 60),
+            }
+    return None
