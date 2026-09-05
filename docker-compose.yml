@@ -397,6 +397,25 @@ services:
     restart: unless-stopped
     networks: [kairos_net]
 
+  tennis_match_timing_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_match_timing_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_match_timing_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      # 2026-09-05, pedido explícito del usuario: hora real de inicio/
+      # fin de partidos recién finalizados (ver
+      # workers/tennis_match_timing_worker.py). Intervalo más largo que
+      # los workers en vivo -- la ventana de captura dura días, no
+      # segundos, no hace falta correr cada minuto.
+      TENNIS_MATCH_TIMING_INTERVAL_SECONDS: "300"
+      TENNIS_MATCH_TIMING_BATCH_SIZE: "40"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+
   tennis_match_stats_orientation_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_tennis_match_stats_orientation_worker

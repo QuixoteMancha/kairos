@@ -395,6 +395,15 @@ def _add_tennis_set_probability_tick(database: Database) -> None:
     database.create_tables([TennisSetProbabilityTick], safe=True)
 
 
+def _add_match_duration_timing(database: Database) -> None:
+    """Hora real de inicio/fin del partido en `MatchDuration` --
+    2026-09-05, ver `MatchDuration.start_at`/`end_at` en models.py."""
+    for column in ("start_at TIMESTAMP", "end_at TIMESTAMP"):
+        database.execute_sql(
+            f"ALTER TABLE tennis_match_duration ADD COLUMN IF NOT EXISTS {column}"
+        )
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -424,5 +433,9 @@ HISTORICAL_MIGRATIONS = (
     Migration(
         20, "add_tennis_set_probability_tick_20260901",
         _add_tennis_set_probability_tick,
+    ),
+    Migration(
+        21, "add_match_duration_timing_20260905",
+        _add_match_duration_timing,
     ),
 )

@@ -217,6 +217,18 @@ class MatchDuration(HistoricalBaseModel):
     set_3_minutes = IntegerField(null=True)
     set_4_minutes = IntegerField(null=True)
     set_5_minutes = IntegerField(null=True)
+    # 2026-09-05, pedido explícito del usuario ("engancharlo a worker y
+    # hacerlo persistir en base") -- hora real de inicio/fin del
+    # partido completo, vía `flashscore_scraper.get_match_timing()`
+    # (campos `AD`/`AO` del feed diario, ver esa función para el
+    # reverse-engineering). Deliberadamente NO hay límites por set acá
+    # -- investigado y confirmado que no son aislables de los datos
+    # disponibles (ver docstring de `get_match_timing`). `null=True`:
+    # la ventana de captura es angosta (±1 día desde que termina el
+    # partido, el feed diario no cubre más atrás), la inmensa mayoría
+    # de `MatchDuration` nunca tendrá esto completado.
+    start_at = DateTimeField(null=True)
+    end_at = DateTimeField(null=True)
     fetched_at = DateTimeField()
 
 

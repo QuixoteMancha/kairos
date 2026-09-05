@@ -1504,6 +1504,87 @@ def save_match_duration(match_history_id: int, flashscore_match_id: str, duratio
         return False
 
 
+def _parse_timing_timestamp(raw: str | None):
+    """ISO string -> `datetime` real -- guardar el string crudo dejaría
+    a Postgres tratando la columna `TIMESTAMP` como texto sin parsear
+    en algunos backends de test (sqlite), y no es el tipo que el modelo
+    espera. Fail-closed: None si no es un ISO parseable."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def save_match_timing(match_history_id: int, flashscore_match_id: str, timing_data: dict[str, Any]) -> bool:
+    """Persiste la hora real de inicio/fin del partido (`MatchDuration.
+    start_at`/`end_at`) -- 2026-09-05, pedido explícito del usuario
+    ("engancharlo a worker y hacerlo persistir en base") sobre
+    `flashscore_scraper.get_match_timing()`. Mismo criterio idempotente
+    que `save_match_duration`: reusa la fila `MatchDuration` existente
+    por `flashscore_match_id` si ya la creó `enrich_match_durations.py`
+    (o esta misma función para el otro jugador del partido) -- solo
+    completa `start_at`/`end_at` si vienen NULL, nunca sobreescribe un
+    valor ya guardado con uno distinto.
+
+    Returns: `True` si se guardó/conectó algo nuevo, `False` si
+    `match_history_id` no existe o `timing_data` viene vacío.
+    Fail-closed: `False` ante cualquier excepción de DB."""
+    if not timing_data:
+        return False
+    try:
+        init_db_historical()
+        match = MatchHistory.get_or_none(MatchHistory.id == match_history_id)
+        if match is None:
+            return False
+
+        existing = MatchDuration.get_or_none(MatchDuration.flashscore_match_id == flashscore_match_id)
+        start_at = _parse_timing_timestamp(timing_data.get("start_at"))
+        end_at = _parse_timing_timestamp(timing_data.get("end_at"))
+        if existing is None:
+            existing = MatchDuration.create(
+                flashscore_match_id=flashscore_match_id,
+                start_at=start_at, end_at=end_at,
+                fetched_at=_now(),
+            )
+        else:
+            changed = False
+            if existing.start_at is None and start_at:
+                existing.start_at = start_at
+                changed = True
+            if existing.end_at is None and end_at:
+                existing.end_at = end_at
+                changed = True
+            if changed:
+                existing.save()
+
+        if match.duration_id is None:
+            match.duration = existing
+            match.updated_at = _now()
+            match.save()
+        return True
+    except Exception:
+        return False
+
+
+def has_match_timing(match_history_id: int) -> bool:
+    """Fail-closed: `False` ante cualquier fallo de DB, si
+    `match_history_id` no existe, o si no tiene `duration` conectado
+    todavía -- usado por el worker para saltar partidos ya procesados
+    (con `start_at`) sin re-pedir Flashscore."""
+    try:
+        init_db_historical()
+        match = MatchHistory.get_or_none(MatchHistory.id == match_history_id)
+        return (
+            match is not None
+            and match.duration_id is not None
+            and match.duration.start_at is not None
+        )
+    except Exception:
+        return False
+
+
 def has_match_duration(match_history_id: int) -> bool:
     """Fail-closed: `False` ante cualquier fallo de DB o si
     `match_history_id` no existe -- usado por el pipeline de
