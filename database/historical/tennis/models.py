@@ -130,6 +130,14 @@ class Tournament(HistoricalBaseModel):
     country = CharField(null=True)
     lat = FloatField(null=True)
     lon = FloatField(null=True)
+    # 2026-09-06, pedido explícito del usuario ("la altura donde se
+    # juega el torneo... eso ha impactado a jugadoras como Svitolina")
+    # -- metros sobre el nivel del mar, vía
+    # `outer_apis.scrapers.weather.open_meteo.get_elevation` (mismo
+    # endpoint que ya usamos para el clima, sin request nuevo aparte).
+    # No cambia nunca por torneo -- se backfillea una sola vez por
+    # (lat, lon), no en cada scan.
+    elevation_m = FloatField(null=True)
     fetched_at = DateTimeField()
 
 

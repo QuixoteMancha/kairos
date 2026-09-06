@@ -71,6 +71,39 @@ def get_weather_at(lat: float, lon: float, when: datetime) -> dict[str, Any] | N
     return {"temperature_c": temp, "humidity_pct": humidity, "wind_kmh": wind}
 
 
+def get_elevation(lat: float, lon: float) -> float | None:
+    """Elevación real (metros sobre el nivel del mar) en (lat, lon) --
+    2026-09-06, pedido explícito del usuario ("creo que depende... la
+    altura donde se juega el torneo, eso ha impactado a jugadoras como
+    Svitolina"). Encontrada en vivo: el mismo endpoint de archivo que ya
+    usa `get_weather_at`/`get_daily_weather` para el clima YA trae
+    `elevation` en la respuesta, sin pedir nada nuevo (metadata de la
+    ubicación, no depende del rango de fechas) -- se pide con un rango
+    de 1 día cualquiera solo para tener una respuesta válida, el campo
+    `elevation` es el mismo sin importar qué día se consulte.
+
+    Fail-closed: None ante cualquier fallo de red/parseo, o si el campo
+    no viene en la respuesta -- nunca fabrica un valor."""
+    try:
+        resp = requests.get(
+            _BASE_URL,
+            params={
+                "latitude": lat, "longitude": lon,
+                "start_date": "2020-01-01", "end_date": "2020-01-01",
+                "hourly": "temperature_2m",
+                "timezone": "UTC",
+            },
+            timeout=_REQUEST_TIMEOUT_S,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+    elevation = data.get("elevation")
+    return float(elevation) if isinstance(elevation, (int, float)) else None
+
+
 def get_daily_weather(lat: float, lon: float, day) -> dict[str, Any] | None:
     """Clima AGREGADO DEL DÍA en (lat, lon) -- 2026-08-16, pedido
     explícito del usuario ("un worker que haga fetch de los datos

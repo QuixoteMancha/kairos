@@ -404,6 +404,14 @@ def _add_match_duration_timing(database: Database) -> None:
         )
 
 
+def _add_tournament_elevation(database: Database) -> None:
+    """Elevación real de la sede en `Tournament` -- 2026-09-06, ver
+    `Tournament.elevation_m` en models.py."""
+    database.execute_sql(
+        "ALTER TABLE tournament ADD COLUMN IF NOT EXISTS elevation_m DOUBLE PRECISION"
+    )
+
+
 def _add_return_points_won_stats(database: Database) -> None:
     """Columnas tipadas de "1st/2nd return points won" -- 2026-09-05,
     ver `matchstats_parser.py` (89% de cobertura medida, mismo feed que
@@ -457,5 +465,9 @@ HISTORICAL_MIGRATIONS = (
     Migration(
         22, "add_return_points_won_stats_20260905",
         _add_return_points_won_stats,
+    ),
+    Migration(
+        23, "add_tournament_elevation_20260906",
+        _add_tournament_elevation,
     ),
 )
