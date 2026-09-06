@@ -64,6 +64,8 @@ _REAL_SECTION = {
     "1st serve percentage": ["75%", "63%"],
     "1st serve points won": ["58% (32/55)", "81% (29/36)"],
     "2nd serve points won": ["44% (8/18)", "57% (12/21)"],
+    "1st return points won": ["27% (10/37)", "35% (12/34)"],
+    "2nd return points won": ["56% (24/43)", "38% (11/29)"],
     "Break Points Saved": ["4/7", "0/1"],
     "Break Points Converted": ["1/1", "3/7"],
     "Total Points Won": ["43% (56/130)", "57% (74/130)"],
@@ -88,6 +90,8 @@ def test_typed_columns_from_real_section():
     assert cols["first_serve_pct_a"] == 75.0 and cols["first_serve_pct_b"] == 63.0
     assert cols["first_serve_points_won_pct_a"] == 58.0
     assert cols["second_serve_points_won_pct_b"] == 57.0
+    assert cols["first_return_points_won_pct_a"] == 27.0
+    assert cols["second_return_points_won_pct_b"] == 38.0
     # "4/7" -> salvados 4, enfrentados 7
     assert cols["break_points_saved_a"] == 4 and cols["break_points_faced_a"] == 7
     assert cols["break_points_won_b"] == 3

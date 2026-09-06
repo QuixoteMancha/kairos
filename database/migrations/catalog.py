@@ -404,6 +404,22 @@ def _add_match_duration_timing(database: Database) -> None:
         )
 
 
+def _add_return_points_won_stats(database: Database) -> None:
+    """Columnas tipadas de "1st/2nd return points won" -- 2026-09-05,
+    ver `matchstats_parser.py` (89% de cobertura medida, mismo feed que
+    las stats de saque ya tipadas)."""
+    for table in ("tennis_live_stats_snapshot", "tennis_match_stats", "tennis_match_stats_set"):
+        for column in (
+            "first_return_points_won_pct_a DOUBLE PRECISION",
+            "first_return_points_won_pct_b DOUBLE PRECISION",
+            "second_return_points_won_pct_a DOUBLE PRECISION",
+            "second_return_points_won_pct_b DOUBLE PRECISION",
+        ):
+            database.execute_sql(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}"
+            )
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -437,5 +453,9 @@ HISTORICAL_MIGRATIONS = (
     Migration(
         21, "add_match_duration_timing_20260905",
         _add_match_duration_timing,
+    ),
+    Migration(
+        22, "add_return_points_won_stats_20260905",
+        _add_return_points_won_stats,
     ),
 )

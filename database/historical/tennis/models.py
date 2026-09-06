@@ -563,6 +563,14 @@ class LiveStatsSnapshot(HistoricalBaseModel):
     first_serve_points_won_pct_b = FloatField(null=True)
     second_serve_points_won_pct_a = FloatField(null=True)
     second_serve_points_won_pct_b = FloatField(null=True)
+    # 2026-09-05, pedido explícito del usuario ("qué otras stats
+    # podríamos guardar" -> "prográmalo") -- mismo feed/formato que las
+    # de saque de arriba, 89% de cobertura medida en producción, nunca
+    # se habían mapeado a columna tipada (ver `matchstats_parser.py`).
+    first_return_points_won_pct_a = FloatField(null=True)
+    first_return_points_won_pct_b = FloatField(null=True)
+    second_return_points_won_pct_a = FloatField(null=True)
+    second_return_points_won_pct_b = FloatField(null=True)
     break_points_won_a = IntegerField(null=True)
     break_points_won_b = IntegerField(null=True)
     break_points_faced_a = IntegerField(null=True)
@@ -698,6 +706,14 @@ class MatchStats(HistoricalBaseModel):
     first_serve_points_won_pct_b = FloatField(null=True)
     second_serve_points_won_pct_a = FloatField(null=True)
     second_serve_points_won_pct_b = FloatField(null=True)
+    # 2026-09-05, pedido explícito del usuario ("qué otras stats
+    # podríamos guardar" -> "prográmalo") -- mismo feed/formato que las
+    # de saque de arriba, 89% de cobertura medida en producción, nunca
+    # se habían mapeado a columna tipada (ver `matchstats_parser.py`).
+    first_return_points_won_pct_a = FloatField(null=True)
+    first_return_points_won_pct_b = FloatField(null=True)
+    second_return_points_won_pct_a = FloatField(null=True)
+    second_return_points_won_pct_b = FloatField(null=True)
     break_points_won_a = IntegerField(null=True)
     break_points_won_b = IntegerField(null=True)
     break_points_faced_a = IntegerField(null=True)
@@ -751,6 +767,14 @@ class MatchStatsSet(HistoricalBaseModel):
     first_serve_points_won_pct_b = FloatField(null=True)
     second_serve_points_won_pct_a = FloatField(null=True)
     second_serve_points_won_pct_b = FloatField(null=True)
+    # 2026-09-05, pedido explícito del usuario ("qué otras stats
+    # podríamos guardar" -> "prográmalo") -- mismo feed/formato que las
+    # de saque de arriba, 89% de cobertura medida en producción, nunca
+    # se habían mapeado a columna tipada (ver `matchstats_parser.py`).
+    first_return_points_won_pct_a = FloatField(null=True)
+    first_return_points_won_pct_b = FloatField(null=True)
+    second_return_points_won_pct_a = FloatField(null=True)
+    second_return_points_won_pct_b = FloatField(null=True)
     break_points_won_a = IntegerField(null=True)
     break_points_won_b = IntegerField(null=True)
     break_points_faced_a = IntegerField(null=True)

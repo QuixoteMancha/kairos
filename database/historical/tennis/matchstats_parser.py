@@ -75,6 +75,13 @@ _PCT_STATS = {
     "1st serve percentage": "first_serve_pct",
     "1st serve points won": "first_serve_points_won_pct",
     "2nd serve points won": "second_serve_points_won_pct",
+    # 2026-09-05, pedido explícito del usuario ("qué otras stats
+    # podríamos guardar" -> "prográmalo") -- medido en producción: 89%
+    # de cobertura (mismo feed, mismo formato "44% (33/75)" que las de
+    # saque de arriba), nunca se habían mapeado a columna tipada pese a
+    # venir gratis en `raw_stats_json` desde siempre.
+    "1st return points won": "first_return_points_won_pct",
+    "2nd return points won": "second_return_points_won_pct",
 }
 
 # Estadísticas cuyo valor útil es la FRACCIÓN: (columna del numerador,
