@@ -205,3 +205,23 @@ def test_still_resets_on_real_homonyms_confirmed_in_production(name, lat, lon, r
         run_audit()
 
     assert Tournament.get(Tournament.tournament_name == name).lat is None
+
+
+def test_skips_when_tennisexplorer_country_is_not_a_real_country():
+    """2026-09-06, ronda 3: "Masters Cup WTA" (evento itinerante) trae
+    country="World" en TennisExplorer -- no es un país real, no se
+    puede comparar contra nada, y NO debe resetear una coordenada
+    correcta solo porque la "verdad" de referencia no es utilizable."""
+    _t("Masters Cup WTA", 34.388447, -118.566124)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": "X", "country": "World", "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+    ) as reverse:
+        run_audit()
+
+    reverse.assert_not_called()
+    row = Tournament.get(Tournament.tournament_name == "Masters Cup WTA")
+    assert row.lat == 34.388447
+    assert row.country is None

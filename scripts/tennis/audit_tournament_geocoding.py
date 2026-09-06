@@ -93,6 +93,15 @@ def _normalize(name: str) -> str:
     return _COUNTRY_ALIASES.get(key, key)
 
 
+# 2026-09-06, ronda 3: encontrado en el segundo lote de control contra
+# producción -- "Masters Cup WTA" (evento itinerante, sede distinta cada
+# año) trae `country="World"` en TennisExplorer, que no es un país real
+# y no se puede comparar contra nada. Sin este chequeo, se resetearía
+# una coordenada real y correcta solo porque la "verdad" de referencia
+# en sí no es una verdad geográfica utilizable.
+_NOT_A_REAL_COUNTRY = {"world"}
+
+
 def main() -> None:
     limit = _DEFAULT_LIMIT
     if "--limit" in sys.argv:
@@ -120,6 +129,9 @@ def main() -> None:
                 n_not_found += 1
                 continue
             real_country = info["country"]
+            if real_country.strip().lower() in _NOT_A_REAL_COUNTRY:
+                n_not_found += 1
+                continue
 
             coord_key = (round(t.lat, 3), round(t.lon, 3))
             if coord_key not in reverse_cache:
