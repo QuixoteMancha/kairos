@@ -92,16 +92,19 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+
+from peewee import JOIN
 from typing import Any
 
 from database.db import init_db_historical
 from database.historical.tennis.matchstats_parser import typed_columns_from_stats
 from database.historical.tennis.models import (
-    LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, ProbabilityTick,
-    SetProbabilityTick,
+    LivePointSnapshot, LiveStatsSnapshot, Match, MatchDuration, MatchHistory,
+    Player, ProbabilityTick, SetProbabilityTick,
 )
 from outer_apis.kalshi.fees import order_fee
+from outer_apis.sports.tennis.age_fatigue_veto import age_fatigue_veto
 from outer_apis.sports.tennis.set_sequence_stats import parse_set_scores
 from scripts.reports import risk_metrics
 from scripts.tennis.live_stats_market_reaction import (
@@ -194,6 +197,41 @@ def _structural_advantage(history: MatchHistory | None, side: str) -> bool | Non
         return None
 
     return rank_side < rank_other and elo_side > elo_other
+
+
+def _favorite_age_and_fatigue(history: MatchHistory | None, side: str) -> tuple[float | None, float | None]:
+    """Edad de `side` al momento del partido y minutos acumulados en
+    ESTE torneo antes de él -- 2026-09-05, pedido explícito del usuario
+    ("común para todas las estrategias... no se puede apostar sin
+    importar la estrategia"), mismo criterio fail-closed del análisis
+    histórico que motivó `age_fatigue_veto`: si algún partido previo
+    del torneo no tiene duración conocida, el acumulado queda `None`
+    (nunca se imputa), y el veto no puede aplicarse sin ese dato."""
+    if history is None or history.tournament_id is None or not history.match_date:
+        return None, None
+    player_id = getattr(history, f"player_{side}_id")
+    if player_id is None:
+        return None, None
+    player = Player.get_or_none(Player.id == player_id)
+    age = None
+    if player is not None and player.birthdate:
+        try:
+            played = date.fromisoformat(history.match_date)
+            age = (played - player.birthdate).days / 365.25
+        except ValueError:
+            age = None
+
+    prior = (MatchHistory
+             .select(MatchHistory, MatchDuration)
+             .join(MatchDuration, JOIN.LEFT_OUTER, on=(MatchHistory.duration == MatchDuration.id))
+             .where(
+                 ((MatchHistory.player_a == player_id) | (MatchHistory.player_b == player_id))
+                 & (MatchHistory.tournament == history.tournament_id)
+                 & (MatchHistory.match_date < history.match_date)
+             ))
+    durations = [m.duration.total_minutes if m.duration_id else None for m in prior]
+    cum_minutes = sum(durations) if durations and all(d is not None for d in durations) else None
+    return age, cum_minutes
 
 
 @dataclass
@@ -594,6 +632,9 @@ def collect_closing_scalp_events() -> list[ClosingScalpEvent]:
                 if second_serve_pct is None or second_serve_pct < MIN_SECOND_SERVE_PCT:
                     continue
                 if _structural_advantage(history, side) is not True:
+                    continue
+                fav_age, fav_cum_minutes = _favorite_age_and_fatigue(history, side)
+                if age_fatigue_veto(fav_age, fav_cum_minutes):
                     continue
                 set_conditions = _set_serve_conditions(entry_snap, side, current_set)
                 if set_conditions is None:

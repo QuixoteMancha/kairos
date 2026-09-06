@@ -20,6 +20,7 @@ from scripts.reports import risk_metrics
 from models.volatility.sports.tennis.weighted_elo import (
     calibrate, combined_probability, fit_platt,
 )
+from outer_apis.sports.tennis.age_fatigue_veto import age_fatigue_veto
 from outer_apis.sports.tennis.injury_risk import calculate_post_injury_penalty
 from strategies.bet_on_favourite import _relative_injury_adjustment
 
@@ -59,6 +60,15 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
     recent_record: dict[str, deque[bool]] = defaultdict(lambda: deque(maxlen=10))
     performance: dict[int, list[tuple[date, float | None, float | None, float | None]]] = defaultdict(list)
     injury_state: dict[int, dict[str, Any]] = {}
+    # 2026-09-05, pedido explícito del usuario ("común para todas las
+    # estrategias, si se cumplen estas 2 condiciones... no se puede
+    # apostar sin importar la estrategia") -- minutos acumulados por
+    # (player_id, tournament_id), en el mismo orden secuencial que ya
+    # recorre este loop. Fail-closed igual que el análisis original: si
+    # algún partido previo del torneo no tiene duración conocida, el
+    # acumulado de esa entrada queda None (nunca se imputa), y
+    # `age_fatigue_veto` no puede vetar sin ese dato.
+    tournament_minutes: dict[tuple[int, int], list[float | None]] = defaultdict(list)
     cases: list[dict[str, Any]] = []
     skipped = defaultdict(int)
     with db_historical.connection_context():
@@ -162,10 +172,23 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                     dog_wr = sum(dog_record) / len(dog_record)
                     fav_recent_wr = sum(fav_recent) / len(fav_recent)
                     dog_recent_wr = sum(dog_recent) / len(dog_recent)
+                    fav_player = row.player_a if a_is_favourite else row.player_b
+                    fav_age = (
+                        (played - fav_player.birthdate).days / 365.25
+                        if fav_player.birthdate else None
+                    )
+                    tour_key = (fav_id, row.tournament_id)
+                    prior_durations = tournament_minutes.get(tour_key, [])
+                    fav_cum_minutes = (
+                        sum(prior_durations) if prior_durations and all(d is not None for d in prior_durations)
+                        else None
+                    )
                     if fav_wr <= dog_wr:
                         skipped["surface_winrate"] += 1
                     elif fav_recent_wr <= dog_recent_wr:
                         skipped["recent_form"] += 1
+                    elif age_fatigue_veto(fav_age, fav_cum_minutes):
+                        skipped["age_fatigue_veto"] += 1
                     else:
                         cases.append({
                             "match_id": row.match_id,
@@ -196,6 +219,11 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                 surface_record[(loser, surface)].append((played, False))
             recent_record[winner].append(True)
             recent_record[loser].append(False)
+
+            if row.tournament_id is not None:
+                match_minutes = row.duration.total_minutes if row.duration_id else None
+                tournament_minutes[(row.player_a_id, row.tournament_id)].append(match_minutes)
+                tournament_minutes[(row.player_b_id, row.tournament_id)].append(match_minutes)
 
             # Snapshot de baseline ANTES de incorporar el partido del retiro.
             for player_id in (row.player_a_id, row.player_b_id):

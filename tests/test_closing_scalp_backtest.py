@@ -9,13 +9,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import json
 
+from datetime import date as _date
+
 from database.db import init_db_historical
 from database.historical.tennis.models import (
-    LivePointSnapshot, LiveStatsSnapshot, Match, MatchHistory, Player, ProbabilityTick,
-    SetProbabilityTick,
+    LivePointSnapshot, LiveStatsSnapshot, Match, MatchDuration, MatchHistory,
+    Player, ProbabilityTick, SetProbabilityTick, Tournament,
 )
 from scripts.tennis.closing_scalp_backtest import (
-    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _set_serve_conditions,
+    MIN_SECOND_SERVE_PCT, MIN_SPW_EDGE_PCT, _favorite_age_and_fatigue,
+    _set_serve_conditions,
     _spw, _spw_edge, _structural_advantage,
     collect_closing_scalp_events, run_closing_scalp_backtest, simulate_bankroll,
 )
@@ -26,7 +29,7 @@ def clean_tables():
     init_db_historical()
     models = (
         LiveStatsSnapshot, LivePointSnapshot, ProbabilityTick, SetProbabilityTick,
-        Match, MatchHistory, Player,
+        Match, MatchHistory, MatchDuration, Tournament, Player,
     )
     for model in models:
         model.delete().execute()
@@ -653,6 +656,63 @@ def test_serve_for_set_fails_closed_without_a_set_probability_tick():
         first_pct_b=55, first_won_b=55, second_won_b=45,
         raw_point_json=_closing_point_raw("a", 1, "break_then_serve"),
     )
+
+    events = collect_closing_scalp_events()
+    assert events == []
+
+
+def test_age_fatigue_veto_blocks_an_otherwise_valid_entry():
+    """2026-09-05, pedido explícito del usuario ("común para todas las
+    estrategias... no se puede apostar sin importar la estrategia") --
+    misma configuración que `test_full_pipeline_finds_one_entry_and_
+    computes_match_return_on_win` (que SIN el veto genera 1 evento
+    real), pero el favorito tiene 30+ años y >=270 minutos acumulados
+    en el mismo torneo antes de este partido -- celda real del análisis
+    histórico con WR<60%. El evento no debe generarse."""
+    tournament = Tournament.create(
+        year=2026, tournament_name="Veto Open", city="Veto City", tour="WTA",
+        fetched_at=datetime.now(timezone.utc),
+    )
+    a = _player("Veteran Closer A")
+    a.birthdate = _date(1994, 1, 1)  # 32+ años al 2026-08-17
+    a.save()
+    b = _player("Rival B")
+
+    # 2 partidos previos REALES en el mismo torneo, duración conocida,
+    # suman >=270 min -- exactamente lo que exige `age_fatigue_veto`.
+    for i, minutes in enumerate((150, 130)):
+        duration = MatchDuration.create(
+            flashscore_match_id=f"veto-prior-{i}", total_minutes=minutes,
+            fetched_at=datetime.now(timezone.utc),
+        )
+        MatchHistory.create(
+            match_id=f"te:veto-prior-{i}", source="tennisexplorer", tour="WTA",
+            match_date=f"2026-08-1{5 + i}", tournament=tournament,
+            player_a=a, player_b=_player(f"Prior Rival {i}"),
+            fetched_at=datetime.now(timezone.utc), duration=duration,
+        )
+
+    history = MatchHistory.create(
+        match_id="te:veto-current", source="tennisexplorer", tour="WTA",
+        match_date="2026-08-17", tournament=tournament,
+        player_a=a, player_b=b, fetched_at=datetime.now(timezone.utc),
+        player_a_ranking=5, player_b_ranking=80,
+        player_a_surface_elo=1900, player_b_surface_elo=1500,
+        score="6-3, 6-4", winner=a,
+    )
+
+    age, cum_minutes = _favorite_age_and_fatigue(history, "a")
+    assert age is not None and age >= 30
+    assert cum_minutes == 280
+
+    match = _match("KX-VETO", history=history)
+    match.winner = "a"
+    match.save()
+
+    _snapshot(match, 0, 0.55, points_a=10, points_b=6, breaks_a=1, breaks_b=0, current_set=3)
+    _snapshot(match, 5, 0.60, points_a=14, points_b=8, breaks_a=1, breaks_b=0, current_set=3)
+    _snapshot(match, 10, 0.65, points_a=18, points_b=10, breaks_a=1, breaks_b=0, current_set=3,
+              raw_point_json=_closing_point_raw("a", 1, "break_then_serve"))
 
     events = collect_closing_scalp_events()
     assert events == []

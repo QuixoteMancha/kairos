@@ -1,5 +1,6 @@
 """Tests de `age_fatigue_veto` -- 2026-09-05, pedido explícito del
-usuario tras el análisis histórico de edad x fatiga x resultado."""
+usuario tras el análisis histórico de edad x fatiga x resultado, luego
+ampliado a "todas las combinaciones que dan WR menor a 60%"."""
 
 from __future__ import annotations
 
@@ -9,12 +10,24 @@ from outer_apis.sports.tennis.age_fatigue_veto import age_fatigue_veto
 
 
 @pytest.mark.parametrize("age,cum_minutes,expected", [
-    (31.5, 529, True),   # 30+ y muy fatigado -> veta
-    (30.0, 270, True),   # exactamente en el umbral de ambos -> veta
+    # <23 años: veta desde 90min (WR 59.8%/58.1%/55.7% < 60%)
+    (20.0, 89.9, False),
+    (20.0, 90.0, True),
+    (22.9, 500, True),
+    (20.0, 30, False),  # <90min, todavía en el bucket "fresco" 62.8%
+    # 23-27 años: NUNCA veta (mínimo real 60.0%, no <60%)
+    (25.0, 1000, False),
+    (23.0, 270, False),
+    (26.9, 10000, False),
+    # 27-30 años: veta solo desde 270min (WR 56.4%)
+    (28.0, 269.9, False),
+    (28.0, 270.0, True),
+    (29.9, 500, True),
+    # 30+ años: veta solo desde 270min (WR 57.5%, caso original del usuario)
+    (31.5, 529, True),
+    (30.0, 270, True),
     (32.0, 130, False),  # 30+ pero fatiga baja -> no veta
-    (24.3, 503, False),  # muy fatigado pero menor de 30 -> no veta
-    (29.9, 300, False),  # justo por debajo del umbral de edad -> no veta
-    (35.0, 269.9, False),  # justo por debajo del umbral de fatiga -> no veta
+    (50.0, 269, False),
 ])
 def test_age_fatigue_veto(age, cum_minutes, expected):
     assert age_fatigue_veto(age, cum_minutes) is expected
