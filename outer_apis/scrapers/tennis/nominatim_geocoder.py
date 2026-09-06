@@ -30,6 +30,7 @@ from typing import Any
 import requests
 
 _BASE_URL = "https://nominatim.openstreetmap.org/search"
+_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 _REQUEST_TIMEOUT_S = 20
 
 # Identificación real, exigida por la política de uso de Nominatim.
@@ -93,4 +94,48 @@ def geocode_city(city: str) -> dict[str, Any] | None:
         "lat": lat,
         "lon": lon,
         "display_name": top.get("display_name") or city.strip(),
+    }
+
+
+def reverse_geocode(lat: float, lon: float) -> dict[str, Any] | None:
+    """País real de una coordenada -- 2026-09-06, pedido explícito del
+    usuario tras encontrar en vivo que `geocode_city` sin país (la
+    query ambigua "solo ciudad") puede devolver un homónimo en OTRO
+    CONTINENTE (confirmado: "Tigre challenger" -> Tigray, Etiopía en vez
+    de Tigre, Argentina; "Toyota challenger" -> un punto de Arabia
+    Saudita en vez de Toyota, Japón). Se usa para AUDITAR coordenadas ya
+    guardadas contra el país real conocido de otra fuente (TennisExplorer,
+    ver `get_tournament_info`) -- si no coinciden, la coordenada guardada
+    está mal y debe re-geocodificarse con "ciudad, país".
+
+    Returns: {"country", "display_name"}. Fail-closed: None ante
+    cualquier fallo de red/parseo, o si la respuesta no trae país."""
+    _throttle()
+    try:
+        resp = requests.get(
+            _REVERSE_URL,
+            # `accept-language=en` a propósito: sin esto, el país viene en
+            # el idioma local (ej. "ኢትዮጵያ" en vez de "Ethiopia") --
+            # confirmado en vivo -- lo que rompería cualquier comparación
+            # de string contra el país real conocido de TennisExplorer.
+            params={"lat": lat, "lon": lon, "format": "json", "accept-language": "en"},
+            headers={"User-Agent": _USER_AGENT},
+            timeout=_REQUEST_TIMEOUT_S,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    address = data.get("address") or {}
+    country = address.get("country")
+    if not country:
+        return None
+    return {
+        "country": country,
+        "country_code": (address.get("country_code") or "").upper() or None,
+        "display_name": data.get("display_name") or "",
     }

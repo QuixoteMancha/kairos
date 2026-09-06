@@ -12,8 +12,8 @@ import pytest
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import Tournament
 from scripts.tennis.fill_tournament_metadata import (
-    derive_tournament_level, fill_tournament_levels, fill_tournament_locations,
-    refine_generic_levels,
+    derive_tournament_level, fill_tournament_country, fill_tournament_levels,
+    fill_tournament_locations, refine_generic_levels,
 )
 
 
@@ -289,3 +289,60 @@ def test_geocoding_uses_city_and_country_when_available():
         fill_tournament_locations(limit=5)
 
     geo.assert_called_once_with("Santiago, Chile")
+
+
+# --- fill_tournament_country (2026-09-06, bug real: Challenger/ITF nunca
+# recibían country porque refine_generic_levels solo corre para ATP/WTA
+# Tour) ---
+
+def test_fill_country_works_for_challenger_level_too():
+    """A diferencia de `refine_generic_levels`, esta función SÍ debe
+    tocar Challenger/ITF -- son justo los que quedaban sin país."""
+    _t("Tigre challenger", level="Challenger", tour="ATP")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+        return_value={"city": "Tigre", "country": "Argentina",
+                      "winner_points": None, "level": None},
+    ) as info:
+        result = fill_tournament_country(limit=5)
+
+    info.assert_called_once()
+    assert result["refined"] == 1
+    row = Tournament.get(Tournament.tournament_name == "Tigre challenger")
+    assert row.country == "Argentina"
+    assert row.city == "Tigre"
+    # No debe tocar el nivel -- ese es el trabajo de otra función.
+    assert row.level == "Challenger"
+
+
+def test_fill_country_skips_rows_with_country_already_known():
+    _t("Hamburg", level="ATP 500", country="Germany")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+    ) as info:
+        result = fill_tournament_country(limit=5)
+
+    info.assert_not_called()
+    assert result["processed"] == 0
+
+
+def test_fill_country_fail_closed_when_page_not_found():
+    _t("Torneo Raro", level="Challenger")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+        return_value=None,
+    ):
+        result = fill_tournament_country(limit=5)
+
+    assert result["not_found"] == 1
+    assert Tournament.get(Tournament.tournament_name == "Torneo Raro").country is None
+
+
+def test_fill_country_never_overwrites_existing_country():
+    _t("Santiago", level="ATP Tour", country="Chile")
+    with patch(
+        "scripts.tennis.fill_tournament_metadata.get_tournament_info",
+    ) as info:
+        fill_tournament_country(limit=5)
+    info.assert_not_called()
+    assert Tournament.get(Tournament.tournament_name == "Santiago").country == "Chile"

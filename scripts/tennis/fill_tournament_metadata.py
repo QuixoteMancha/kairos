@@ -171,6 +171,65 @@ def fill_tournament_levels(limit: int | None = None) -> dict[str, Any]:
     return {"updated": updated, "skipped": skipped}
 
 
+def fill_tournament_country(limit: int = 30) -> dict[str, Any]:
+    """Completa `Tournament.country` (y `city` si falta) para CUALQUIER
+    nivel -- 2026-09-06, bug real encontrado en vivo investigando un
+    veto de fatiga+clima: `refine_generic_levels` (abajo) solo corre
+    para torneos ATP/WTA Tour, así que el 98.9% restante (Challenger/
+    ITF, la cola larga real del calendario) NUNCA recibía `country`, y
+    `fill_tournament_locations` caía en la query de geocoding ambigua
+    "solo ciudad, sin país" para casi todo el catálogo. Confirmado en
+    vivo: "Tigre challenger" (Argentina real) geocodificado a Tigray,
+    Etiopía; "Toyota challenger" (Japón real) geocodificado a un punto
+    de Arabia Saudita -- homónimos en otro continente ganándole a
+    Nominatim sin el país para desambiguar.
+
+    `get_tournament_info` (mismo scraper que ya usa `refine_generic_
+    levels`) NO tiene ninguna restricción de nivel real -- la única
+    razón por la que Challenger/ITF quedaban afuera era el filtro de
+    ESTA función hermana (que persigue un objetivo distinto: refinar el
+    nivel genérico, algo que Challenger/ITF no necesita porque ya
+    tienen su nivel exacto derivado gratis del nombre). Esta función
+    nueva persigue el objetivo de ciudad/país, independiente del nivel.
+
+    Solo toca filas sin `country` todavía conocido -- nunca sobreescribe
+    un país ya guardado. `take_rotating_batch` (mismo criterio anti-
+    starvation que el resto de los enrichments de este paquete) para que
+    torneos irresolubles no bloqueen el cursor para siempre."""
+    init_db_historical()
+    base_query = Tournament.select().where(Tournament.country.is_null())
+    rows, _ = take_rotating_batch(
+        base_query, Tournament.id, after_id=0, limit=limit,
+        cursor_key="tournament_country_cursor",
+    )
+
+    processed = refined = not_found = 0
+    now = datetime.now(timezone.utc)
+    for tournament in rows:
+        processed += 1
+        info = get_tournament_info(
+            tournament.tournament_name, tournament.year, tournament.tour,
+        )
+        if info is None:
+            not_found += 1
+            continue
+
+        changed = False
+        if info["city"] and not tournament.city:
+            tournament.city = info["city"]
+            changed = True
+        if info["country"] and not tournament.country:
+            tournament.country = info["country"]
+            changed = True
+
+        if changed:
+            tournament.fetched_at = now
+            tournament.save()
+            refined += 1
+
+    return {"processed": processed, "refined": refined, "not_found": not_found}
+
+
 def refine_generic_levels(limit: int = 30) -> dict[str, Any]:
     """Reemplaza los niveles GENÉRICOS ("ATP Tour"/"WTA Tour") por el
     nivel EXACTO (Grand Slam / Masters 1000 / 500 / 250) leído de la
