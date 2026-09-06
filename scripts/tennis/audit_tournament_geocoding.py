@@ -70,9 +70,18 @@ _DEFAULT_LIMIT = 200
 _COUNTRY_ALIASES: dict[str, str] = {
     "usa": "united states", "united states of america": "united states",
     "great britain": "united kingdom", "uk": "united kingdom",
+    # 2026-09-06, ronda 2 de falsos positivos encontrados en el lote de
+    # control de 200 (9 de 15 "MAL" eran esto, no homónimos reales):
+    # TennisExplorer usa las 4 naciones constituyentes del Reino Unido
+    # como "país" (England/Scotland/Wales/Northern Ireland), Nominatim
+    # reverse-geocodifica al Reino Unido como tal -- misma sede real.
+    "england": "united kingdom", "scotland": "united kingdom",
+    "wales": "united kingdom", "northern ireland": "united kingdom",
     "dominican rep.": "dominican republic", "dominican rep": "dominican republic",
     "hong kong": "china",
     "czech rep.": "czech republic", "czech rep": "czech republic",
+    "czechia": "czech republic",
+    "chinese taipei": "taiwan",
     "south korea": "korea, republic of", "korea": "korea, republic of",
     "russia": "russian federation",
     "uae": "united arab emirates",

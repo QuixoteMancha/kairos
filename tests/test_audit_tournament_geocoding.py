@@ -158,3 +158,50 @@ def test_still_resets_on_genuine_homonym_mismatch():
 
     row = Tournament.get(Tournament.tournament_name == "Cordoba challenger")
     assert row.lat is None
+
+
+@pytest.mark.parametrize("real_country,geo_country", [
+    ("England", "United Kingdom"),
+    ("Scotland", "United Kingdom"),
+    ("Czechia", "Czech Republic"),
+    ("Czech Republic", "Czechia"),
+    ("Chinese Taipei", "Taiwan"),
+])
+def test_does_not_reset_on_second_round_country_aliases(real_country, geo_country):
+    """2026-09-06, ronda 2: 9 de 15 "MAL" del primer lote de control
+    contra producción eran esto (England/UK, Czechia/Czech Republic,
+    Chinese Taipei/Taiwan), no homónimos reales."""
+    _t("Alias Open 2", 1.0, 2.0)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": "X", "country": real_country, "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+        return_value={"country": geo_country, "country_code": "XX", "display_name": "x"},
+    ):
+        run_audit()
+
+    row = Tournament.get(Tournament.tournament_name == "Alias Open 2")
+    assert row.lat == 1.0, f"no debería resetear {real_country!r} vs {geo_country!r} (mismo país)"
+
+
+@pytest.mark.parametrize("name,lat,lon,real_country,geo_country", [
+    ("Tampico WTA", 41.63248, -89.78504, "Mexico", "United States"),
+    ("Salinas ITF", 36.67441, -121.65504, "Ecuador", "United States"),
+    ("Merida", 38.917465, -6.3443975, "Mexico", "Spain"),
+    ("Colina ITF", -20.711443, -48.53867, "Chile", "Brazil"),
+])
+def test_still_resets_on_real_homonyms_confirmed_in_production(name, lat, lon, real_country, geo_country):
+    """Los 6 casos genuinos confirmados en el lote de control real deben
+    seguir reseteando incluso con la tabla de alias ampliada."""
+    _t(name, lat, lon)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": name, "country": real_country, "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+        return_value={"country": geo_country, "country_code": "XX", "display_name": "x"},
+    ):
+        run_audit()
+
+    assert Tournament.get(Tournament.tournament_name == name).lat is None
