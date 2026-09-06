@@ -51,8 +51,37 @@ from scripts.tennis.rotating_batch import take_rotating_batch
 _DEFAULT_LIMIT = 200
 
 
+# 2026-09-06, bug real encontrado en la primera corrida contra
+# producción (Ferry, antes de que el batch grande llegara a lanzarse):
+# comparar el string de país de TennisExplorer contra el de Nominatim
+# SIN normalizar alias daba falsos positivos masivos -- de las primeras
+# 26 filas "corregidas", 23 eran el MISMO país con nombre distinto
+# ("USA" vs "United States", "Great Britain" vs "United Kingdom",
+# "Dominican Rep." vs "Dominican Republic"), no coordenadas realmente
+# mal geocodificadas. Solo 2/26 eran homónimos genuinos (Córdoba
+# España/Argentina, Santiago Costa Rica/Chile).
+#
+# Hong Kong/China: tratado como el MISMO país a propósito -- Hong Kong
+# es una región administrativa especial de China: un evento que
+# TennisExplorer lista como "Hong Kong" y que Nominatim reverse-
+# geocodifica como "China" (o viceversa) es la MISMA sede real, no un
+# error de continente equivocado como Tigre/Etiopía o Toyota/Arabia
+# Saudita -- no tiene sentido resetear una coordenada correcta por esto.
+_COUNTRY_ALIASES: dict[str, str] = {
+    "usa": "united states", "united states of america": "united states",
+    "great britain": "united kingdom", "uk": "united kingdom",
+    "dominican rep.": "dominican republic", "dominican rep": "dominican republic",
+    "hong kong": "china",
+    "czech rep.": "czech republic", "czech rep": "czech republic",
+    "south korea": "korea, republic of", "korea": "korea, republic of",
+    "russia": "russian federation",
+    "uae": "united arab emirates",
+}
+
+
 def _normalize(name: str) -> str:
-    return name.strip().lower()
+    key = name.strip().lower()
+    return _COUNTRY_ALIASES.get(key, key)
 
 
 def main() -> None:

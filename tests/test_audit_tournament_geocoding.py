@@ -113,3 +113,48 @@ def test_reverse_geocode_cached_per_coordinate():
         run_audit()
 
     reverse.assert_called_once()
+
+
+@pytest.mark.parametrize("real_country,geo_country", [
+    ("USA", "United States"),
+    ("United States", "USA"),
+    ("Great Britain", "United Kingdom"),
+    ("Dominican Rep.", "Dominican Republic"),
+    ("Hong Kong", "China"),
+    ("China", "Hong Kong"),
+])
+def test_does_not_reset_on_known_country_name_aliases(real_country, geo_country):
+    """2026-09-06, bug real: la primera corrida contra producción reseteó
+    23/26 filas por esto -- mismo país, nombre distinto, no un homónimo
+    real en otro continente."""
+    _t("Alias Open", 1.0, 2.0)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": "X", "country": real_country, "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+        return_value={"country": geo_country, "country_code": "XX", "display_name": "x"},
+    ):
+        run_audit()
+
+    row = Tournament.get(Tournament.tournament_name == "Alias Open")
+    assert row.lat == 1.0, f"no debería resetear {real_country!r} vs {geo_country!r} (mismo país)"
+    assert row.country == real_country
+
+
+def test_still_resets_on_genuine_homonym_mismatch():
+    """Contraparte real confirmada: Córdoba (España real de TE) vs
+    Argentina (donde la coordenada guardada realmente cae) SÍ debe
+    resetear -- es un homónimo genuino, no un alias de nombre."""
+    _t("Cordoba challenger", 1.0, 2.0)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": "Cordoba", "country": "Spain", "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+        return_value={"country": "Argentina", "country_code": "AR", "display_name": "Cordoba, Argentina"},
+    ):
+        run_audit()
+
+    row = Tournament.get(Tournament.tournament_name == "Cordoba challenger")
+    assert row.lat is None
