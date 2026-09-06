@@ -36,12 +36,3 @@ def test_tennis_match_tick_worker_run_once_skips_when_halted():
     assert result == {"halted": True, "reason": "brightdata_account_broken"}
 
 
-def test_mlb_match_tick_worker_run_once_skips_when_halted():
-    from workers.mlb_match_tick_worker import run_once
-
-    halt_operations("brightdata_account_broken")
-    with patch("workers.mlb_match_tick_worker._register_new_mlb_matches") as mock_register:
-        result = run_once()
-
-    mock_register.assert_not_called()
-    assert result == {"halted": True, "reason": "brightdata_account_broken"}

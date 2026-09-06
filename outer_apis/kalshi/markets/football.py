@@ -32,14 +32,15 @@ strategies/.
 import re
 from typing import Any
 
-from outer_apis.sports.soccer import ratings as football_ratings, mls_ratings
+from outer_apis.sports.soccer import ratings as football_ratings
 
-# Kalshi series tickers for team-vs-team soccer moneyline markets
-# (verified live 2026-07-21: KXMLSGAME has real open markets, KXUEFAGAME
-# had zero open markets at verification time -- kept in the list since
-# the schema should be identical when UEFA competitions are in season,
-# but NOT independently confirmed).
-_SERIES = ("KXMLSGAME", "KXUEFAGAME")
+# Kalshi series tickers for team-vs-team soccer moneyline markets.
+# KXMLSGAME (MLS) removed 2026-09, Kairos scope narrowed to
+# tennis+weather. KXUEFAGAME had zero open markets at the original
+# 2026-07-21 verification time -- kept in the list since the schema
+# should be identical when UEFA competitions are in season, but NOT
+# independently confirmed live.
+_SERIES = ("KXUEFAGAME",)
 
 _TITLE_RE = re.compile(r"^(.+?) vs (.+?) Winner\?$")
 
@@ -105,11 +106,8 @@ def build_football_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         team_legs.sort(key=lambda t: t[1]["current_a_price"], reverse=True)
         (fav_name, fav_leg), (dog_name, _dog_leg) = team_legs
 
-        # ClubElo first (real European coverage), MLS self-computed Elo as a
-        # second real source (ClubElo has ZERO MLS coverage -- see
-        # outer_apis/mls_ratings.py docstring), None only if BOTH miss.
-        fav_elo = football_ratings.get_team_rating(fav_name) or mls_ratings.get_team_rating(fav_name)
-        dog_elo = football_ratings.get_team_rating(dog_name) or mls_ratings.get_team_rating(dog_name)
+        fav_elo = football_ratings.get_team_rating(fav_name)
+        dog_elo = football_ratings.get_team_rating(dog_name)
 
         result.append({
             "id": fav_leg["id"],

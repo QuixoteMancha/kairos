@@ -430,21 +430,6 @@ services:
     restart: unless-stopped
     networks: [kairos_net]
 
-  mlb_match_tick_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_mlb_match_tick_worker
-    build: .
-    command: ["python", "-m", "workers.mlb_match_tick_worker"]
-    env_file:
-      - .env
-    environment:
-      <<: *kairos-db-environment
-      MLB_TICK_INTERVAL_SECONDS: "60"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    networks:
-      - kairos_net
-
   market_arb_websocket_scanner:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_market_arb_websocket_scanner
@@ -468,25 +453,6 @@ services:
       - kairos_net
     volumes:
       - kairos_data:/data
-
-  mls_worker:
-    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
-    container_name: kairos_mls_worker
-    build: .
-    command: ["python", "-m", "workers.mls_worker"]
-    env_file:
-      - .env
-    environment:
-      <<: *kairos-db-environment
-      # 6h -- MLS Elo solo cambia con resultados reales, no hace falta
-      # refrescar más seguido (ver workers/mls_worker.py).
-      MLS_REFRESH_INTERVAL_SECONDS: "21600"
-    depends_on: *kairos-db-depends
-    restart: unless-stopped
-    networks:
-      - kairos_net
-    volumes:
-      - kairos_data_historical:/data_historical
 
   outcome_observer_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}

@@ -276,7 +276,6 @@ def _infer_category(raw: dict) -> str:
     ticker = (raw.get("event_ticker") or raw.get("ticker") or "").upper()
 
     prefixes = {
-        "KXMLB": "baseball",
         "KXNBA": "basketball",
         "KXNCAAB": "basketball",
         "KXNFL": "american_football",

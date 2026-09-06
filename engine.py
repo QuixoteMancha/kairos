@@ -29,16 +29,17 @@ _TENNIS_SERIES = ("KXATPMATCH", "KXWTAMATCH")
 # docstring for the confirmed design decision. Only feeds LimitArb (needs
 # the real Elo-enriched dict); MarketArb doesn't need this at all, every
 # leg already flows through the generic scan below on its own.
-_FOOTBALL_SERIES = ("KXMLSGAME", "KXUEFAGAME")
+_FOOTBALL_SERIES = ("KXUEFAGAME",)
 
-# Kalshi series for the 4 two-way team sports (MLB/NBA/NHL/NFL, no draws
+# Kalshi series for two-way team sports (NBA/NHL/NFL, no draws
 # -- unlike soccer, these pair cross-ticket exactly like tennis, see
 # outer_apis/kalshi_team_sport_markets.py module docstring). Feeds BOTH
 # LimitArb and MarketArb, same as tennis. KXNBAGAME/KXNHLGAME had zero
 # open markets at verification time (NBA/NHL off-season in July) --
 # built and wired anyway, will activate automatically once those seasons
-# open, not independently verified live yet.
-_TEAM_SPORT_SERIES = ("KXMLBGAME", "KXNBAGAME", "KXNHLGAME", "KXNFLGAME")
+# open, not independently verified live yet. MLB (KXMLBGAME) removed
+# 2026-09, Kairos scope narrowed to tennis+weather.
+_TEAM_SPORT_SERIES = ("KXNBAGAME", "KXNHLGAME", "KXNFLGAME")
 
 # Kalshi series para los mercados crypto de 15 minutos (2026-08-02,
 # pedido explícito del usuario: "escaneemos los mercados crypto de 15

@@ -1,12 +1,14 @@
 """
-Builds paired team-vs-team markets for the 4 two-way team sports (MLB,
-NBA, NHL, NFL — none of which allow a regulation-season draw, unlike
+Builds paired team-vs-team markets for the two-way team sports (NBA,
+NHL, NFL — none of which allow a regulation-season draw, unlike
 soccer's 3-way structure, see outer_apis/kalshi_football_markets.py for why
-soccer needed a different, single-leg approach).
+soccer needed a different, single-leg approach). MLB support was removed
+(2026-09, Kairos scope narrowed to tennis+weather) — see
+`_SERIES_CONFIG` below, KXMLBGAME is no longer scanned.
 
 STRUCTURAL FINDING (verified live 2026-07-21): like tennis
-(outer_apis/kalshi_tennis_markets.py), each MLB/NFL game on Kalshi (series
-KXMLBGAME/KXNFLGAME, confirmed with real open markets; KXNBAGAME/
+(outer_apis/kalshi_tennis_markets.py), each game on Kalshi (series
+KXNFLGAME, confirmed with real open markets; KXNBAGAME/
 KXNHLGAME exist but had ZERO open markets at verification time — NBA/NHL
 are off-season in July, NOT independently confirmed live but built with
 the same structure since Kalshi's game-market pattern is consistent
@@ -29,7 +31,6 @@ that stays in strategies/.
 from typing import Any
 
 _SERIES_CONFIG = {
-    "KXMLBGAME": {"sport_type": "baseball", "rating_module": "outer_apis.sports.baseball.ratings"},
     "KXNBAGAME": {"sport_type": "basketball", "rating_module": "outer_apis.sports.basketball.ratings"},
     "KXNHLGAME": {"sport_type": "hockey", "rating_module": "outer_apis.sports.hockey.ratings"},
     "KXNFLGAME": {"sport_type": "american_football", "rating_module": "outer_apis.sports.american_football.ratings"},
@@ -43,7 +44,7 @@ def _extract_team_name(raw_market: dict) -> str | None:
 
 def build_team_sport_markets(raw_markets: list[dict], series: str) -> list[dict[str, Any]]:
     """Pairs per-team legs into combined team-vs-team markets for one
-    series (one of KXMLBGAME/KXNBAGAME/KXNHLGAME/KXNFLGAME).
+    series (one of KXNBAGAME/KXNHLGAME/KXNFLGAME).
 
     Returns:
         List of dicts: {id, type, current_a_price, current_b_price,

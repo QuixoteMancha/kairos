@@ -36,8 +36,11 @@ from database.historical.team_sports.teammatchhistory import TeamMatchHistory
 from database.historical.team_sports.teamheadtohead import TeamHeadToHead
 from database.historical.team_sports.writer import compute_and_persist_elo, find_team_rating
 # 2026-08-05, pedido explícito del usuario -- captura tick-by-tick real
-# de probabilidades MLB, mismo patrón que tenis (ver
-# `mlbmatchtracking.py` para el razonamiento completo).
+# de probabilidades MLB, mismo patrón que tenis. Los modelos se dejan
+# intactos (datos reales ya guardados en `mlb_scanned_match`/
+# `mlb_match_probability_tick`) aunque el worker/tracking-code que los
+# poblaba (`mlbmatchtracking.py`, `workers/mlb_match_tick_worker.py`) fue
+# retirado 2026-09 al acotar el scope de Kairos a tenis+clima.
 from database.historical.team_sports.mlbscannedmatch import MlbScannedMatch
 from database.historical.team_sports.mlbmatchprobabilitytick import MlbMatchProbabilityTick
 
