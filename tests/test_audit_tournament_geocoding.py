@@ -225,3 +225,21 @@ def test_skips_when_tennisexplorer_country_is_not_a_real_country():
     row = Tournament.get(Tournament.tournament_name == "Masters Cup WTA")
     assert row.lat == 34.388447
     assert row.country is None
+
+
+def test_does_not_reset_on_bosnia_abbreviation_alias():
+    """2026-09-06, ronda 4: tercer lote de control (300 filas) mostró
+    2/7 "MAL" eran esto -- "Bosnia and Herzeg." (abreviado por
+    TennisExplorer) vs "Bosnia and Herzegovina" (nombre completo de
+    Nominatim), mismo país."""
+    _t("Banja Luka ITF", 44.772083, 17.191765)
+    with patch(
+        "scripts.tennis.audit_tournament_geocoding.get_tournament_info",
+        return_value={"city": "X", "country": "Bosnia and Herzeg.", "winner_points": None, "level": None},
+    ), patch(
+        "scripts.tennis.audit_tournament_geocoding.reverse_geocode",
+        return_value={"country": "Bosnia and Herzegovina", "country_code": "BA", "display_name": "x"},
+    ):
+        run_audit()
+
+    assert Tournament.get(Tournament.tournament_name == "Banja Luka ITF").lat == 44.772083

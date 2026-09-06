@@ -78,6 +78,7 @@ _COUNTRY_ALIASES: dict[str, str] = {
     "england": "united kingdom", "scotland": "united kingdom",
     "wales": "united kingdom", "northern ireland": "united kingdom",
     "dominican rep.": "dominican republic", "dominican rep": "dominican republic",
+    "bosnia and herzeg.": "bosnia and herzegovina",
     "hong kong": "china",
     "czech rep.": "czech republic", "czech rep": "czech republic",
     "czechia": "czech republic",
