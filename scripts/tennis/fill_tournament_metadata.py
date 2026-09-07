@@ -346,10 +346,9 @@ def fill_tournament_locations(limit: int = 25) -> dict[str, Any]:
             # de solo la ciudad -- desambigua casos reales como
             # "Santiago" (Chile / Compostela / Cuba).
             if tournament.city and tournament.country:
-                nominatim_query = f"{tournament.city}, {tournament.country}"
+                geo = geocode_city(tournament.city, country=tournament.country)
             else:
-                nominatim_query = city
-            geo = geocode_city(nominatim_query)
+                geo = geocode_city(city)
             if geo is None:
                 not_found += 1
                 continue

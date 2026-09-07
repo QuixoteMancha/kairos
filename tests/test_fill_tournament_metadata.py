@@ -278,7 +278,7 @@ def test_refine_never_downgrades():
 
 def test_geocoding_uses_city_and_country_when_available():
     """"Santiago" a secas es ambiguo (Chile/Compostela/Cuba) -- con país
-    conocido se consulta "Santiago, Chile"."""
+    conocido se usa la búsqueda estructurada ciudad+país de Nominatim."""
     _t("Santiago", city="Santiago", country="Chile")
     with patch(
         "scripts.tennis.fill_tournament_metadata.get_location", return_value=None,
@@ -288,7 +288,7 @@ def test_geocoding_uses_city_and_country_when_available():
     ) as geo:
         fill_tournament_locations(limit=5)
 
-    geo.assert_called_once_with("Santiago, Chile")
+    geo.assert_called_once_with("Santiago", country="Chile")
 
 
 # --- fill_tournament_country (2026-09-06, bug real: Challenger/ITF nunca
