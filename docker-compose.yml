@@ -296,6 +296,24 @@ services:
     restart: unless-stopped
     networks: [kairos_net]
 
+  # Laboratorio offline de BetOnFavourite: persiste challengers y artefactos,
+  # pero nunca cambia parámetros de producción ni ejecuta órdenes.
+  tennis_ml_optimizer_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_tennis_ml_optimizer_worker
+    build: .
+    command: ["python", "-m", "workers.tennis_ml_optimizer_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      TENNIS_ML_OPTIMIZER_INTERVAL_SECONDS: "86400"
+      TENNIS_ML_ARTIFACT_DIR: /data/ml/tennis
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+    volumes:
+      - kairos_data:/data
+
   brightdata_ip_watcher_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_brightdata_ip_watcher_worker
