@@ -21,6 +21,7 @@ from models.volatility.sports.tennis.weighted_elo import (
     calibrate, combined_probability, fit_platt,
 )
 from outer_apis.sports.tennis.age_fatigue_veto import age_fatigue_veto
+from outer_apis.sports.tennis.h2h_veto import MIN_H2H, has_sufficient_h2h, h2h_veto
 from outer_apis.sports.tennis.injury_risk import calculate_post_injury_penalty
 from strategies.bet_on_favourite import _relative_injury_adjustment
 
@@ -69,6 +70,10 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
     # acumulado de esa entrada queda None (nunca se imputa), y
     # `age_fatigue_veto` no puede vetar sin ese dato.
     tournament_minutes: dict[tuple[int, int], list[float | None]] = defaultdict(list)
+    # 2026-09-07, pedido explícito del usuario -- H2H directo entre cada
+    # par de jugadores, acumulado en el mismo orden cronológico que ya
+    # recorre este loop (nunca cuenta el partido actual ni futuros).
+    h2h_wins: dict[tuple[int, int], dict[int, int]] = defaultdict(dict)
     cases: list[dict[str, Any]] = []
     skipped = defaultdict(int)
     with db_historical.connection_context():
@@ -179,16 +184,34 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                     )
                     tour_key = (fav_id, row.tournament_id)
                     prior_durations = tournament_minutes.get(tour_key, [])
-                    fav_cum_minutes = (
-                        sum(prior_durations) if prior_durations and all(d is not None for d in prior_durations)
-                        else None
+                    # Un primer partido del torneo tiene fatiga conocida = 0;
+                    # lo incierto es no conocer el torneo, la edad o alguna
+                    # duración previa. La política de la estrategia es no
+                    # apostar cuando no se pueda demostrar esa información.
+                    fatigue_data_complete = bool(
+                        fav_age is not None
+                        and row.tournament_id is not None
+                        and all(duration is not None for duration in prior_durations)
+                    )
+                    fav_cum_minutes = sum(prior_durations) if fatigue_data_complete else None
+                    h2h_key = (min(fav_id, dog_id), max(fav_id, dog_id))
+                    prior_h2h = h2h_wins.get(h2h_key, {})
+                    n_prior_h2h = sum(prior_h2h.values())
+                    fav_h2h_wr = (
+                        prior_h2h.get(fav_id, 0) / n_prior_h2h if n_prior_h2h >= MIN_H2H else None
                     )
                     if fav_wr <= dog_wr:
                         skipped["surface_winrate"] += 1
                     elif fav_recent_wr <= dog_recent_wr:
                         skipped["recent_form"] += 1
+                    elif not fatigue_data_complete:
+                        skipped["insufficient_fatigue_data"] += 1
+                    elif not has_sufficient_h2h(n_prior_h2h):
+                        skipped["insufficient_h2h"] += 1
                     elif age_fatigue_veto(fav_age, fav_cum_minutes):
                         skipped["age_fatigue_veto"] += 1
+                    elif h2h_veto(fav_h2h_wr):
+                        skipped["h2h_veto"] += 1
                     else:
                         cases.append({
                             "match_id": row.match_id,
@@ -224,6 +247,11 @@ def collect_cases() -> tuple[list[dict[str, Any]], dict[str, int]]:
                 match_minutes = row.duration.total_minutes if row.duration_id else None
                 tournament_minutes[(row.player_a_id, row.tournament_id)].append(match_minutes)
                 tournament_minutes[(row.player_b_id, row.tournament_id)].append(match_minutes)
+
+            if row.winner_id in (row.player_a_id, row.player_b_id):
+                pair_key = (min(row.player_a_id, row.player_b_id), max(row.player_a_id, row.player_b_id))
+                bucket = h2h_wins[pair_key]
+                bucket[row.winner_id] = bucket.get(row.winner_id, 0) + 1
 
             # Snapshot de baseline ANTES de incorporar el partido del retiro.
             for player_id in (row.player_a_id, row.player_b_id):
@@ -392,6 +420,8 @@ def run_backtest(initial_capital: float = 50.0) -> dict[str, Any]:
             "post_injury_recency_days": 90,
             "post_injury_performance_days": 180,
             "max_post_injury_probability_penalty": 0.10,
+            "fatigue_data_required": True,
+            "min_h2h_prior_meetings_required": MIN_H2H,
         },
         "injury_adjustment_summary": {
             "favorite_flagged_cases": sum(value > 0 for value in fav_penalties),
