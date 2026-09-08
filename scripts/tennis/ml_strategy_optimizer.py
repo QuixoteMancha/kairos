@@ -44,10 +44,15 @@ MAX_ODDS = 3.0
 FEATURE_COLUMNS = (
     "market_probability", "weighted_elo_diff", "surface_elo_diff",
     "recent_wr_diff", "elo_slope_5_diff", "elo_slope_10_diff",
-    "service_effectiveness_diff", "return_games_rate_diff", "tour", "surface",
+    "service_effectiveness_diff", "return_games_rate_diff",
+    "recent_point_share_diff", "recent_return_points_effectiveness_diff",
+    "favorite_tournament_minutes", "underdog_tournament_minutes",
+    "tournament_minutes_diff", "favorite_tournament_matches",
+    "underdog_tournament_matches", "tournament_matches_diff",
+    "tour", "surface", "tournament_stage",
 )
-NUMERIC_COLUMNS = FEATURE_COLUMNS[:-2]
-CATEGORICAL_COLUMNS = FEATURE_COLUMNS[-2:]
+CATEGORICAL_COLUMNS = ("tour", "surface", "tournament_stage")
+NUMERIC_COLUMNS = tuple(column for column in FEATURE_COLUMNS if column not in CATEGORICAL_COLUMNS)
 
 
 def _slope(values: list[float]) -> float | None:
@@ -83,6 +88,33 @@ def _stats_features(stats: MatchStats, side: str, opponent_side: str) -> tuple[f
     return service, return_rate
 
 
+def _point_share(stats: MatchStats, side: str, opponent_side: str) -> float | None:
+    own = getattr(stats, f"total_points_won_{side}")
+    opponent = getattr(stats, f"total_points_won_{opponent_side}")
+    return float(own) / (float(own) + float(opponent)) if own is not None and opponent is not None and own + opponent else None
+
+
+def _return_points_effectiveness(stats: MatchStats, side: str) -> float | None:
+    first = getattr(stats, f"first_return_points_won_pct_{side}")
+    second = getattr(stats, f"second_return_points_won_pct_{side}")
+    return (float(first) + float(second)) / 2.0 if first is not None and second is not None else None
+
+
+def _tournament_stage(round_name: str | None) -> str:
+    value = (round_name or "").strip().lower()
+    if value.startswith("qualification"):
+        return "Qualifying"
+    if "quarterfinal" in value:
+        return "Quarterfinal"
+    if "semifinal" in value:
+        return "Semifinal"
+    if value == "final":
+        return "Final"
+    if "round of 16" in value:
+        return "RoundOf16"
+    return "Early" if value else "Unknown"
+
+
 def collect_dataset() -> list[dict[str, Any]]:
     """Una observación por partido, orientada al favorito de mercado."""
     init_db_historical()
@@ -90,6 +122,8 @@ def collect_dataset() -> list[dict[str, Any]]:
     elos: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     services: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     returns: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
+    point_shares: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=5))
+    return_points: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=5))
     performance: dict[int, list[tuple[date, float | None, float | None, float | None]]] = defaultdict(list)
     injury_state: dict[int, dict[str, Any]] = {}
     # El laboratorio debe respetar las mismas condiciones fail-closed que
@@ -171,6 +205,8 @@ def collect_dataset() -> list[dict[str, Any]]:
                     if fav_player.birthdate is not None else None
                 )
                 fav_cumulative_minutes = sum(prior_durations) if fatigue_data_complete else None
+                dog_prior_durations = tournament_minutes.get((dog_id, match.tournament_id), [])
+                dog_cumulative_minutes = sum(dog_prior_durations) if all(value is not None for value in dog_prior_durations) else None
                 pair_key = (min(fav_id, dog_id), max(fav_id, dog_id))
                 prior_h2h = h2h_wins.get(pair_key, {})
                 n_prior_h2h = sum(prior_h2h.values())
@@ -214,10 +250,32 @@ def collect_dataset() -> list[dict[str, Any]]:
                             _mean(list(services[fav_id])) - _mean(list(services[dog_id]))
                             if services[fav_id] and services[dog_id] else None
                         ),
-                        "return_games_rate_diff": (
+                    "return_games_rate_diff": (
                             _mean(list(returns[fav_id])) - _mean(list(returns[dog_id]))
                             if returns[fav_id] and returns[dog_id] else None
-                        ),
+                    ),
+                    "recent_point_share_diff": (
+                        _mean(list(point_shares[fav_id])) - _mean(list(point_shares[dog_id]))
+                        if point_shares[fav_id] and point_shares[dog_id] else None
+                    ),
+                    "recent_return_points_effectiveness_diff": (
+                        _mean(list(return_points[fav_id])) - _mean(list(return_points[dog_id]))
+                        if return_points[fav_id] and return_points[dog_id] else None
+                    ),
+                    "favorite_tournament_minutes": fav_cumulative_minutes,
+                    "underdog_tournament_minutes": dog_cumulative_minutes,
+                    "tournament_minutes_diff": (
+                        fav_cumulative_minutes - dog_cumulative_minutes
+                        if fav_cumulative_minutes is not None and dog_cumulative_minutes is not None else None
+                    ),
+                    "favorite_tournament_matches": len(prior_durations),
+                    "underdog_tournament_matches": len(dog_prior_durations),
+                    "tournament_matches_diff": len(prior_durations) - len(dog_prior_durations),
+                    "tournament_stage": _tournament_stage(match.round),
+                    "statistics_evidence_complete": bool(
+                        point_shares[fav_id] and point_shares[dog_id]
+                        and return_points[fav_id] and return_points[dog_id]
+                    ),
                         "favorite_injury_penalty": injury_penalty(fav_id),
                         "underdog_injury_penalty": injury_penalty(dog_id),
                         "hit": match.winner_id == fav_id,
@@ -257,10 +315,16 @@ def collect_dataset() -> list[dict[str, Any]]:
                     (match.player_a_id, "a", "b"), (match.player_b_id, "b", "a"),
                 ):
                     service, return_rate = _stats_features(stats, side, opponent_side)
+                    point_share = _point_share(stats, side, opponent_side)
+                    return_point = _return_points_effectiveness(stats, side)
                     if service is not None:
                         services[player_id].append(service)
                     if return_rate is not None:
                         returns[player_id].append(return_rate)
+                    if point_share is not None:
+                        point_shares[player_id].append(point_share)
+                    if return_point is not None:
+                        return_points[player_id].append(return_point)
                     elo = (
                         match.player_a_surface_elo if side == "a" else match.player_b_surface_elo
                     )

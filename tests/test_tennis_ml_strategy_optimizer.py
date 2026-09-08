@@ -26,6 +26,16 @@ def _rows():
                 "elo_slope_10_diff": 5 if strong else -2,
                 "service_effectiveness_diff": 6 if strong else None,
                 "return_games_rate_diff": 0.1 if strong else None,
+                "recent_point_share_diff": 0.08 if strong else -0.03,
+                "recent_return_points_effectiveness_diff": 7 if strong else -3,
+                "favorite_tournament_minutes": 180.0,
+                "underdog_tournament_minutes": 130.0,
+                "tournament_minutes_diff": 50.0,
+                "favorite_tournament_matches": 2,
+                "underdog_tournament_matches": 2,
+                "tournament_matches_diff": 0,
+                "tournament_stage": "Quarterfinal",
+                "statistics_evidence_complete": True,
                 "hit": strong,
             })
     return rows

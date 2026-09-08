@@ -46,6 +46,8 @@ def select_cases(cases: list[dict[str, Any]], genome: StrategyGenome) -> list[di
     """Aplica una regla sin imputar indicadores que faltan."""
     selected = []
     for case in cases:
+        if case.get("statistics_evidence_complete") is not True:
+            continue
         probability = case.get("model_probability")
         market = case.get("market_probability")
         elo_diff = case.get("weighted_elo_diff")

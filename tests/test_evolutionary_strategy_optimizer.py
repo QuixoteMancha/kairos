@@ -12,6 +12,7 @@ def _case(year: int, index: int, *, good: bool) -> dict:
         "model_probability": 0.72 if good else 0.51,
         "weighted_elo_diff": 150.0 if good else -40.0,
         "recent_wr_diff": 0.25 if good else -0.15,
+        "statistics_evidence_complete": True,
         "favorite_elo_rank": 10,
         "hit": good,
     }
