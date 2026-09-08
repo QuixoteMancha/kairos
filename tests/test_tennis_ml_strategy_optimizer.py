@@ -45,8 +45,12 @@ def test_trains_all_challengers_and_writes_artifacts(tmp_path):
     assert report["evaluation_assumptions"]["kalshi_fees_applied"] is False
     assert set(report["models"]) == {
         "logistic_regression", "random_forest", "hist_gradient_boosting",
+        "evolutionary_rules",
     }
-    for result in report["models"].values():
+    for name, result in report["models"].items():
+        if name == "evolutionary_rules":
+            assert result["eligible_for_review"] is False
+            continue
         assert [fold["year"] for fold in result["folds"]] == [2025, 2026]
         assert (tmp_path / report["dataset_sha256"] / result["artifact_path"].split("/")[-1]).exists()
         assert result["folds"][0]["brier"] >= 0

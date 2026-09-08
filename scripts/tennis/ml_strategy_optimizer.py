@@ -24,11 +24,15 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.base import clone
 
 from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import MatchHistory, MatchStats
 from database.historical.workerstate import TennisMlExperiment
 from scripts.tennis.bet_on_favourite_backtest import _odds_for_match, simulate
+from scripts.tennis.evolutionary_strategy_optimizer import evolve_strategy_rules
+from outer_apis.sports.tennis.age_fatigue_veto import age_fatigue_veto
+from outer_apis.sports.tennis.h2h_veto import MIN_H2H, has_sufficient_h2h, h2h_veto
 from outer_apis.sports.tennis.injury_risk import calculate_post_injury_penalty
 from strategies.bet_on_favourite import _relative_injury_adjustment
 
@@ -88,6 +92,11 @@ def collect_dataset() -> list[dict[str, Any]]:
     returns: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     performance: dict[int, list[tuple[date, float | None, float | None, float | None]]] = defaultdict(list)
     injury_state: dict[int, dict[str, Any]] = {}
+    # El laboratorio debe respetar las mismas condiciones fail-closed que
+    # BetOnFavourite: sin edad/duración acumulada/H2H previo comprobable no
+    # se genera un candidato que luego pudiera recomendarse por error.
+    tournament_minutes: dict[tuple[int, int], list[float | None]] = defaultdict(list)
+    h2h_wins: dict[tuple[int, int], dict[int, int]] = defaultdict(dict)
     rows: list[dict[str, Any]] = []
     with db_historical.connection_context():
         stats_by_match = {
@@ -150,43 +159,69 @@ def collect_dataset() -> list[dict[str, Any]]:
                 fav_surface, dog_surface = (
                     elo_values[2:] if a_favorite else elo_values[:1:-1]
                 )
+                fav_player = match.player_a if a_favorite else match.player_b
+                prior_durations = tournament_minutes.get((fav_id, match.tournament_id), [])
+                fatigue_data_complete = bool(
+                    fav_player.birthdate is not None
+                    and match.tournament_id is not None
+                    and all(duration is not None for duration in prior_durations)
+                )
+                fav_age = (
+                    (played - fav_player.birthdate).days / 365.25
+                    if fav_player.birthdate is not None else None
+                )
+                fav_cumulative_minutes = sum(prior_durations) if fatigue_data_complete else None
+                pair_key = (min(fav_id, dog_id), max(fav_id, dog_id))
+                prior_h2h = h2h_wins.get(pair_key, {})
+                n_prior_h2h = sum(prior_h2h.values())
+                fav_h2h_wr = (
+                    prior_h2h.get(fav_id, 0) / n_prior_h2h
+                    if n_prior_h2h >= MIN_H2H else None
+                )
                 implied_fav, implied_dog = 1 / fav_odds, 1 / dog_odds
                 fair_market = implied_fav / (implied_fav + implied_dog)
                 fav_results, dog_results = list(results[fav_id]), list(results[dog_id])
                 fav_elos, dog_elos = list(elos[fav_id]), list(elos[dog_id])
-                rows.append({
-                    "match_id": match.match_id,
-                    "date": played.isoformat(),
-                    "tour": match.tour or "Unknown",
-                    "surface": (match.surface or "Unknown").title(),
-                    "favorite_decimal_odds": float(fav_odds),
-                    "market_probability": fair_market,
-                    "weighted_elo_diff": float(fav_overall) - float(dog_overall),
-                    "surface_elo_diff": float(fav_surface) - float(dog_surface),
-                    "recent_wr_diff": (
-                        _mean([float(x) for x in fav_results]) - _mean([float(x) for x in dog_results])
-                        if fav_results and dog_results else None
-                    ),
-                    "elo_slope_5_diff": (
-                        _slope(fav_elos[-5:]) - _slope(dog_elos[-5:])
-                        if len(fav_elos) >= 5 and len(dog_elos) >= 5 else None
-                    ),
-                    "elo_slope_10_diff": (
-                        _slope(fav_elos) - _slope(dog_elos)
-                        if len(fav_elos) >= 10 and len(dog_elos) >= 10 else None
-                    ),
-                    "service_effectiveness_diff": (
-                        _mean(list(services[fav_id])) - _mean(list(services[dog_id]))
-                        if services[fav_id] and services[dog_id] else None
-                    ),
-                    "return_games_rate_diff": (
-                        _mean(list(returns[fav_id])) - _mean(list(returns[dog_id]))
-                        if returns[fav_id] and returns[dog_id] else None
-                    ),
-                    "favorite_injury_penalty": injury_penalty(fav_id),
-                    "underdog_injury_penalty": injury_penalty(dog_id),
-                    "hit": match.winner_id == fav_id,
-                })
+                evidence_is_complete = (
+                    fatigue_data_complete
+                    and has_sufficient_h2h(n_prior_h2h)
+                    and not age_fatigue_veto(fav_age, fav_cumulative_minutes)
+                    and not h2h_veto(fav_h2h_wr)
+                )
+                if evidence_is_complete:
+                    rows.append({
+                        "match_id": match.match_id,
+                        "date": played.isoformat(),
+                        "tour": match.tour or "Unknown",
+                        "surface": (match.surface or "Unknown").title(),
+                        "favorite_decimal_odds": float(fav_odds),
+                        "market_probability": fair_market,
+                        "weighted_elo_diff": float(fav_overall) - float(dog_overall),
+                        "surface_elo_diff": float(fav_surface) - float(dog_surface),
+                        "recent_wr_diff": (
+                            _mean([float(x) for x in fav_results]) - _mean([float(x) for x in dog_results])
+                            if fav_results and dog_results else None
+                        ),
+                        "elo_slope_5_diff": (
+                            _slope(fav_elos[-5:]) - _slope(dog_elos[-5:])
+                            if len(fav_elos) >= 5 and len(dog_elos) >= 5 else None
+                        ),
+                        "elo_slope_10_diff": (
+                            _slope(fav_elos) - _slope(dog_elos)
+                            if len(fav_elos) >= 10 and len(dog_elos) >= 10 else None
+                        ),
+                        "service_effectiveness_diff": (
+                            _mean(list(services[fav_id])) - _mean(list(services[dog_id]))
+                            if services[fav_id] and services[dog_id] else None
+                        ),
+                        "return_games_rate_diff": (
+                            _mean(list(returns[fav_id])) - _mean(list(returns[dog_id]))
+                            if returns[fav_id] and returns[dog_id] else None
+                        ),
+                        "favorite_injury_penalty": injury_penalty(fav_id),
+                        "underdog_injury_penalty": injury_penalty(dog_id),
+                        "hit": match.winner_id == fav_id,
+                    })
 
             a_won = match.winner_id == match.player_a_id
             results[match.player_a_id].append(a_won)
@@ -209,6 +244,14 @@ def collect_dataset() -> list[dict[str, Any]]:
                         "date": played, "end": end,
                         "baseline": [item for item in performance[player_id] if item[0].toordinal() >= cutoff],
                     }
+            if match.tournament_id is not None:
+                match_minutes = match.duration.total_minutes if match.duration_id else None
+                tournament_minutes[(match.player_a_id, match.tournament_id)].append(match_minutes)
+                tournament_minutes[(match.player_b_id, match.tournament_id)].append(match_minutes)
+            if match.winner_id in (match.player_a_id, match.player_b_id):
+                pair_key = (min(match.player_a_id, match.player_b_id), max(match.player_a_id, match.player_b_id))
+                bucket = h2h_wins[pair_key]
+                bucket[match.winner_id] = bucket.get(match.winner_id, 0) + 1
             if stats is not None:
                 for player_id, side, opponent_side in (
                     (match.player_a_id, "a", "b"), (match.player_b_id, "b", "a"),
@@ -293,14 +336,18 @@ def stats_orientation_quality() -> dict[str, Any]:
     }
 
 
-def _evaluate_predictions(rows: list[dict[str, Any]], probabilities: np.ndarray) -> dict[str, Any]:
-    probabilities = np.asarray([
+def _injury_adjusted_probabilities(rows: list[dict[str, Any]], probabilities: np.ndarray) -> np.ndarray:
+    return np.asarray([
         _relative_injury_adjustment(
             float(probability), float(row.get("favorite_injury_penalty", 0.0)),
             float(row.get("underdog_injury_penalty", 0.0)),
         )
         for row, probability in zip(rows, probabilities)
     ])
+
+
+def _evaluate_predictions(rows: list[dict[str, Any]], probabilities: np.ndarray) -> dict[str, Any]:
+    probabilities = _injury_adjusted_probabilities(rows, probabilities)
     labels = np.asarray([int(row["hit"]) for row in rows])
     selected = []
     for row, probability in zip(rows, probabilities):
@@ -337,19 +384,30 @@ def train_and_evaluate(
     artifact_dir = Path(artifact_root) / dataset_hash
     artifact_dir.mkdir(parents=True, exist_ok=True)
     reports = {}
+    evolutionary_predictions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    available_years = sorted({int(row["date"][:4]) for row in rows})
+    evolution_years = tuple(available_years[-3:])
+    evaluation_years = tuple(sorted({2025, 2026, *evolution_years}))
     for name, estimator in model_candidates().items():
         folds = []
         final_pipeline = None
-        for year in (2025, 2026):
+        for year in evaluation_years:
             training = [row for row in rows if int(row["date"][:4]) < year]
             evaluation = [row for row in rows if int(row["date"][:4]) == year]
             if len(training) < MIN_TRAIN_ROWS or not evaluation:
                 continue
-            pipeline = Pipeline([("features", _preprocessor()), ("model", estimator)])
+            pipeline = Pipeline([("features", _preprocessor()), ("model", clone(estimator))])
             pipeline.fit(_matrix(training), np.asarray([int(row["hit"]) for row in training]))
             probabilities = pipeline.predict_proba(_matrix(evaluation))[:, 1]
-            folds.append({"year": year, **_evaluate_predictions(evaluation, probabilities)})
-            final_pipeline = pipeline
+            adjusted_probabilities = _injury_adjusted_probabilities(evaluation, probabilities)
+            if year in (2025, 2026):
+                folds.append({"year": year, **_evaluate_predictions(evaluation, probabilities)})
+                final_pipeline = pipeline
+            if year in evolution_years:
+                evolutionary_predictions[name].extend(
+                    {**row, "model_probability": float(probability)}
+                    for row, probability in zip(evaluation, adjusted_probabilities)
+                )
         if final_pipeline is None:
             reports[name] = {"folds": [], "eligible_for_review": False, "reason": "insufficient data"}
             continue
@@ -364,6 +422,9 @@ def train_and_evaluate(
             "folds": folds, "eligible_for_review": eligible,
             "artifact_path": str(artifact_path),
         }
+    # Las reglas evolucionan sólo con predicciones ya out-of-sample; el
+    # último año disponible es siempre el holdout que no toca el fitness.
+    reports["evolutionary_rules"] = evolve_strategy_rules(evolutionary_predictions)
     return {
         "dataset_sha256": dataset_hash,
         "sample_count": len(rows),
@@ -395,6 +456,8 @@ def persist_report(report: dict[str, Any]) -> None:
                 parameters_json=json.dumps({
                     "features": FEATURE_COLUMNS, "edge": EDGE_THRESHOLD,
                     "max_odds": MAX_ODDS, "promotion": "manual_only",
+                    "evolution": result.get("evolution"),
+                    "genome": result.get("genome"),
                     "dataset_quality": report.get("dataset_quality", {}),
                 }),
                 artifact_path=result.get("artifact_path"),
