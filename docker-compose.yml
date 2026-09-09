@@ -314,6 +314,20 @@ services:
     volumes:
       - kairos_data:/data
 
+  # Dataset point-in-time para futuros challengers climáticos; sólo lectura.
+  weather_market_capture_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_weather_market_capture_worker
+    build: .
+    command: ["python", "-m", "workers.weather_market_capture_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      WEATHER_MARKET_CAPTURE_INTERVAL_SECONDS: "900"
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    networks: [kairos_net]
+
   brightdata_ip_watcher_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_brightdata_ip_watcher_worker

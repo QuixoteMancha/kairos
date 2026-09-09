@@ -26,6 +26,7 @@ def historical_models():
     from database.historical.workerstate import HistoricalEnrichmentAttempt, HistoricalWorkerState, TennisMlExperiment
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
     from database.historical.market_data import CryptoPriceSnapshot, KalshiMarketTick
+    from database.historical.weather import WeatherMarketSnapshot
     from database.historical.team_sports import (
         MlbMatchProbabilityTick, MlbScannedMatch, TeamHeadToHead,
         TeamMatchHistory, TeamRating,
@@ -44,7 +45,7 @@ def historical_models():
     )
 
     models = [
-        KalshiMarketTick, CryptoPriceSnapshot, TeamRating, TennisPlayerRanking,
+        KalshiMarketTick, CryptoPriceSnapshot, WeatherMarketSnapshot, TeamRating, TennisPlayerRanking,
         TennisHistoricalOdds, PlayerStats, TennisScannedMatch,
         TennisMatchProbabilityTick, TennisSetProbabilityTick, TennisMatchWeather,
         TennisFavouriteShadowDecision,
@@ -428,6 +429,11 @@ def _add_return_points_won_stats(database: Database) -> None:
             )
 
 
+def _add_weather_market_snapshots(database: Database) -> None:
+    from database.historical.weather import WeatherMarketSnapshot
+    database.create_tables([WeatherMarketSnapshot], safe=True)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -470,4 +476,5 @@ HISTORICAL_MIGRATIONS = (
         23, "add_tournament_elevation_20260906",
         _add_tournament_elevation,
     ),
+    Migration(24, "add_weather_market_snapshots_20260909", _add_weather_market_snapshots),
 )
