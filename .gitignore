@@ -61,6 +61,7 @@ kairos_vol_backup.tar.gz
 
 # Archivos de configuración de entorno con credenciales secretas
 .env
+.env.bak*
 __pycache__/
 *.pyc
 

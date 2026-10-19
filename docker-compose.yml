@@ -93,6 +93,7 @@ services:
       # Las bases activa e histórica son bases PostgreSQL separadas.
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 2g
     networks:
       - kairos_net
     volumes:
@@ -128,6 +129,7 @@ services:
       POSTGRES_DATA_MOUNT: "/postgres_data"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     volumes:
@@ -166,6 +168,7 @@ services:
       TENNIS_CATALOG_BACKFILL_INTERVAL_SECONDS: "3600"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 2g
     networks:
       - kairos_net
 
@@ -190,6 +193,7 @@ services:
       TENNIS_WEATHER_BATCH_LIMIT: "500"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -212,6 +216,7 @@ services:
       TENNIS_GAP_FILLER_AGES_LIMIT: "2000"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -231,6 +236,7 @@ services:
       TENNIS_STATS_TYPED_BACKFILL_LIMIT: "500"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -247,6 +253,7 @@ services:
       TENNIS_DURATION_BACKFILL_LIMIT: "100"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -262,6 +269,7 @@ services:
       TENNIS_BIO_BACKFILL_LIMIT: "40"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   tennis_tournament_metadata_backfill_worker:
@@ -281,6 +289,7 @@ services:
       TENNIS_TOURNAMENT_COUNTRY_LIMIT: "30"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   tennis_self_elo_backfill_worker:
@@ -294,6 +303,7 @@ services:
       TENNIS_SELF_ELO_INTERVAL_SECONDS: "21600"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 3g
     networks: [kairos_net]
 
   # Laboratorio offline de BetOnFavourite: persiste challengers y artefactos,
@@ -310,6 +320,10 @@ services:
       TENNIS_ML_ARTIFACT_DIR: /data/ml/tennis
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    # Antes en docker-compose.ml.yml (que además fijaba su propia imagen y
+    # desalineaba el stack): sklearn no devuelve memoria entre ciclos.
+    cpus: 2.0
+    mem_limit: 4g
     networks: [kairos_net]
     volumes:
       - kairos_data:/data
@@ -324,8 +338,14 @@ services:
     environment:
       <<: *kairos-db-environment
       WEATHER_MARKET_CAPTURE_INTERVAL_SECONDS: "900"
+      WEATHER_CAPTURE_REQUEST_BUDGET: ${WEATHER_CAPTURE_REQUEST_BUDGET:-32}
+      WEATHER_HISTORY_START_YEAR: ${WEATHER_HISTORY_START_YEAR:-2024}
+      WEATHER_FORECAST_MODELS: ${WEATHER_FORECAST_MODELS:-gfs_seamless,ecmwf_ifs025,gfs_hrrr}
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    # Antes en docker-compose.weather.yml (con imagen propia fijada).
+    cpus: 0.5
+    mem_limit: 512m
     networks: [kairos_net]
 
   brightdata_ip_watcher_worker:
@@ -343,6 +363,7 @@ services:
       BRIGHTDATA_WATCHER_INTERVAL_SECONDS: "300"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -360,6 +381,7 @@ services:
       TENNIS_TICK_INTERVAL_SECONDS: "60"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     volumes:
@@ -387,6 +409,7 @@ services:
       TENNIS_HISTORY_SYNC_STATS_LIMIT: "5"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
 
@@ -413,6 +436,7 @@ services:
       TENNIS_LIVE_DATA_BATCH_SIZE: "12"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   tennis_set_tick_worker:
@@ -431,6 +455,7 @@ services:
       TENNIS_SET_TICK_BATCH_SIZE: "40"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   tennis_match_timing_worker:
@@ -450,6 +475,7 @@ services:
       TENNIS_MATCH_TIMING_BATCH_SIZE: "40"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   tennis_match_stats_orientation_worker:
@@ -464,6 +490,7 @@ services:
       TENNIS_STATS_ORIENTATION_LIMIT: "25"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks: [kairos_net]
 
   market_arb_websocket_scanner:
@@ -485,6 +512,7 @@ services:
       MARKET_ARB_WS_REGISTRY_REFRESH_SECONDS: "900"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     volumes:
@@ -505,6 +533,7 @@ services:
       OUTCOME_OBSERVER_INTERVAL_SECONDS: "1800"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     volumes:
@@ -524,6 +553,7 @@ services:
       HISTORICAL_COLLECTOR_INTERVAL_SECONDS: "300"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     volumes:
@@ -545,6 +575,7 @@ services:
       API_PORT: "8765"
     depends_on: *kairos-db-depends
     restart: unless-stopped
+    mem_limit: 1g
     networks:
       - kairos_net
     ports:
