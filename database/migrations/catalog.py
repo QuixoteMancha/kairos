@@ -26,7 +26,10 @@ def historical_models():
     from database.historical.workerstate import HistoricalEnrichmentAttempt, HistoricalWorkerState, TennisMlExperiment
     from database.historical.baseball import MlbGameHistory, MlbHistoricalOdds
     from database.historical.market_data import CryptoPriceSnapshot, KalshiMarketTick
-    from database.historical.weather import WeatherMarketSnapshot
+    from database.historical.weather import (
+        WeatherMarketSnapshot, WeatherStation, WeatherContract,
+        WeatherEvidence, WeatherCaptureJob,
+    )
     from database.historical.team_sports import (
         MlbMatchProbabilityTick, MlbScannedMatch, TeamHeadToHead,
         TeamMatchHistory, TeamRating,
@@ -45,7 +48,9 @@ def historical_models():
     )
 
     models = [
-        KalshiMarketTick, CryptoPriceSnapshot, WeatherMarketSnapshot, TeamRating, TennisPlayerRanking,
+        KalshiMarketTick, CryptoPriceSnapshot, WeatherMarketSnapshot,
+        WeatherStation, WeatherContract, WeatherEvidence, WeatherCaptureJob,
+        TeamRating, TennisPlayerRanking,
         TennisHistoricalOdds, PlayerStats, TennisScannedMatch,
         TennisMatchProbabilityTick, TennisSetProbabilityTick, TennisMatchWeather,
         TennisFavouriteShadowDecision,
@@ -434,6 +439,15 @@ def _add_weather_market_snapshots(database: Database) -> None:
     database.create_tables([WeatherMarketSnapshot], safe=True)
 
 
+def _add_weather_evidence(database: Database) -> None:
+    from database.historical.weather import (
+        WeatherStation, WeatherContract, WeatherEvidence, WeatherCaptureJob,
+    )
+    database.create_tables([
+        WeatherStation, WeatherContract, WeatherEvidence, WeatherCaptureJob,
+    ], safe=True)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -477,4 +491,5 @@ HISTORICAL_MIGRATIONS = (
         _add_tournament_elevation,
     ),
     Migration(24, "add_weather_market_snapshots_20260909", _add_weather_market_snapshots),
+    Migration(25, "add_weather_evidence_20260909", _add_weather_evidence),
 )
