@@ -348,6 +348,40 @@ services:
     mem_limit: 512m
     networks: [kairos_net]
 
+  system_resource_monitor_worker:
+    image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
+    container_name: kairos_system_resource_monitor_worker
+    build: .
+    command: ["python", "-m", "workers.system_resource_monitor_worker"]
+    env_file: [.env]
+    environment:
+      <<: *kairos-db-environment
+      SYSTEM_RESOURCE_MONITOR_INTERVAL_SECONDS: "45"
+      SYSTEM_RESOURCE_SAMPLE_RETENTION_HOURS: "72"
+      SYSTEM_RESOURCE_TOP_N: "10"
+      # /proc del contenedor es el propio proceso, no el host -- se monta
+      # el /proc real del host en /host_proc para leer meminfo/pressure
+      # del HOST, no del contenedor.
+      SYSTEM_RESOURCE_MEMINFO_PATH: /host_proc/meminfo
+      SYSTEM_RESOURCE_PSI_ROOT: /host_proc/pressure
+    depends_on: *kairos-db-depends
+    restart: unless-stopped
+    # Solo lee /proc y /sys/fs/cgroup (read-only); sin socket de Docker
+    # montado (ver docstring del worker para el tradeoff). RSS esperado
+    # de pocos MB -- el límite es generoso por margen frente a picos de
+    # json.dumps en incidentes grandes, no por necesidad real.
+    # Sólo los dos archivos de /proc que se leen: montar /proc entero
+    # expondría environ/cmdline de todo proceso del host con el mismo uid
+    # (1000 = sandman en la mini-pc), incluidas credenciales de otros
+    # contenedores.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /proc/meminfo:/host_proc/meminfo:ro
+      - /proc/pressure:/host_proc/pressure:ro
+    cpus: 0.25
+    mem_limit: 96m
+    networks: [kairos_net]
+
   brightdata_ip_watcher_worker:
     image: kairos:${KAIROS_IMAGE_TAG:?KAIROS_IMAGE_TAG must be set}
     container_name: kairos_brightdata_ip_watcher_worker

@@ -750,6 +750,70 @@ def portfolio_kalshi_by_event():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/system/resources')
+def system_resources():
+    """Últimas muestras de recursos del host + ranking de contenedores
+    (ver `workers/system_resource_monitor_worker.py`)."""
+    try:
+        from database.historical.system_resources import SystemResourceSample
+
+        limit = min(MAX_LIMIT, max(1, request.args.get('limit', default=20, type=int)))
+        init_db_historical()
+        with db_historical.connection_context():
+            rows = list(
+                SystemResourceSample.select()
+                .order_by(SystemResourceSample.sampled_at.desc())
+                .limit(limit)
+            )
+        result = [
+            {
+                'sampled_at': row.sampled_at.isoformat(),
+                'host_available_memory_pct': row.host_available_memory_pct,
+                'host_swap_used_pct': row.host_swap_used_pct,
+                'psi_cpu_some_avg60': row.psi_cpu_some_avg60,
+                'psi_memory_some_avg60': row.psi_memory_some_avg60,
+                'psi_memory_full_avg60': row.psi_memory_full_avg60,
+                'psi_io_some_avg60': row.psi_io_some_avg60,
+                'top_containers': json.loads(row.top_containers_json) if row.top_containers_json else [],
+            }
+            for row in rows
+        ]
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/system/incidents')
+def system_incidents():
+    """Registro permanente de incidentes de memoria/PSI/cgroup, con el
+    ranking top-N de contenedores por memoria en el momento del
+    incidente (el dato que faltó en el freeze del 2026-10-17)."""
+    try:
+        from database.historical.system_resources import SystemResourceIncident
+
+        limit = min(MAX_LIMIT, max(1, request.args.get('limit', default=50, type=int)))
+        init_db_historical()
+        with db_historical.connection_context():
+            rows = list(
+                SystemResourceIncident.select()
+                .order_by(SystemResourceIncident.occurred_at.desc())
+                .limit(limit)
+            )
+        result = [
+            {
+                'occurred_at': row.occurred_at.isoformat(),
+                'trigger_reason': row.trigger_reason,
+                'host_available_memory_pct': row.host_available_memory_pct,
+                'psi_snapshot': json.loads(row.psi_snapshot_json) if row.psi_snapshot_json else None,
+                'top_containers': json.loads(row.top_containers_json) if row.top_containers_json else [],
+            }
+            for row in rows
+        ]
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     port = int(os.getenv('API_PORT', '8765'))
     app.run(host='0.0.0.0', port=port, debug=False)

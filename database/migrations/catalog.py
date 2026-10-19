@@ -46,6 +46,9 @@ def historical_models():
         TennisPlayerStrength, TennisEloCalibration,
         TennisSetProbabilityTick,
     )
+    from database.historical.system_resources import (
+        SystemResourceSample, SystemResourceIncident,
+    )
 
     models = [
         KalshiMarketTick, CryptoPriceSnapshot, WeatherMarketSnapshot,
@@ -61,6 +64,7 @@ def historical_models():
         MlbHistoricalOdds, Tournament,
         HistoricalWorkerState, HistoricalEnrichmentAttempt,
         TennisPlayerStrength, TennisEloCalibration, TennisMlExperiment,
+        SystemResourceSample, SystemResourceIncident,
     ]
     # Los tests de scripts históricos archivados conservan sus tablas
     # efímeras; producción no las crea ni las valida desde migración 9.
@@ -459,6 +463,13 @@ def _add_tennis_tick_ask_sizes(database: Database) -> None:
     )
 
 
+def _add_system_resource_monitoring(database: Database) -> None:
+    from database.historical.system_resources import (
+        SystemResourceSample, SystemResourceIncident,
+    )
+    database.create_tables([SystemResourceSample, SystemResourceIncident], safe=True)
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -504,4 +515,5 @@ HISTORICAL_MIGRATIONS = (
     Migration(24, "add_weather_market_snapshots_20260909", _add_weather_market_snapshots),
     Migration(25, "add_weather_evidence_20260909", _add_weather_evidence),
     Migration(26, "add_tennis_tick_ask_sizes_20260910", _add_tennis_tick_ask_sizes),
+    Migration(27, "add_system_resource_monitoring_20261018", _add_system_resource_monitoring),
 )
