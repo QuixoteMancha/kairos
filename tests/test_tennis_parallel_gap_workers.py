@@ -16,10 +16,13 @@ def test_tournament_worker_isolates_each_substep():
     mod = "workers.tennis_tournament_metadata_backfill_worker"
     with patch(f"{mod}.fill_tournament_levels", side_effect=RuntimeError("bad")), patch(
         f"{mod}.refine_generic_levels", return_value={"refined": 2},
-    ), patch(f"{mod}.fill_tournament_locations", return_value={"updated": 4}):
+    ), patch(f"{mod}.fill_tournament_country", return_value={"updated": 3}), patch(
+        f"{mod}.fill_tournament_locations", return_value={"updated": 4},
+    ):
         result = _run_once()
     assert result["levels"] == {"error": "RuntimeError: bad"}
     assert result["levels_refined"] == {"refined": 2}
+    assert result["country"] == {"updated": 3}
     assert result["locations"] == {"updated": 4}
 
 

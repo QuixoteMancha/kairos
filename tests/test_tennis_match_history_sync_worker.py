@@ -34,6 +34,14 @@ def clean_db():
         TennisPlayerSyncStatus.delete().execute()
 
 
+@pytest.fixture(autouse=True)
+def no_live_rankings():
+    # `run_once` refresca rankings ATP/WTA reales al inicio; sin esto el
+    # primer test sin patch explícito pega a atptour.com/wtatennis.com.
+    with patch("workers.tennis_match_history_sync_worker.get_top_rankings"):
+        yield
+
+
 def _now():
     return datetime.now(timezone.utc)
 

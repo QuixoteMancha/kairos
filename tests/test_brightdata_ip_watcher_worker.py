@@ -24,8 +24,10 @@ def test_run_once_returns_false_when_missing_token_or_zone():
 def test_run_once_calls_ensure_ip_whitelisted_with_config():
     config = {"proxy_url": "x", "api_token": "tok", "zone": "residential_proxy1"}
     with patch("workers.brightdata_ip_watcher_worker.get_brightdata_config", return_value=config):
-        with patch("workers.brightdata_ip_watcher_worker.ensure_ip_whitelisted", return_value=True) as mock_ensure:
+        with patch("workers.brightdata_ip_watcher_worker.ensure_ip_whitelisted", return_value=True) as mock_ensure, \
+                patch("workers.brightdata_ip_watcher_worker.alert_if_account_broken") as mock_alert:
             result = _run_once()
 
+    mock_alert.assert_called_once_with("tok", verbose=True)
     mock_ensure.assert_called_once_with("tok", "residential_proxy1", verbose=True)
     assert result is True
