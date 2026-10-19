@@ -148,6 +148,8 @@ def run_once() -> dict:
 
             market_price_a = (market_a or {}).get("current_a_price")
             market_price_b = (market_b or {}).get("current_a_price")
+            market_ask_size_a = (market_a or {}).get("raw", {}).get("yes_ask_size_fp")
+            market_ask_size_b = (market_b or {}).get("raw", {}).get("yes_ask_size_fp")
 
             model_fair_a = model_fair_b = None
             try:
@@ -161,6 +163,7 @@ def run_once() -> dict:
             save_probability_tick(
                 scanned["market_id"], market_price_a, model_fair_a,
                 market_price_b, model_fair_b,
+                market_ask_size_a, market_ask_size_b,
             )
             ticked += 1
         except Exception as e:

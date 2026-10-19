@@ -448,6 +448,17 @@ def _add_weather_evidence(database: Database) -> None:
     ], safe=True)
 
 
+def _add_tennis_tick_ask_sizes(database: Database) -> None:
+    database.execute_sql(
+        "ALTER TABLE tennis_match_probability_tick "
+        "ADD COLUMN IF NOT EXISTS market_ask_size_a DOUBLE PRECISION"
+    )
+    database.execute_sql(
+        "ALTER TABLE tennis_match_probability_tick "
+        "ADD COLUMN IF NOT EXISTS market_ask_size_b DOUBLE PRECISION"
+    )
+
+
 HISTORICAL_MIGRATIONS = (
     Migration(1, "postgresql_historical_baseline_20260815", _create_historical_schema),
     Migration(2, "add_tournament_country_20260816", _add_tournament_country),
@@ -492,4 +503,5 @@ HISTORICAL_MIGRATIONS = (
     ),
     Migration(24, "add_weather_market_snapshots_20260909", _add_weather_market_snapshots),
     Migration(25, "add_weather_evidence_20260909", _add_weather_evidence),
+    Migration(26, "add_tennis_tick_ask_sizes_20260910", _add_tennis_tick_ask_sizes),
 )

@@ -85,11 +85,14 @@ def test_save_probability_tick_persists_both_prices():
     save_probability_tick(
         "KXATPMATCH-TICK", market_price_a=0.55, model_fair_a=0.58,
         market_price_b=0.47, model_fair_b=0.42,
+        market_ask_size_a=12.5, market_ask_size_b=8.0,
     )
 
     tick = TennisMatchProbabilityTick.select().first()
     assert tick.market_price_a == 0.55
     assert tick.model_fair_a == 0.58
+    assert tick.market_ask_size_a == 12.5
+    assert tick.market_ask_size_b == 8.0
     assert tick.match.market_id == "KXATPMATCH-TICK"
     history = get_probability_history(tick.match.match_history_id)
     assert history == [{

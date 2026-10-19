@@ -442,8 +442,10 @@ class ProbabilityTick(HistoricalBaseModel):
     match = ForeignKeyField(Match, backref="ticks", on_delete="CASCADE")
     observed_at = DateTimeField()
     market_price_a = FloatField(null=True)
+    market_ask_size_a = FloatField(null=True)
     model_fair_a = FloatField(null=True)
     market_price_b = FloatField(null=True)
+    market_ask_size_b = FloatField(null=True)
     model_fair_b = FloatField(null=True)
 
 

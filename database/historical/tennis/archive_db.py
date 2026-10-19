@@ -66,7 +66,11 @@ class ArchivedTennisMatchProbabilityTick(ArchiveBaseModel):
     match = ForeignKeyField(ArchivedTennisScannedMatch, backref="ticks", on_delete="CASCADE")
     observed_at = DateTimeField()
     market_price_a = FloatField(null=True)
+    market_ask_size_a = FloatField(null=True)
     model_fair_a = FloatField(null=True)
+    market_price_b = FloatField(null=True)
+    market_ask_size_b = FloatField(null=True)
+    model_fair_b = FloatField(null=True)
 
 
 class ArchiveNotMountedError(Exception):
@@ -111,3 +115,16 @@ def _ensure_archive_db_initialized(create_if_missing: bool = True) -> None:
     db_archive.init(ARCHIVE_DB_PATH, pragmas={"journal_mode": "wal"})
     db_archive.connect(reuse_if_open=True)
     db_archive.create_tables([ArchivedTennisScannedMatch, ArchivedTennisMatchProbabilityTick], safe=True)
+    # ``create_tables(..., safe=True)`` does not evolve an archive created by
+    # an older image.  Keep this tiny additive migration local to the only
+    # writer of the SQLite archive, before it copies the new liquidity data.
+    existing_columns = {
+        row[1] for row in db_archive.execute_sql(
+            "PRAGMA table_info(tennis_match_probability_tick)"
+        ).fetchall()
+    }
+    for column in ("market_ask_size_a", "market_price_b", "market_ask_size_b", "model_fair_b"):
+        if column not in existing_columns:
+            db_archive.execute_sql(
+                f"ALTER TABLE tennis_match_probability_tick ADD COLUMN {column} REAL"
+            )

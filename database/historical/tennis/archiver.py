@@ -115,7 +115,14 @@ def archive_oldest_half() -> dict[str, Any]:
             for tick in ticks:
                 ArchivedTennisMatchProbabilityTick.get_or_create(
                     match=archived_match, observed_at=tick.observed_at,
-                    defaults={"market_price_a": tick.market_price_a, "model_fair_a": tick.model_fair_a},
+                    defaults={
+                        "market_price_a": tick.market_price_a,
+                        "market_ask_size_a": tick.market_ask_size_a,
+                        "model_fair_a": tick.model_fair_a,
+                        "market_price_b": tick.market_price_b,
+                        "market_ask_size_b": tick.market_ask_size_b,
+                        "model_fair_b": tick.model_fair_b,
+                    },
                 )
         except Exception:
             continue  # este partido no se pudo archivar completo -- no se borra, se reintenta el próximo ciclo
