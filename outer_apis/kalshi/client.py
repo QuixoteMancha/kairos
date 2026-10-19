@@ -35,6 +35,7 @@ class KalshiAPI:
         self.base_url = base_url
         self.timeout_s = timeout_s
         self.session = None
+        self._series_fee_cache: dict[str, dict | None] = {}
 
     def initialize(self):
         """Prepara la sesión HTTP. No hay auth: los endpoints de lectura de
@@ -97,6 +98,35 @@ class KalshiAPI:
             return None
         return self._normalize_market(raw)
 
+    def get_series_fee_metadata(self, series_ticker: str) -> dict | None:
+        """Return verified fee metadata for one series, cached per client.
+
+        Series-level fee settings are the authoritative public source.  Do
+        not turn an unknown ``flat`` structure or an unparseable multiplier
+        into the generic 7% estimate: callers that need a conservative-net
+        calculation must fail closed instead.  Fill-level rounding/rebates
+        remain unknowable before an order is matched.
+        """
+        if not series_ticker:
+            return None
+        if series_ticker in self._series_fee_cache:
+            return self._series_fee_cache[series_ticker]
+        data = self._get(f"/series/{series_ticker}")
+        series = data.get("series") or {}
+        fee_type = series.get("fee_type")
+        try:
+            multiplier = float(series.get("fee_multiplier"))
+        except (TypeError, ValueError):
+            multiplier = None
+        metadata = (
+            {"fee_type": fee_type, "fee_multiplier": multiplier}
+            if fee_type in {"quadratic", "quadratic_with_maker_fees"}
+            and multiplier is not None and 0 < multiplier <= 1
+            else None
+        )
+        self._series_fee_cache[series_ticker] = metadata
+        return metadata
+
     def get_market_any_status(self, ticker: str) -> dict | None:
         """GET /markets?tickers=<ticker> -- a diferencia de get_market()
         (GET /markets/{ticker}, que 404ea una vez el mercado se purga tras
@@ -122,6 +152,7 @@ class KalshiAPI:
         return {
             "id": raw.get("ticker"),
             "ticker": raw.get("ticker"),
+            "series_ticker": raw.get("series_ticker"),
             "type": _infer_category(raw),
             "current_a_price": None,
             "current_b_price": None,

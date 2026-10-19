@@ -15,12 +15,10 @@ a single ticker (that's each player's own yes/no market) — they're the
 `yes_price` of EACH of the two paired tickers, which are complementary to
 each other only because exactly one player wins the match.
 
-Incidental finding, NOT implemented here (flagged for a future decision,
-out of scope for this task): since these two tickers are complementary
-same-EVENT markets, buying "yes" on both simultaneously nets a guaranteed
-$1 payout if yes_a_price + yes_b_price + fees < 1 — a same-event
-cross-ticket arb distinct from MarketArb's same-single-ticket yes/no arb.
-Not built; would need its own strategy class if the user wants it.
+Since these two tickers are complementary same-EVENT markets, buying "yes"
+on both simultaneously nets a guaranteed $1 payout if
+yes_a_price + yes_b_price + fees < 1.  The generic MarketArb evaluator
+handles this cross-ticket shape; it remains read-only/proposal-only.
 
 This module ONLY pairs+enriches market data (grouping raw Kalshi markets,
 extracting player names via title regex, looking up rank/tour via
@@ -165,6 +163,7 @@ def build_tennis_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         result.append({
             "id": event_ticker,
             "type": "tennis",
+            "series_ticker": series,
             "tournament": tournament,
             "round": round_name,
             "current_a_price": legs[0]["current_a_price"],

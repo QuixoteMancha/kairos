@@ -48,6 +48,14 @@ def test_dataset_hash_includes_features_not_only_match_identity():
     assert dataset_sha256(rows) != dataset_sha256(changed)
 
 
+def test_dataset_hash_includes_supervised_outcome_corrections():
+    rows = _rows()
+    corrected = deepcopy(rows)
+    corrected[0]["hit"] = not corrected[0]["hit"]
+
+    assert dataset_sha256(rows) != dataset_sha256(corrected)
+
+
 def test_trains_all_challengers_and_writes_artifacts(tmp_path):
     report = train_and_evaluate(_rows(), tmp_path)
 
@@ -62,6 +70,10 @@ def test_trains_all_challengers_and_writes_artifacts(tmp_path):
             assert result["eligible_for_review"] is False
             continue
         assert [fold["year"] for fold in result["folds"]] == [2025, 2026]
+        assert result["validation_complete"] is True
+        assert result["artifact_training_through"] == "2026-06-28"
+        assert result["execution_ready"] is False
+        assert result["review_scope"] == "research_proxy_pricing_only"
         assert (tmp_path / report["dataset_sha256"] / result["artifact_path"].split("/")[-1]).exists()
         assert result["folds"][0]["brier"] >= 0
         assert "market_favorite_baseline" in result["folds"][0]
@@ -72,3 +84,27 @@ def test_feature_contract_is_stable():
     assert FEATURE_COLUMNS[:3] == (
         "market_probability", "weighted_elo_diff", "surface_elo_diff",
     )
+
+
+def test_empty_dataset_reports_insufficient_data_without_crashing(tmp_path):
+    report = train_and_evaluate([], tmp_path)
+
+    assert report["sample_count"] == 0
+    assert report["training_through"] is None
+    for name in ("logistic_regression", "random_forest", "hist_gradient_boosting"):
+        assert report["models"][name] == {
+            "folds": [], "eligible_for_review": False, "reason": "insufficient data",
+        }
+
+
+def test_incomplete_rolling_validation_cannot_be_reviewable(tmp_path):
+    # 2025 has only 480 prior rows, while 2026 has 600.  This used to leave
+    # a single apparently successful fold eligible for review.
+    rows = [row for row in _rows() if row["date"][:4] >= "2021"]
+    report = train_and_evaluate(rows, tmp_path)
+
+    for name in ("logistic_regression", "random_forest", "hist_gradient_boosting"):
+        result = report["models"][name]
+        assert [fold["year"] for fold in result["folds"]] == [2026]
+        assert result["validation_complete"] is False
+        assert result["eligible_for_review"] is False

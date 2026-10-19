@@ -112,6 +112,7 @@ def build_football_markets(raw_markets: list[dict]) -> list[dict[str, Any]]:
         result.append({
             "id": fav_leg["id"],
             "type": "soccer",
+            "series_ticker": fav_leg.get("series_ticker") or fav_leg.get("raw", {}).get("series_ticker"),
             "current_a_price": fav_leg["current_a_price"],
             "current_b_price": fav_leg["current_b_price"],
             "team_a_rating": fav_elo,

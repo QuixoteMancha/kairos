@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from database.db import init_db_historical
-from database.historical.workerstate import HistoricalWorkerState
+from database.historical.workerstate import HistoricalWorkerState, TennisMlExperiment
 from database.historical.tennis.models import MatchHistory, Player
 from inner_api.server import app
 
@@ -19,8 +19,10 @@ def client():
 def clean_state():
     init_db_historical()
     HistoricalWorkerState.delete().execute()
+    TennisMlExperiment.delete().execute()
     yield
     HistoricalWorkerState.delete().execute()
+    TennisMlExperiment.delete().execute()
 
 
 def test_worker_health_exposes_heartbeat_and_result(client):
@@ -47,3 +49,19 @@ def test_tennis_data_quality_is_exposed_for_desktop(client):
     assert 'coverage' in payload
     assert 'tournament' in payload['coverage']
     assert 'latest_ml_experiment' in payload
+
+
+def test_data_quality_prefers_a_fitted_model_over_evolutionary_summary(client):
+    now = datetime.now(timezone.utc)
+    common = {
+        "dataset_sha256": "dataset", "sample_count": 600,
+        "training_through": "2026-09-10", "metrics_json": "{}",
+        "parameters_json": "{}", "promotion_status": "research_proxy_pricing",
+        "created_at": now,
+    }
+    TennisMlExperiment.create(algorithm="logistic_regression", **common)
+    TennisMlExperiment.create(algorithm="evolutionary_rules", **common)
+
+    payload = client.get('/api/tennis/data-quality').get_json()
+
+    assert payload['latest_ml_experiment']['algorithm'] == 'logistic_regression'

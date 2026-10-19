@@ -12,6 +12,7 @@ from database.historical.tennis.models import (
 from database.historical.tennis.shadow import (
     STRATEGY_VERSION, record_shadow_decision, settle_shadow_decisions,
 )
+from outer_apis.kalshi.fees import order_fee
 
 
 @pytest.fixture(autouse=True)
@@ -73,4 +74,6 @@ def test_shadow_settlement_uses_latest_tick_for_clv_and_real_winner():
     assert decision.status == "won"
     assert decision.closing_market_probability == pytest.approx(0.72)
     assert decision.clv == pytest.approx(0.07)
-    assert decision.simulated_pnl_usd == pytest.approx(round(1 / 0.65 - 1, 4))
+    gross_pnl = 1 / 0.65 - 1
+    fee = order_fee(0.65, contracts=1 / 0.65, category="tennis")
+    assert decision.simulated_pnl_usd == pytest.approx(round(gross_pnl - fee, 4))

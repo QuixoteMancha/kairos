@@ -84,9 +84,30 @@ class MarketArb:
             return None
         if not (0.0 <= price_a <= 1.0) or not (0.0 <= price_b <= 1.0):
             return None
+        # Fees are non-negative.  Avoid a series-metadata request for a
+        # market that is already impossible before fees, which is by far the
+        # common case in a broad scanner.
+        if price_a + price_b >= 1.0:
+            return None
 
-        fee_a = order_fee(price_a, category=category)
-        fee_b = order_fee(price_b, category=category)
+        fee_kwargs = {"category": category}
+        series_ticker = market.get("series_ticker")
+        if series_ticker and isinstance(self.api, KalshiAPI):
+            # A cross-ticket/same-ticket arb cannot be called net-positive
+            # until its series multiplier is known. Fill-level rounding and
+            # rebates are still modeled conservatively by ``order_fee``.
+            # The category estimate remains a compatibility fallback for
+            # legacy markets lacking a series.
+            try:
+                metadata = self.api.get_series_fee_metadata(series_ticker)
+            except Exception:
+                return None
+            if metadata is None:
+                return None
+            fee_kwargs["fee_multiplier"] = metadata["fee_multiplier"]
+
+        fee_a = order_fee(price_a, **fee_kwargs)
+        fee_b = order_fee(price_b, **fee_kwargs)
         if fee_a is None or fee_b is None:
             # fail-closed: sin dato de fee confiable, no hay oportunidad
             return None
@@ -97,6 +118,12 @@ class MarketArb:
 
         ticker_a = market.get('ticker_a', market.get('id'))
         ticker_b = market.get('ticker_b', market.get('id'))
+        # In a single binary ticker, leg B is the complementary NO side.
+        # In a paired event (ATP/WTA), ticker_b already asks whether player
+        # B wins, so the complementary claim is YES on *both* tickers.
+        # Keeping ``side='b'`` for that second ticker produced a plan whose
+        # economics did not match the guaranteed-payout calculation.
+        side_b = 'a' if ticker_a != ticker_b else 'b'
 
         # payout garantizado de 1.0 sin importar el outcome, menos lo que
         # costó armar ambas patas (ya con fees incluidas). Ambas patas se
@@ -104,7 +131,7 @@ class MarketArb:
         return {
             'return_opportunity': round(1.0 - total_cost, 4),
             'market_leg_a': {'ticker': ticker_a, 'side': 'a', 'action': 'market', 'price': price_a},
-            'market_leg_b': {'ticker': ticker_b, 'side': 'b', 'action': 'market', 'price': price_b},
+            'market_leg_b': {'ticker': ticker_b, 'side': side_b, 'action': 'market', 'price': price_b},
         }
 
     def execute_order_placement(self):

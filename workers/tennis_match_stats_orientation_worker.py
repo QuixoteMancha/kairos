@@ -11,6 +11,7 @@ from database.historical.workerstate import (
 from scripts.tennis.repair_match_stats_orientation import repair_match_stats_orientation
 from database.historical.tennis.models import MatchStats
 from database.historical.workerstate import TennisMlExperiment
+from workers.tennis_ml_optimizer_worker import _run_once_isolated
 
 
 _INTERVAL_S = int(os.getenv("TENNIS_STATS_ORIENTATION_INTERVAL_SECONDS", "1800"))
@@ -26,12 +27,17 @@ def _train_when_orientation_complete() -> dict:
     if pending:
         return {"triggered": False, "orientation_pending": pending}
     if TennisMlExperiment.select().where(
-        TennisMlExperiment.promotion_status == "challenger_oriented"
+        TennisMlExperiment.promotion_status.in_((
+            "challenger_oriented",  # compatibility with pre-audit runs
+            "research_proxy_pricing",
+        ))
     ).exists():
         return {"triggered": False, "orientation_pending": 0, "reason": "already_trained"}
-    from scripts.tennis.ml_strategy_optimizer import run_optimizer
-
-    report = run_optimizer()
+    # Keep the orientation daemon small.  The optimizer materializes the
+    # complete sklearn dataset, so it must use the same child-process path
+    # as the dedicated daily worker; otherwise this one-off completion run
+    # keeps the allocator's large resident footprint for the daemon's life.
+    report = _run_once_isolated()
     return {
         "triggered": True,
         "orientation_pending": 0,

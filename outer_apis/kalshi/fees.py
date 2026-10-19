@@ -22,7 +22,7 @@ retorno neto real (nunca lo infla), que es la dirección segura para
 decisiones de capital real.
 """
 
-import math
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 TAKER_FEE_MULTIPLIER = 0.07
 
@@ -39,7 +39,10 @@ def _multiplier_for(category: str | None) -> float:
     return TAKER_FEE_MULTIPLIER
 
 
-def order_fee(price: float, contracts: int = 1, category: str | None = None) -> float | None:
+def order_fee(
+    price: float, contracts: float = 1, category: str | None = None,
+    *, fee_multiplier: float | None = None,
+) -> float | None:
     """Fee total de una orden de `contracts` contratos a `price` (0-1).
 
     Fail-closed: precio ausente/None o fuera de [0,1] -> None (el llamador
@@ -47,15 +50,30 @@ def order_fee(price: float, contracts: int = 1, category: str | None = None) -> 
     """
     if price is None:
         return None
-    if not (0.0 <= price <= 1.0):
+    try:
+        decimal_price = Decimal(str(price))
+        decimal_contracts = Decimal(str(contracts))
+    except (InvalidOperation, ValueError):
         return None
-    if contracts <= 0:
+    if (
+        not decimal_price.is_finite() or not decimal_contracts.is_finite()
+        or not (Decimal("0") <= decimal_price <= Decimal("1"))
+        or decimal_contracts <= 0
+    ):
         return None
 
-    multiplier = _multiplier_for(category)
-    raw_fee = multiplier * contracts * price * (1 - price)
+    if fee_multiplier is not None:
+        try:
+            multiplier = Decimal(str(fee_multiplier))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if not multiplier.is_finite() or not Decimal("0") < multiplier <= Decimal("1"):
+            return None
+    else:
+        multiplier = Decimal(str(_multiplier_for(category)))
+    raw_fee = multiplier * decimal_contracts * decimal_price * (Decimal("1") - decimal_price)
     # round up al centavo más cercano (Kalshi redondea a favor de la casa)
-    return math.ceil(raw_fee * 100) / 100
+    return float((raw_fee * Decimal("100")).to_integral_value(rounding=ROUND_CEILING) / Decimal("100"))
 
 
 def leg_fee_fraction(price: float, category: str | None = None) -> float | None:

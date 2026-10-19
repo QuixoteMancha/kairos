@@ -131,7 +131,13 @@ def tennis_data_quality():
                     'pct': round(100.0 * count / total, 2) if total else 0.0,
                 }
 
-            latest_ml = TennisMlExperiment.select().order_by(
+            # Every optimizer run persists individual classifiers followed by
+            # an ``evolutionary_rules`` aggregate.  The latter is not a
+            # fitted prediction model, so selecting simply the largest ID
+            # made the dashboard hide the latest actual challenger.
+            latest_ml = TennisMlExperiment.select().where(
+                TennisMlExperiment.algorithm != "evolutionary_rules"
+            ).order_by(
                 TennisMlExperiment.created_at.desc(), TennisMlExperiment.id.desc(),
             ).first()
             usable_stats = MatchStats.select().where(MatchStats.is_usable == True).count()

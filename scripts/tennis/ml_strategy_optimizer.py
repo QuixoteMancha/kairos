@@ -41,6 +41,7 @@ MIN_TRAIN_ROWS = 500
 MIN_REVIEW_TRADES_PER_FOLD = 25
 EDGE_THRESHOLD = 0.03
 MAX_ODDS = 3.0
+VALIDATION_FOLD_COUNT = 2
 FEATURE_COLUMNS = (
     "market_probability", "weighted_elo_diff", "surface_elo_diff",
     "recent_wr_diff", "elo_slope_5_diff", "elo_slope_10_diff",
@@ -380,6 +381,10 @@ def dataset_sha256(rows: list[dict[str, Any]]) -> str:
         {key: row.get(key) for key in (
             "match_id", "date", *FEATURE_COLUMNS,
             "favorite_injury_penalty", "underdog_injury_penalty",
+            # A corrected winner changes the supervised training set even
+            # when all pre-match features are unchanged.  Omitting it made
+            # artifact directories and persisted experiment identities lie.
+            "hit",
         )},
         sort_keys=True, default=str,
     ) for row in rows)
@@ -451,11 +456,14 @@ def train_and_evaluate(
     evolutionary_predictions: dict[str, list[dict[str, Any]]] = defaultdict(list)
     available_years = sorted({int(row["date"][:4]) for row in rows})
     evolution_years = tuple(available_years[-3:])
-    evaluation_years = tuple(sorted({2025, 2026, *evolution_years}))
+    # Rolling calendar folds keep the evaluator meaningful after 2026.  The
+    # old fixed (2025, 2026) tuple silently stopped assessing recent years,
+    # while its persisted artifact remained trained only through 2025.
+    evaluation_years = tuple(available_years[-VALIDATION_FOLD_COUNT:])
+    model_years = tuple(sorted(set(evaluation_years) | set(evolution_years)))
     for name, estimator in model_candidates().items():
         folds = []
-        final_pipeline = None
-        for year in evaluation_years:
+        for year in model_years:
             training = [row for row in rows if int(row["date"][:4]) < year]
             evaluation = [row for row in rows if int(row["date"][:4]) == year]
             if len(training) < MIN_TRAIN_ROWS or not evaluation:
@@ -464,20 +472,25 @@ def train_and_evaluate(
             pipeline.fit(_matrix(training), np.asarray([int(row["hit"]) for row in training]))
             probabilities = pipeline.predict_proba(_matrix(evaluation))[:, 1]
             adjusted_probabilities = _injury_adjusted_probabilities(evaluation, probabilities)
-            if year in (2025, 2026):
+            if year in evaluation_years:
                 folds.append({"year": year, **_evaluate_predictions(evaluation, probabilities)})
-                final_pipeline = pipeline
             if year in evolution_years:
                 evolutionary_predictions[name].extend(
                     {**row, "model_probability": float(probability)}
                     for row, probability in zip(evaluation, adjusted_probabilities)
                 )
-        if final_pipeline is None:
+        if not folds:
             reports[name] = {"folds": [], "eligible_for_review": False, "reason": "insufficient data"}
             continue
+        # Validation is strictly historical above. Once it is complete, a
+        # research artifact may use every currently known row; otherwise the
+        # saved model permanently lags one full evaluation year.
+        final_pipeline = Pipeline([("features", _preprocessor()), ("model", clone(estimator))])
+        final_pipeline.fit(_matrix(rows), np.asarray([int(row["hit"]) for row in rows]))
         artifact_path = artifact_dir / f"{name}.joblib"
         joblib.dump(final_pipeline, artifact_path)
-        eligible = bool(folds) and all(
+        validation_complete = len(folds) == len(evaluation_years)
+        eligible = validation_complete and all(
             fold["strategy"]["n_trades"] >= MIN_REVIEW_TRADES_PER_FOLD
             and fold["strategy"]["roi_pct"] > 0
             for fold in folds
@@ -485,6 +498,13 @@ def train_and_evaluate(
         reports[name] = {
             "folds": folds, "eligible_for_review": eligible,
             "artifact_path": str(artifact_path),
+            "artifact_training_through": rows[-1]["date"],
+            "validation_complete": validation_complete,
+            # The return simulation uses bookmaker odds, not historical
+            # executable Kalshi fills.  A positive fold can merit research,
+            # never automatic promotion or an execution claim.
+            "execution_ready": False,
+            "review_scope": "research_proxy_pricing_only",
         }
     # Las reglas evolucionan sólo con predicciones ya out-of-sample; el
     # último año disponible es siempre el holdout que no toca el fitness.
@@ -527,9 +547,9 @@ def persist_report(report: dict[str, Any]) -> None:
                 artifact_path=result.get("artifact_path"),
                 eligible_for_review=result.get("eligible_for_review", False),
                 promotion_status=(
-                    "challenger_oriented"
+                    "research_proxy_pricing"
                     if report.get("dataset_quality", {}).get("orientation_pending") == 0
-                    else "challenger_partial_orientation"
+                    else "research_proxy_pricing_partial_orientation"
                 ),
                 created_at=now,
             )

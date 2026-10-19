@@ -153,6 +153,7 @@ class TennisFModel(_SportFModel):
         fair_a = self._blend_set_sequence_resilience(fair_a, market)
         fair_a = self._blend_surface_form(fair_a, market)
         fair_a = self._blend_own_surface_elo(fair_a, market)
+        fair_a = self._blend_tennisabstract_season_form(fair_a, market)
         fair_a = self._blend_tennisabstract_career_surface_winpct(fair_a, market)
         fair_a = self._blend_style_peer_group(fair_a, market)
         fair_a = self._apply_injury_risk_discount(fair_a, market)

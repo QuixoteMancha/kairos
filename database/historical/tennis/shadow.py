@@ -10,6 +10,7 @@ from database.db import db_historical, init_db_historical
 from database.historical.tennis.models import (
     FavouriteShadowDecision, Match, ProbabilityTick,
 )
+from outer_apis.kalshi.fees import order_fee
 
 
 STRATEGY_VERSION = "bet_on_favourite_v1"
@@ -92,7 +93,18 @@ def settle_shadow_decisions(limit: int = 200) -> dict[str, int]:
             won = match.winner == row.favourite_side
             entry = float(row.entry_market_probability)
             stake = float(row.proposed_stake_usd)
+            # ``stake`` is the proposed purchase cost, not the payout.
+            # Kalshi supports fractional contract counts, so model the
+            # corresponding quantity and deduct the entry taker fee.  This
+            # remains conservative for a resting fill (which may qualify for
+            # a lower maker fee), but never promotes a strategy on fee-free
+            # paper profit.
+            contracts = stake / entry if entry > 0 else 0.0
+            entry_fee = order_fee(entry, contracts=contracts, category="tennis")
+            if entry_fee is None:
+                raise ValueError("invalid shadow entry fee")
             pnl = stake * ((1.0 / entry) - 1.0) if won else -stake
+            pnl -= entry_fee
             with db_historical.atomic():
                 row.status = "won" if won else "lost"
                 row.settled_at = match.settled_at or datetime.now(timezone.utc)

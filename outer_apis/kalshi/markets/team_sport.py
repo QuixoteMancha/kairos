@@ -89,6 +89,7 @@ def build_team_sport_markets(raw_markets: list[dict], series: str) -> list[dict[
         result.append({
             "id": event_ticker,
             "type": config["sport_type"],
+            "series_ticker": series,
             "current_a_price": legs[0]["current_a_price"],
             "current_b_price": legs[1]["current_a_price"],
             "ticker_a": legs[0].get("ticker", legs[0].get("id")),
