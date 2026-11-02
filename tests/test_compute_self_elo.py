@@ -176,6 +176,35 @@ def test_rank_1_always_matches_the_highest_elo_in_the_pool():
             assert row.player_a_elo_rank == row.player_b_elo_rank  # empate real
 
 
+def test_rerun_without_new_matches_writes_nothing():
+    a, b, c = _make_player("A"), _make_player("B"), _make_player("C")
+    _make_match(a, b, winner=a, match_date="2024-01-01")
+    _make_match(a, c, winner=c, match_date="2024-02-01")
+
+    first = run_elo_backfill(tours=("ATP",))
+    second = run_elo_backfill(tours=("ATP",))
+
+    assert first["ATP"]["updated"] == 2
+    assert second["ATP"]["updated"] == 0
+    assert second["ATP"]["processed"] == 2
+
+
+def test_backfilled_older_match_propagates_to_later_rows():
+    # Un partido viejo que llega DESPUÉS (backfill) cambia el Elo de los
+    # partidos posteriores: el diff debe reescribirlos, no sólo la fila nueva.
+    a, b, c = _make_player("A"), _make_player("B"), _make_player("C")
+    _make_match(a, c, winner=c, match_date="2024-02-01")
+    run_elo_backfill(tours=("ATP",))
+
+    _make_match(a, b, winner=a, match_date="2024-01-01")
+    summary = run_elo_backfill(tours=("ATP",))
+
+    assert summary["ATP"]["updated"] == 2
+    match_feb = MatchHistory.get(MatchHistory.match_date == "2024-02-01")
+    expected_a_elo_after_jan, _ = update_elo(DEFAULT_INITIAL_ELO, DEFAULT_INITIAL_ELO, a_won=True)
+    assert match_feb.player_a_elo == expected_a_elo_after_jan
+
+
 def test_rerun_is_deterministic():
     a, b = _make_player("A"), _make_player("B")
     _make_match(a, b, winner=a, match_date="2024-01-01")

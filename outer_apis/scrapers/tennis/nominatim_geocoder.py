@@ -30,6 +30,7 @@ condados, picos, parques y cualquier resultado sin una localidad verificable.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -41,8 +42,10 @@ _BASE_URL = "https://nominatim.openstreetmap.org/search"
 _REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 _REQUEST_TIMEOUT_S = 20
 
-# Identificación real, exigida por la política de uso de Nominatim.
-_USER_AGENT = "Kairos-Tennis/1.0 (alertas@example.com)"
+# Identificación real, exigida por la política de uso de Nominatim
+# (https://operations.osmfoundation.org/policies/nominatim/): un contacto
+# válido, configurable por entorno.
+_USER_AGENT = f"Kairos-Tennis/1.0 ({os.getenv('NOMINATIM_CONTACT', 'configure-NOMINATIM_CONTACT')})"
 
 # Política dura: 1 req/s. Se usa 1.1s de margen.
 _MIN_INTERVAL_S = 1.1

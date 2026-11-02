@@ -50,9 +50,33 @@ import sys
 from bisect import bisect_left, bisect_right, insort
 from datetime import date as _date
 
+from math import isclose
+
+from database.bulk_update import bulk_update_by_id
 from database.db import init_db_historical, db_historical
 from database.historical.tennis import MatchHistory
 from models.volatility.sports.tennis.tennis_elo import DEFAULT_INITIAL_ELO, update_elo
+
+_ELO_FIELDS = (
+    MatchHistory.player_a_elo, MatchHistory.player_b_elo,
+    MatchHistory.player_a_elo_rank, MatchHistory.player_b_elo_rank,
+)
+
+
+def _same_values(stored, computed) -> bool:
+    """¿Lo guardado ya coincide con lo recalculado? Tolerancia relativa
+    1e-6 para floats porque `FloatField` es `REAL` (float4) en PostgreSQL:
+    lo leído nunca es bit a bit igual al float64 calculado. Enteros y
+    NULL se comparan exacto."""
+    for old, new in zip(stored, computed):
+        if old is None:
+            return False
+        if isinstance(new, float):
+            if not isclose(old, new, rel_tol=1e-6):
+                return False
+        elif old != new:
+            return False
+    return True
 
 
 def _parse_match_date(raw: str | None) -> _date | None:
@@ -110,10 +134,17 @@ def run_elo_backfill(tours: tuple[str, ...] = ("ATP", "WTA")) -> dict:
         elo: dict[int, float] = {}  # player_id -> elo actual
         sorted_elos: list[float] = []  # misma pool, ordenada ascendente (para ranking)
 
+        # Sólo las columnas que el cálculo usa, como tuplas: instanciar
+        # ~500K objetos `MatchHistory` completos costaba más CPU que el
+        # Elo mismo.
         with db_historical.connection_context():
             rows = list(
                 MatchHistory
-                .select()
+                .select(
+                    MatchHistory.id, MatchHistory.match_date,
+                    MatchHistory.player_a, MatchHistory.player_b, MatchHistory.winner,
+                    *_ELO_FIELDS,
+                )
                 .where(
                     (MatchHistory.tour == tour)
                     & (MatchHistory.player_a.is_null(False))
@@ -122,43 +153,42 @@ def run_elo_backfill(tours: tuple[str, ...] = ("ATP", "WTA")) -> dict:
                     & ~(MatchHistory.match_id.startswith("recentform:"))
                 )
                 .order_by(MatchHistory.match_date, MatchHistory.id)
+                .tuples()
             )
 
-        # Una sola transacción por tour -- cientos de miles de filas con
-        # un UPDATE individual cada una sería lento (aunque SQLite en
-        # WAL no tiene latencia de red, cada commit implícito de fila
-        # suelta sí tiene costo real medido). `atomic()` agrupa todo el
-        # tour en un solo commit al final.
+        changes: list[tuple] = []
+        for row_id, raw_date, a_id, b_id, winner_id, *stored in rows:
+            match_date = _parse_match_date(raw_date)
+            if match_date is None:
+                skipped += 1
+                continue
+
+            if winner_id not in (a_id, b_id):
+                # dato inconsistente real (ganador que no es ninguno
+                # de los 2 jugadores del partido) -- fail-closed, se
+                # salta.
+                skipped += 1
+                continue
+
+            elo_a = _ensure_in_pool(a_id, elo, sorted_elos)
+            elo_b = _ensure_in_pool(b_id, elo, sorted_elos)
+            computed = (elo_a, elo_b, _rank_of(sorted_elos, elo_a), _rank_of(sorted_elos, elo_b))
+            if not _same_values(stored, computed):
+                changes.append((row_id, *computed))
+
+            new_elo_a, new_elo_b = update_elo(elo_a, elo_b, a_won=(winner_id == a_id))
+            _replace_in_pool(a_id, new_elo_a, elo, sorted_elos)
+            _replace_in_pool(b_id, new_elo_b, elo, sorted_elos)
+            processed += 1
+
+        # Recompute full, pero escritura sólo de lo que cambió y en lotes:
+        # entre ciclos casi todo el historial queda igual, y reescribirlo
+        # entero eran ~500K UPDATE por tour (más filas muertas para el
+        # autovacuum de PostgreSQL). Una transacción por tour.
         with db_historical.connection_context(), db_historical.atomic():
-            for row in rows:
-                match_date = _parse_match_date(row.match_date)
-                if match_date is None:
-                    skipped += 1
-                    continue
+            updated = bulk_update_by_id(db_historical, MatchHistory, _ELO_FIELDS, changes)
 
-                a_id, b_id, winner_id = row.player_a_id, row.player_b_id, row.winner_id
-                if winner_id not in (a_id, b_id):
-                    # dato inconsistente real (ganador que no es ninguno
-                    # de los 2 jugadores del partido) -- fail-closed, se
-                    # salta.
-                    skipped += 1
-                    continue
-
-                elo_a = _ensure_in_pool(a_id, elo, sorted_elos)
-                elo_b = _ensure_in_pool(b_id, elo, sorted_elos)
-
-                row.player_a_elo = elo_a
-                row.player_b_elo = elo_b
-                row.player_a_elo_rank = _rank_of(sorted_elos, elo_a)
-                row.player_b_elo_rank = _rank_of(sorted_elos, elo_b)
-                row.save()
-
-                new_elo_a, new_elo_b = update_elo(elo_a, elo_b, a_won=(winner_id == a_id))
-                _replace_in_pool(a_id, new_elo_a, elo, sorted_elos)
-                _replace_in_pool(b_id, new_elo_b, elo, sorted_elos)
-                processed += 1
-
-        summary[tour] = {"processed": processed, "skipped": skipped, "players": len(elo)}
+        summary[tour] = {"processed": processed, "skipped": skipped, "updated": updated, "players": len(elo)}
         total_processed += processed
         total_skipped += skipped
         print(f"[compute_self_elo] {tour}: {summary[tour]}")

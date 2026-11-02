@@ -1,6 +1,5 @@
-"""Alertas por correo -- 2026-08-11, pedido explícito del usuario: "si
-no funciona con el proxy o no hay dinero en el proxy, enviarme un
-correo a alertas@example.com".
+"""Alertas por correo: avisan cuando el proxy de scraping deja de
+funcionar o se queda sin saldo.
 
 Genérico a propósito (no específico de BrightData) -- vive en
 `outer_apis/` raíz, no en `outer_apis/scrapers/`, para que cualquier
@@ -9,7 +8,7 @@ al scraping.
 
 SMTP simple (sin dependencias nuevas, `smtplib` de la librería estándar)
 -- credenciales vía `.env`:
-    ALERT_EMAIL_TO        default "alertas@example.com" (pedido explícito)
+    ALERT_EMAIL_TO        destinatario, default = SMTP_USER (alerta a uno mismo)
     ALERT_EMAIL_FROM      remitente, default = SMTP_USER si no se especifica
     SMTP_HOST             default "smtp.gmail.com"
     SMTP_PORT             default 587 (STARTTLS)
@@ -27,7 +26,6 @@ import threading
 import time
 from email.mime.text import MIMEText
 
-_DEFAULT_TO = "alertas@example.com"
 _DEFAULT_SMTP_HOST = "smtp.gmail.com"
 _DEFAULT_SMTP_PORT = 587
 _TIMEOUT_S = 15
@@ -57,7 +55,7 @@ def _smtp_config() -> dict[str, str]:
         "user": user,
         "password": password,
         "from": os.getenv("ALERT_EMAIL_FROM", "") or user,
-        "to": os.getenv("ALERT_EMAIL_TO", "") or _DEFAULT_TO,
+        "to": os.getenv("ALERT_EMAIL_TO", "") or user,
     }
 
 

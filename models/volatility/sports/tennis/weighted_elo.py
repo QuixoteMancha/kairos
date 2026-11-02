@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from math import exp, log
 
+import numpy as np
+
 BASE_ELO = 1500.0
 K_FACTOR = 32.0
 INACTIVITY_HALF_LIFE_DAYS = 365.0
@@ -41,23 +43,28 @@ def update_pair(a: float, b: float, a_won: bool, set_margin: int = 1) -> tuple[f
 
 
 def fit_platt(observations: list[tuple[float, bool]]) -> tuple[float, float]:
-    """Ajusta sigmoid(intercept + slope*logit(p)); identidad con N pequeño."""
-    if len(observations) < 100:
+    """Ajusta sigmoid(intercept + slope*logit(p)); identidad con N pequeño.
+
+    Mismo descenso de gradiente de siempre (1200 pasos, lr 0.05, L2 hacia
+    slope=1), vectorizado con numpy: con ~1M observaciones el bucle en
+    Python puro costaba ~35 min de CPU por ciclo del worker de Elo. Los
+    coeficientes coinciden con la versión escalar salvo el orden de suma
+    en coma flotante."""
+    n = len(observations)
+    if n < 100:
         return 0.0, 1.0
+    probabilities = np.fromiter((p for p, _ in observations), dtype=float, count=n)
+    won = np.fromiter((w for _, w in observations), dtype=float, count=n)
+    p = np.clip(probabilities, 1e-6, 1 - 1e-6)
+    x = np.log(p / (1 - p))  # el logit no depende de los coeficientes: se calcula una vez
     intercept, slope = 0.0, 1.0
     for _ in range(1200):
-        grad_i = grad_s = 0.0
-        for probability, won in observations:
-            p = min(1 - 1e-6, max(1e-6, probability))
-            x = log(p / (1 - p))
-            fitted = 1.0 / (1.0 + exp(-(intercept + slope * x)))
-            error = fitted - float(won)
-            grad_i += error
-            grad_s += error * x
-        n = len(observations)
+        error = 1.0 / (1.0 + np.exp(-(intercept + slope * x))) - won
+        grad_i = error.sum()
+        grad_s = error @ x
         intercept -= 0.05 * grad_i / n
         slope -= 0.05 * (grad_s / n + 0.001 * (slope - 1.0))
-    return intercept, slope
+    return float(intercept), float(slope)
 
 
 def calibrate(probability: float, intercept: float, slope: float) -> float:

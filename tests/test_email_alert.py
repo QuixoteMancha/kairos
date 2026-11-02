@@ -1,7 +1,5 @@
-"""Tests de `outer_apis/email_alert.py` -- 2026-08-11, pedido explícito
-del usuario: "si no funciona con el proxy o no hay dinero en el proxy,
-enviarme un correo a alertas@example.com". Mockea SMTP real, nunca
-envía un correo de verdad."""
+"""Tests de `outer_apis/email_alert.py`. Mockea SMTP real, nunca envía
+un correo de verdad."""
 
 from __future__ import annotations
 
@@ -28,6 +26,7 @@ def test_returns_false_when_smtp_not_configured(monkeypatch):
 
 def test_sends_real_email_via_smtp(monkeypatch):
     _smtp_env(monkeypatch)
+    monkeypatch.delenv("ALERT_EMAIL_TO", raising=False)
     mock_server = MagicMock()
     with patch("smtplib.SMTP") as mock_smtp_cls:
         mock_smtp_cls.return_value.__enter__.return_value = mock_server
@@ -37,9 +36,9 @@ def test_sends_real_email_via_smtp(monkeypatch):
     mock_server.starttls.assert_called_once()
     mock_server.login.assert_called_once_with("sender@example.com", "app-password")
     mock_server.sendmail.assert_called_once()
-    # destino default = alertas@example.com, pedido explícito del usuario
+    # sin ALERT_EMAIL_TO, la alerta va al propio remitente
     to_arg = mock_server.sendmail.call_args[0][1]
-    assert to_arg == ["alertas@example.com"]
+    assert to_arg == ["sender@example.com"]
 
 
 def test_respects_custom_to_address(monkeypatch):

@@ -26,8 +26,6 @@ env/
 *~
 
 # Builds / binarios
-obscura
-
 *.so
 
 # Node / frontend

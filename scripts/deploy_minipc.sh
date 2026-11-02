@@ -7,7 +7,7 @@
 # existen allá se conservan) y sin tocar .env, datos ni backups.
 set -eu
 
-host=${KAIROS_DEPLOY_HOST:-PROD_HOST}
+host=${KAIROS_DEPLOY_HOST:?definir KAIROS_DEPLOY_HOST con el host de producción}
 remote_dir=${KAIROS_DEPLOY_DIR:-programas/kairos}
 image_tag=${1:-$(date +%Y%m%d)-unified}
 
